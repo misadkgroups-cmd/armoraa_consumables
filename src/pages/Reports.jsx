@@ -7,8 +7,8 @@ const Reports = () => {
   const { branchId } = useBranch();
 
   const [dateRange, setDateRange] = useState({
-    start: format(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), 'dd-MM-yyyy'),
-    end: format(new Date(), 'dd-MM-yyyy'),
+    start: format(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd'),
+    end: format(new Date(), 'yyyy-MM-dd'),
   });
   const [filterBranch, setFilterBranch] = useState('');
   const [filterService, setFilterService] = useState('');

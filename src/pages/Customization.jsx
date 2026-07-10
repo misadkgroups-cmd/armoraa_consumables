@@ -7,10 +7,10 @@ const Customization = () => {
   const [activeTab, setActiveTab] = useState('general');
   const [services, setServices] = useState([]);
   const [machinery, setMachinery] = useState([]);
-  const [consumables, setConsumables] = useState([]);
-  const [users, setUsers] = useState([]);
+  const [billableConsumables, setBillableConsumables] = useState([]);
+  const [nonBillableConsumables, setNonBillableConsumables] = useState([]);
   const [loading, setLoading] = useState(false);
-
+  
   const [generalSettings, setGeneralSettings] = useState({
     organizationName: 'Main Branch',
     dateFormat: 'DD-MM-YYYY',
@@ -25,8 +25,8 @@ const Customization = () => {
     if (branchId) {
       fetchServices();
       fetchMachinery();
-      fetchConsumables();
-      fetchUsers();
+      fetchBillableConsumables();
+      fetchNonBillableConsumables();
     }
   }, [branchId]);
 
@@ -44,20 +44,21 @@ const Customization = () => {
     } catch (error) { console.error('Error fetching machinery:', error); }
   };
 
-  const fetchConsumables = async () => {
+  const fetchBillableConsumables = async () => {
     try {
-      const { data } = await supabase.from('master_consumables').select('*').eq('branch_id', branchId);
-      if (data) setConsumables(data || []);
-    } catch (error) { console.error('Error fetching consumables:', error); }
+      const { data } = await supabase.from('master_consumables').select('*').eq('branch_id', branchId).order('consumable_name');
+      if (data) setBillableConsumables(data || []);
+    } catch (error) { console.error('Error fetching billable consumables:', error); }
   };
 
-  const fetchUsers = async () => {
+  const fetchNonBillableConsumables = async () => {
     try {
-      const { data } = await supabase.from('profiles').select('*').eq('branch_id', branchId);
-      if (data) setUsers(data || []);
-    } catch (error) { console.error('Error fetching users:', error); }
+      const { data } = await supabase.from('bulk_consumables_registry').select('*').eq('branch_id', branchId).order('product_name');
+      if (data) setNonBillableConsumables(data || []);
+    } catch (error) { console.error('Error fetching non-billable consumables:', error); }
   };
 
+  // Service management
   const addService = async (e) => {
     e.preventDefault();
     const form = e.target;
@@ -79,6 +80,7 @@ const Customization = () => {
     } catch (error) { console.error('Error deleting service:', error); }
   };
 
+  // Machinery management
   const addMachinery = async (e) => {
     e.preventDefault();
     const form = e.target;
@@ -101,49 +103,65 @@ const Customization = () => {
     } catch (error) { console.error('Error deleting machinery:', error); }
   };
 
-  const addConsumable = async (e) => {
+  // Billable consumable management
+  const addBillableConsumable = async (e) => {
     e.preventDefault();
     const form = e.target;
-    const consumableName = form.consumableName.value;
-    const defaultUnit = form.defaultUnit.value;
-    if (!consumableName || !defaultUnit) return;
+    const name = form.name.value;
+    const unit = form.unit.value;
+    const cost = form.cost.value;
+    if (!name || !unit) return;
     setLoading(true);
     try {
-      const { error } = await supabase.from('master_consumables').insert({ branch_id: branchId, consumable_name: consumableName, default_unit: defaultUnit });
-      if (!error) { form.reset(); fetchConsumables(); }
+      const { error } = await supabase.from('master_consumables').insert({ branch_id: branchId, consumable_name: name, default_unit: unit, cost_unit: cost || 0 });
+      if (!error) { form.reset(); fetchBillableConsumables(); }
     } catch (error) { console.error('Error adding consumable:', error); }
     setLoading(false);
   };
 
-  const deleteConsumable = async (id) => {
+  const updateBillableConsumable = async (id, updates) => {
+    try {
+      const { error } = await supabase.from('master_consumables').update(updates).eq('id', id);
+      if (!error) fetchBillableConsumables();
+    } catch (error) { console.error('Error updating consumable:', error); }
+  };
+
+  const deleteBillableConsumable = async (id) => {
     if (!window.confirm('Delete this consumable?')) return;
     try {
       const { error } = await supabase.from('master_consumables').delete().eq('id', id);
-      if (!error) fetchConsumables();
+      if (!error) fetchBillableConsumables();
     } catch (error) { console.error('Error deleting consumable:', error); }
   };
 
-  const addUser = async (e) => {
+  // Non-billable consumable management
+  const addNonBillableConsumable = async (e) => {
     e.preventDefault();
     const form = e.target;
-    const email = form.email.value;
-    const fullName = form.fullName.value;
-    const role = form.role.value;
-    if (!email || !fullName) return;
+    const name = form.name.value;
+    const cost = form.cost.value;
+    if (!name) return;
     setLoading(true);
     try {
-      const { error } = await supabase.from('profiles').insert({ branch_id: branchId, email, full_name: fullName, role });
-      if (!error) { form.reset(); fetchUsers(); }
-    } catch (error) { console.error('Error adding user:', error); }
+      const { error } = await supabase.from('bulk_consumables_registry').insert({ branch_id: branchId, product_name: name, cost_unit: cost || 0 });
+      if (!error) { form.reset(); fetchNonBillableConsumables(); }
+    } catch (error) { console.error('Error adding non-billable consumable:', error); }
     setLoading(false);
   };
 
-  const deleteUser = async (id) => {
-    if (!window.confirm('Delete this user?')) return;
+  const updateNonBillableConsumable = async (id, updates) => {
     try {
-      const { error } = await supabase.from('profiles').delete().eq('id', id);
-      if (!error) fetchUsers();
-    } catch (error) { console.error('Error deleting user:', error); }
+      const { error } = await supabase.from('bulk_consumables_registry').update(updates).eq('id', id);
+      if (!error) fetchNonBillableConsumables();
+    } catch (error) { console.error('Error updating non-billable consumable:', error); }
+  };
+
+  const deleteNonBillableConsumable = async (id) => {
+    if (!window.confirm('Delete this non-billable consumable?')) return;
+    try {
+      const { error } = await supabase.from('bulk_consumables_registry').delete().eq('id', id);
+      if (!error) fetchNonBillableConsumables();
+    } catch (error) { console.error('Error deleting non-billable consumable:', error); }
   };
 
   const saveGeneralSettings = () => {
@@ -152,9 +170,10 @@ const Customization = () => {
 
   const tabs = [
     { id: 'general', label: 'General Settings' },
+    { id: 'billable', label: 'Billable Consumables' },
+    { id: 'non-billable', label: 'Non-Billable Consumables' },
     { id: 'service', label: 'Service Configuration' },
     { id: 'machinery', label: 'Machinery Mapping' },
-    { id: 'users', label: 'User Permissions' },
   ];
 
   return (
@@ -180,102 +199,141 @@ const Customization = () => {
 
       {/* Tab Content */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+        {/* General Settings Tab */}
         {activeTab === 'general' && (
           <div className="space-y-6">
             <h3 className="text-lg font-semibold text-slate-900">General Settings</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-1">
                 <label className="block text-[11px] uppercase tracking-wider font-semibold text-slate-500">Organization Name</label>
-                <input
-                  type="text"
-                  value={generalSettings.organizationName}
-                  onChange={(e) => setGeneralSettings({ ...generalSettings, organizationName: e.target.value })}
-                  className="w-full h-9 px-3 bg-white border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none transition-all text-sm"
-                />
+                <input type="text" value={generalSettings.organizationName} onChange={(e) => setGeneralSettings({ ...generalSettings, organizationName: e.target.value })} className="w-full h-9 px-3 bg-white border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none transition-all text-sm" />
               </div>
-
               <div className="space-y-1">
                 <label className="block text-[11px] uppercase tracking-wider font-semibold text-slate-500">Date Format</label>
-                <select
-                  value={generalSettings.dateFormat}
-                  onChange={(e) => setGeneralSettings({ ...generalSettings, dateFormat: e.target.value })}
-                  className="w-full h-9 px-3 bg-white border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none transition-all text-sm"
-                >
+                <select value={generalSettings.dateFormat} onChange={(e) => setGeneralSettings({ ...generalSettings, dateFormat: e.target.value })} className="w-full h-9 px-3 bg-white border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none transition-all text-sm">
                   <option value="DD-MM-YYYY">DD-MM-YYYY</option>
                   <option value="MM-DD-YYYY">MM-DD-YYYY</option>
                   <option value="YYYY-MM-DD">YYYY-MM-DD</option>
                 </select>
               </div>
-
               <div className="space-y-1">
                 <label className="block text-[11px] uppercase tracking-wider font-semibold text-slate-500">System Time Zone</label>
-                <select
-                  value={generalSettings.timeZone}
-                  onChange={(e) => setGeneralSettings({ ...generalSettings, timeZone: e.target.value })}
-                  className="w-full h-9 px-3 bg-white border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none transition-all text-sm"
-                >
+                <select value={generalSettings.timeZone} onChange={(e) => setGeneralSettings({ ...generalSettings, timeZone: e.target.value })} className="w-full h-9 px-3 bg-white border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none transition-all text-sm">
                   <option value="Asia/Kolkata">Asia/Kolkata (IST)</option>
                   <option value="America/New_York">America/New_York (EST)</option>
                   <option value="Europe/London">Europe/London (GMT)</option>
                 </select>
               </div>
-
               <div className="space-y-1">
                 <label className="block text-[11px] uppercase tracking-wider font-semibold text-slate-500">System Base Currency</label>
-                <select
-                  value={generalSettings.currency}
-                  onChange={(e) => setGeneralSettings({ ...generalSettings, currency: e.target.value })}
-                  className="w-full h-9 px-3 bg-white border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none transition-all text-sm"
-                >
+                <select value={generalSettings.currency} onChange={(e) => setGeneralSettings({ ...generalSettings, currency: e.target.value })} className="w-full h-9 px-3 bg-white border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none transition-all text-sm">
                   <option value="INR">INR - Indian Rupee</option>
                   <option value="USD">USD - US Dollar</option>
                   <option value="EUR">EUR - Euro</option>
                 </select>
               </div>
-
-              <div className="space-y-1">
-                <label className="block text-[11px] uppercase tracking-wider font-semibold text-slate-500">Default Language</label>
-                <select
-                  value={generalSettings.language}
-                  onChange={(e) => setGeneralSettings({ ...generalSettings, language: e.target.value })}
-                  className="w-full h-9 px-3 bg-white border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none transition-all text-sm"
-                >
-                  <option value="en">English</option>
-                  <option value="hi">Hindi</option>
-                  <option value="ta">Tamil</option>
-                </select>
-              </div>
-
-              <div className="space-y-1">
-                <label className="block text-[11px] uppercase tracking-wider font-semibold text-slate-500">Default Items Per Page</label>
-                <input
-                  type="number"
-                  value={generalSettings.itemsPerPage}
-                  onChange={(e) => setGeneralSettings({ ...generalSettings, itemsPerPage: e.target.value })}
-                  className="w-full h-9 px-3 bg-white border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none transition-all text-sm"
-                />
-              </div>
             </div>
-
             <div className="flex items-center justify-between p-4 bg-slate-50 rounded-lg border border-slate-200">
               <div>
                 <div className="text-sm font-semibold text-slate-900">Enable System Notifications</div>
                 <div className="text-xs text-slate-500 mt-0.5">Receive alerts for important system events</div>
               </div>
-              <button
-                onClick={() => setGeneralSettings({ ...generalSettings, enableNotifications: !generalSettings.enableNotifications })}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  generalSettings.enableNotifications ? 'bg-sky-600' : 'bg-slate-300'
-                }`}
-              >
-                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  generalSettings.enableNotifications ? 'translate-x-6' : 'translate-x-1'
-                }`} />
+              <button onClick={() => setGeneralSettings({ ...generalSettings, enableNotifications: !generalSettings.enableNotifications })} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${generalSettings.enableNotifications ? 'bg-sky-600' : 'bg-slate-300'}`}>
+                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${generalSettings.enableNotifications ? 'translate-x-6' : 'translate-x-1'}`} />
               </button>
             </div>
           </div>
         )}
 
+        {/* Billable Consumables Tab */}
+        {activeTab === 'billable' && (
+          <div className="space-y-6">
+            <h3 className="text-lg font-semibold text-slate-900">Billable Consumables Master</h3>
+            <form onSubmit={addBillableConsumable} className="flex gap-3 items-end">
+              <div className="flex-1">
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">Consumable Name</label>
+                <input name="name" placeholder="e.g., Glenmark Momate F Cream" className="w-full h-9 px-3 border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none text-sm" required />
+              </div>
+              <div className="w-32">
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">Unit</label>
+                <input name="unit" placeholder="e.g., g, ml" className="w-full h-9 px-3 border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none text-sm" required />
+              </div>
+              <div className="w-32">
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">Cost (₹)</label>
+                <input name="cost" type="number" step="0.01" placeholder="0.00" className="w-full h-9 px-3 border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none text-sm" />
+              </div>
+              <button type="submit" disabled={loading} className="px-4 py-2 bg-sky-500 text-white rounded-lg hover:bg-sky-600 text-sm font-semibold shadow-sm disabled:bg-slate-400">Add Consumable</button>
+            </form>
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-slate-600 uppercase">Name</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-slate-600 uppercase">Unit</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-slate-600 uppercase">Cost</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-slate-600 uppercase">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {billableConsumables.map(c => (
+                    <tr key={c.id} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="px-4 py-3 font-medium text-slate-900">{c.consumable_name}</td>
+                      <td className="px-4 py-3 text-slate-600">{c.default_unit}</td>
+                      <td className="px-4 py-3 text-slate-600">₹{c.cost_unit || 0}</td>
+                      <td className="px-4 py-3 text-right">
+                        <button onClick={() => deleteBillableConsumable(c.id)} className="text-red-600 hover:text-red-700 text-xs font-semibold">Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {billableConsumables.length === 0 && <tr><td colSpan="4" className="px-4 py-8 text-center text-slate-500">No billable consumables configured</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Non-Billable Consumables Tab */}
+        {activeTab === 'non-billable' && (
+          <div className="space-y-6">
+            <h3 className="text-lg font-semibold text-slate-900">Non-Billable Consumables Master</h3>
+            <form onSubmit={addNonBillableConsumable} className="flex gap-3 items-end">
+              <div className="flex-1">
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">Product Name</label>
+                <input name="name" placeholder="e.g., Glenmark Momate F Cream" className="w-full h-9 px-3 border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none text-sm" required />
+              </div>
+              <div className="w-32">
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">Cost (₹)</label>
+                <input name="cost" type="number" step="0.01" placeholder="0.00" className="w-full h-9 px-3 border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none text-sm" />
+              </div>
+              <button type="submit" disabled={loading} className="px-4 py-2 bg-sky-500 text-white rounded-lg hover:bg-sky-600 text-sm font-semibold shadow-sm disabled:bg-slate-400">Add Product</button>
+            </form>
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50">
+                  <tr>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-slate-600 uppercase">Product Name</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-slate-600 uppercase">Cost</th>
+                    <th className="text-right px-4 py-2 text-xs font-semibold text-slate-600 uppercase">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {nonBillableConsumables.map(item => (
+                    <tr key={item.id} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="px-4 py-3 font-medium text-slate-900">{item.product_name}</td>
+                      <td className="px-4 py-3 text-slate-600">₹{item.cost_unit || 0}</td>
+                      <td className="px-4 py-3 text-right">
+                        <button onClick={() => deleteNonBillableConsumable(item.id)} className="text-red-600 hover:text-red-700 text-xs font-semibold">Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                  {nonBillableConsumables.length === 0 && <tr><td colSpan="3" className="px-4 py-8 text-center text-slate-500">No non-billable consumables configured</td></tr>}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Service Configuration Tab */}
         {activeTab === 'service' && (
           <div className="space-y-6">
             <h3 className="text-lg font-semibold text-slate-900">Service Configuration</h3>
@@ -295,6 +353,7 @@ const Customization = () => {
           </div>
         )}
 
+        {/* Machinery Mapping Tab */}
         {activeTab === 'machinery' && (
           <div className="space-y-6">
             <h3 className="text-lg font-semibold text-slate-900">Machinery Mapping</h3>
@@ -317,34 +376,6 @@ const Customization = () => {
                 </div>
               ))}
               {machinery.length === 0 && <div className="text-center py-8 text-slate-500 text-sm">No machinery configured</div>}
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'users' && (
-          <div className="space-y-6">
-            <h3 className="text-lg font-semibold text-slate-900">User Permissions</h3>
-            <form onSubmit={addUser} className="flex gap-3">
-              <input name="fullName" placeholder="Full name" className="flex-1 h-9 px-3 border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none text-sm" required />
-              <input name="email" type="email" placeholder="Email" className="flex-1 h-9 px-3 border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none text-sm" required />
-              <select name="role" className="h-9 px-3 border border-slate-300 rounded-lg focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none text-sm">
-                <option value="admin">Admin</option>
-                <option value="operator">Operator</option>
-                <option value="viewer">Viewer</option>
-              </select>
-              <button type="submit" disabled={loading} className="px-4 py-2 bg-sky-500 text-white rounded-lg hover:bg-sky-600 text-sm font-semibold shadow-sm disabled:bg-slate-400">Add User</button>
-            </form>
-            <div className="space-y-2 max-h-96 overflow-y-auto">
-              {users.map(u => (
-                <div key={u.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-lg border border-slate-200 hover:border-sky-300 transition-all">
-                  <div>
-                    <div className="text-sm font-medium text-slate-900">{u.full_name}</div>
-                    <div className="text-xs text-slate-500">{u.email} · {u.role}</div>
-                  </div>
-                  <button onClick={() => deleteUser(u.id)} className="text-red-600 hover:text-red-700 text-xs font-semibold px-3 py-1.5 rounded hover:bg-red-50 transition-all">Delete</button>
-                </div>
-              ))}
-              {users.length === 0 && <div className="text-center py-8 text-slate-500 text-sm">No users configured</div>}
             </div>
           </div>
         )}

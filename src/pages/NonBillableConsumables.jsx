@@ -13,9 +13,13 @@ const NonBillableConsumables = () => {
     openDate: new Date().toISOString().slice(0, 10)
   });
   const [loading, setLoading] = useState(false);
+  const [usageCounts, setUsageCounts] = useState({});
 
   useEffect(() => {
-    if (branchId) fetchBulkItems();
+    if (branchId) {
+      fetchBulkItems();
+      fetchUsageCounts();
+    }
   }, [branchId]);
 
   const fetchBulkItems = async () => {
@@ -30,6 +34,35 @@ const NonBillableConsumables = () => {
       console.error('Error fetching bulk items:', error);
       setBulkItems([]);
     }
+  };
+
+  const fetchUsageCounts = async () => {
+    try {
+      // Count how many times each batch_id appears in billable_report
+      const { data, error } = await supabase
+        .from('billable_report')
+        .select('consumable_1_batch_id, consumable_2_batch_id, consumable_3_batch_id, consumable_4_batch_id, consumable_5_batch_id, consumable_6_batch_id, consumable_7_batch_id, consumable_8_batch_id, consumable_9_batch_id, consumable_10_batch_id, consumable_11_batch_id, consumable_12_batch_id, consumable_13_batch_id, consumable_14_batch_id');
+      
+      if (!error && data) {
+        const counts = {};
+        data.forEach(row => {
+          for (let i = 1; i <= 14; i++) {
+            const batchId = row[`consumable_${i}_batch_id`];
+            if (batchId) {
+              counts[batchId] = (counts[batchId] || 0) + 1;
+            }
+          }
+        });
+        setUsageCounts(counts);
+      }
+    } catch (error) {
+      console.error('Error fetching usage counts:', error);
+    }
+  };
+
+  const getUsageString = (item) => {
+    const count = usageCounts[item.batch_id] || 0;
+    return `used by ${count} Patient${count !== 1 ? 's' : ''}`;
   };
 
   const handleSubmit = async (e) => {
@@ -55,6 +88,7 @@ const NonBillableConsumables = () => {
           openDate: new Date().toISOString().slice(0, 10)
         });
         fetchBulkItems();
+        fetchUsageCounts();
       }
     } catch (error) {
       console.error('Error registering bulk item:', error);
@@ -74,14 +108,13 @@ const NonBillableConsumables = () => {
         })
         .eq('id', item.id);
 
-      if (!error) fetchBulkItems();
+      if (!error) {
+        fetchBulkItems();
+        fetchUsageCounts();
+      }
     } catch (error) {
       console.error('Error closing item:', error);
     }
-  };
-
-  const getUsageString = (item) => {
-    return `used by 0 Patients`;
   };
 
   const incompleteItems = bulkItems.filter(item => item.status === 'Active');

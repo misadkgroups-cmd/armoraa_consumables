@@ -16,33 +16,33 @@ const navSections = [
   {
     group: 'Consumables',
     items: [
-      { id: 'billable', label: 'Billable Consumables', icon: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2 14 8 20 8 M16 13H8 M16 17H8 M10 9 9 9 8 9' },
-      { id: 'non-billable', label: 'Non-Billable Consumables', icon: 'M1 3h15v13H1z M16 8l4 0 3 3v5H16V8z M5.5 18.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z M18.5 18.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z' },
+      { id: 'billable', label: 'Billable Consumables', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4' },
+      { id: 'non-billable', label: 'Non-Billable Consumables', icon: 'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4' },
     ]
   },
   {
-    group: 'Reports',
+    group: 'Analytics',
     items: [
-      { id: 'reports', label: 'Reports', icon: 'M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
+      { id: 'reports', label: 'Reports', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
     ]
   },
   {
     group: 'Settings',
     items: [
-      { id: 'customization', label: 'Customization', icon: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.64l-1.92-3.32c-.12-.22-.39-.29-.61-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.49-.41h-3.84c-.24 0-.44.17-.49.41l-.36 2.54c-.59.24-1.12.57-1.62.94l-2.39-.96c-.23-.08-.49 0-.61.22L2.74 8.87c-.12.22-.07.49.12.64l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.64l1.92 3.32c.12.22.39.29.61.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.25.41.49.41h3.84c.24 0 .44-.17.49-.41l.36-2.54c.59-.24 1.12-.57 1.62-.94l2.39.96c.23.08.49 0 .61-.22l1.92-3.32c.12-.22.07-.49-.12-.64l-2.03-1.58zM12 15c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3z' },
+      { id: 'customization', label: 'Customization', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z' },
     ]
   }
 ];
 
 const NavIcon = ({ path }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
     <path d={path} />
   </svg>
 );
 
 const Dashboard = ({ currentPage = 'overview', onNavigate, onLogout }) => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const { branchName, switchBranch } = useBranch();
+  const { branchName } = useBranch();
 
   const renderPage = () => {
     switch (currentPage) {
@@ -55,11 +55,19 @@ const Dashboard = ({ currentPage = 'overview', onNavigate, onLogout }) => {
     }
   };
 
+  const getPageLabel = () => {
+    for (const section of navSections) {
+      const found = section.items.find(i => i.id === currentPage);
+      if (found) return found.label;
+    }
+    return 'Dashboard';
+  };
+
   return (
     <div className="app-container">
-      {/* ===== LEFT SIDEBAR ===== */}
-      <aside className={`sidebar ${sidebarCollapsed ? 'w-[72px]' : 'w-[218px]'}`}>
-        <div className="sidebar-home">
+      {/* Premium Sidebar */}
+      <aside className="sidebar" style={{ width: sidebarCollapsed ? '72px' : '240px' }}>
+        <div className="sidebar-header">
           <div className="sidebar-logo">A</div>
           {!sidebarCollapsed && <span className="sidebar-brand">ARMORAA</span>}
         </div>
@@ -69,14 +77,15 @@ const Dashboard = ({ currentPage = 'overview', onNavigate, onLogout }) => {
             <div key={section.group}>
               {!sidebarCollapsed && <div className="sidebar-group">{section.group}</div>}
               {section.items.map((item) => {
-                const isActive = currentPage === item.id || (currentPage === 'queue' && item.id === 'queue') || (currentPage === 'appointments' && item.id === 'appointments');
+                const isActive = currentPage === item.id;
                 return (
                   <div
                     key={item.id}
                     onClick={() => onNavigate(item.id)}
                     className={`sidebar-item ${isActive ? 'active' : ''}`}
+                    title={sidebarCollapsed ? item.label : undefined}
                   >
-                    <span className={`sidebar-icon ${isActive ? 'text-white' : ''}`}>
+                    <span className="sidebar-icon">
                       <NavIcon path={item.icon} />
                     </span>
                     {!sidebarCollapsed && (
@@ -93,58 +102,56 @@ const Dashboard = ({ currentPage = 'overview', onNavigate, onLogout }) => {
         </nav>
 
         <div className="sidebar-footer">
-          {!sidebarCollapsed && 'ARMORAA CLINIC SUITE · ODOO 18 CE'}
+          <div className="sidebar-footer-avatar">AD</div>
+          {!sidebarCollapsed && (
+            <div className="sidebar-footer-info">
+              <div className="sidebar-footer-name">Admin</div>
+              <div className="sidebar-footer-role">{branchName}</div>
+            </div>
+          )}
         </div>
       </aside>
 
-      {/* ===== MAIN AREA ===== */}
+      {/* Main Area */}
       <div className="main-container">
-        {/* Top Navigation */}
+        {/* Premium Top Navbar */}
         <div className="topnav">
-          <div className="topnav-apps">▦</div>
-          <div className="topnav-appname">
-            {navSections.find(s => s.items.find(i => i.id === currentPage))?.items.find(i => i.id === currentPage)?.label || 'Dashboard'}
+          <button
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            className="topnav-btn"
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+              <line x1="3" y1="12" x2="21" y2="12" />
+              <line x1="3" y1="6" x2="21" y2="6" />
+              <line x1="3" y1="18" x2="21" y2="18" />
+            </svg>
+          </button>
+
+          <div style={{ fontWeight: 600, fontSize: '14px', color: 'var(--color-ink)' }}>
+            {getPageLabel()}
           </div>
-          <div className="topnav-menu" style={{marginLeft: '20px', display: 'flex', alignItems: 'center'}}>
-            <span style={{fontSize: '12px', opacity: 0.9, color: '#fff'}}>{branchName} Branch</span>
+
+          <div className="topnav-search">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" placeholder="Search anything..." />
           </div>
-          <div className="topnav-menu">
-            {currentPage === 'appointments' || currentPage === 'queue' ? (
-              <>
-                <div className="topnav-menu-item">Appointments
-                  <div className="dropdown">
-                    <div className="dropdown-header">Operations</div>
-                    <div className="dropdown-item" onClick={() => onNavigate('appointments')}>Calendar</div>
-                    <div className="dropdown-item" onClick={() => onNavigate('queue')}>Front-Desk Queue</div>
-                    <div className="dropdown-item" onClick={() => onNavigate('queue')}>Video Consults</div>
-                    <div className="dropdown-divider"></div>
-                    <div className="dropdown-header">Schedule</div>
-                    <div className="dropdown-item" onClick={() => onNavigate('schedules')}>Doctor Schedules</div>
-                  </div>
-                </div>
-                <div className="topnav-menu-item">Clinical
-                  <div className="dropdown">
-                    <div className="dropdown-item" onClick={() => onNavigate('prescriptions')}>Prescriptions</div>
-                    <div className="dropdown-item" onClick={() => onNavigate('lab_orders')}>Lab Orders</div>
-                    <div className="dropdown-item" onClick={() => onNavigate('services')}>Services & Packages</div>
-                  </div>
-                </div>
-              </>
-            ) : null}
+
+          <div className="topnav-branch">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            <span>{branchName} Branch</span>
           </div>
-          <div className="topnav-systray">
-            <div style={{position: 'relative'}}>
-              <div className="topnav-avatar" style={{cursor: 'pointer', fontWeight: 600, background: '#fff', color: '#6F68B6'}} onClick={() => {
-                const dd = document.getElementById('userDropdown');
-                dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
-              }}>FD</div>
-              <div className="dropdown" id="userDropdown" style={{top: '36px', right: '0', left: 'auto', minWidth: '180px', display: 'none', position: 'absolute', zIndex: 1000}}>
-                <div className="dropdown-item" style={{cursor: 'pointer', fontWeight: 500}} onClick={() => {
-                  document.getElementById('userDropdown').style.display = 'none';
-                  if (onLogout) onLogout();
-                }}>Logout</div>
-              </div>
-            </div>
+
+          <div className="topnav-actions">
+            <button className="topnav-btn" title="Notifications">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
+              <span className="badge">3</span>
+            </button>
+          </div>
+
+          <div className="topnav-user" onClick={onLogout} title="Logout">
+            <div className="topnav-user-avatar">AD</div>
+            <span className="topnav-user-name">Admin</span>
           </div>
         </div>
 

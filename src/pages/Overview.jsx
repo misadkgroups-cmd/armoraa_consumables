@@ -4,8 +4,8 @@ import { useBranch } from '../context/BranchContext';
 import Chart from 'react-apexcharts';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
-  Calendar, Activity, FileText, DollarSign, TrendingUp, TrendingDown,
-  Box, Package, Server, Building2, ChevronDown, RefreshCw
+  Calendar, Activity, FileText, TrendingUp, TrendingDown,
+  Box, Server, Building2, RefreshCw, Camera
 } from 'lucide-react';
 
 const Overview = () => {
@@ -295,32 +295,43 @@ const Overview = () => {
         </div>
       </div>
 
-      {/* KPI Cards */}
-      <motion.div className="grid grid-cols-4 gap-4 mb-6"
-        initial="hidden" animate="visible" variants={{ hidden: {}, visible: { transition: { staggerChildren: 0.05 } } }}>
+      {/* KPI Cards Row (3 bills + Screenshot) */}
+      <div className="grid grid-cols-4 gap-4 mb-6">
         {[
           { label: 'This Week', value: stats.lastWeek, icon: Calendar, color: '#6D5EF5', bg: '#EEF2FF', change: `${stats.growth}%` },
           { label: 'This Month', value: stats.thisMonth, icon: Activity, color: '#10B981', bg: '#D1FAE5', change: `${stats.growth}%` },
           { label: 'Total Bills', value: stats.overall, icon: FileText, color: '#3B82F6', bg: '#DBEAFE', change: 'All time' },
-          { label: 'Revenue', value: `₹${stats.totalCost.toFixed(0)}`, icon: DollarSign, color: '#F59E0B', bg: '#FEF3C7', change: '+' },
+          { label: 'Screenshot', value: 'Preview', icon: Camera, color: '#6D5EF5', bg: '#F0F0FF', change: 'Snapshot', isScreenshot: true },
         ].map((card, i) => (
-          <motion.div key={i} variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }}
-            className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-2xl p-5 hover:shadow-lg hover:shadow-[var(--color-primary)]/5 hover:border-[var(--color-primary)]/20 transition-all cursor-default group">
-            <div className="flex items-start justify-between mb-3">
-              <span className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">{card.label}</span>
-              <div className="w-10 h-10 rounded-xl flex items-center justify-center transition-all group-hover:scale-110"
-                style={{ background: card.bg, color: card.color }}>
-                <card.icon size={20} />
+          <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
+            className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-2xl p-6 hover:shadow-lg hover:shadow-[var(--color-primary)]/5 hover:border-[var(--color-primary)]/20 transition-all cursor-default group h-full flex flex-col justify-between">
+            <div>
+              <div className="flex items-start justify-between mb-4">
+                <span className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">{card.label}</span>
+                <div className="w-11 h-11 rounded-xl flex items-center justify-center transition-all group-hover:scale-110"
+                  style={{ background: card.bg, color: card.color }}>
+                  <card.icon size={22} />
+                </div>
               </div>
-            </div>
-            <div className="text-3xl font-bold text-[var(--color-ink)] tracking-tight">{card.value}</div>
-            <div className="flex items-center gap-1 mt-2 text-xs font-medium" style={{ color: card.color }}>
-              <TrendingUp size={14} />
-              <span>{card.change}</span>
+              {!card.isScreenshot && (
+                <>
+                  <div className="text-4xl font-bold text-[var(--color-ink)] tracking-tight leading-none mb-2">{card.value}</div>
+                  <div className="flex items-center gap-1.5 text-sm font-medium" style={{ color: card.color }}>
+                    <TrendingUp size={16} />
+                    <span>{card.change}</span>
+                  </div>
+                </>
+              )}
+              {card.isScreenshot && (
+                <div className="bg-gradient-to-br from-[#EEF2FF] to-[#F8FAFC] rounded-xl p-4 text-center border border-dashed border-[var(--color-line)] mt-2">
+                  <svg className="w-10 h-10 mx-auto mb-2 text-[var(--color-primary)]/30" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                  <p className="text-xs text-[var(--color-muted)]">Overview snapshot</p>
+                </div>
+              )}
             </div>
           </motion.div>
         ))}
-      </motion.div>
+      </div>
 
       {/* Row 1: Service Column Chart + Machinery Horizontal Bar */}
       <div className="grid grid-cols-2 gap-4 mb-6">

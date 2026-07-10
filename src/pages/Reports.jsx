@@ -4,12 +4,11 @@ import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
 
 const Reports = () => {
-  const { branchId, branchName } = useBranch();
-  const connectedBranch = branchName || 'Unknown Branch';
+  const { branchId } = useBranch();
 
   const [dateRange, setDateRange] = useState({
-    start: format(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd'),
-    end: format(new Date(), 'yyyy-MM-dd'),
+    start: format(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), 'dd-MM-yyyy'),
+    end: format(new Date(), 'dd-MM-yyyy'),
   });
   const [filterBranch, setFilterBranch] = useState('');
   const [filterService, setFilterService] = useState('');
@@ -171,29 +170,24 @@ const Reports = () => {
             const batchId = row[`consumable_${i}_batch_id`];
             const cost = row[`consumable_${i}_cost`];
             
-            let name = '-';
-            if (batchId && bulkItems) {
-              const bulkItem = bulkItems.find(b => b.batch_id === batchId);
-              if (bulkItem) {
-                name = bulkItem.product_name;
-                if (!nonBillableUsed.find(n => n.batch_id === batchId)) {
-                  nonBillableUsed.push({
-                    name: bulkItem.product_name,
-                    batch_id: batchId,
-                    units: units
-                  });
-                }
-              } else if (consumableId) {
-                name = consumableMap[consumableId] || '-';
-              }
-            } else if (consumableId) {
-              name = consumableMap[consumableId] || '-';
-            }
-            
-            if (consumableId || batchId) {
+            // Only process billable items (those with consumable_id, not batch_id)
+            if (consumableId && !batchId) {
+              const name = consumableMap[consumableId] || '-';
               consumables.push({ slot: i, name, units, cost });
               if (units) totalUnits += Number(units);
               if (cost) totalCost += Number(cost);
+            }
+            
+            // Check for non-billable items separately
+            if (batchId && bulkItems) {
+              const bulkItem = bulkItems.find(b => b.batch_id === batchId);
+              if (bulkItem && !nonBillableUsed.find(n => n.batch_id === batchId)) {
+                nonBillableUsed.push({
+                  name: bulkItem.product_name,
+                  batch_id: batchId,
+                  units: units
+                });
+              }
             }
           }
 
@@ -338,7 +332,7 @@ const Reports = () => {
     } else {
       let maxConsumables = 0;
       reportData.forEach((r) => {
-        if (r.consumableCount > maxConsumables) maxConsumables = r.consumableCount;
+        if (r.consumableCount > maxC) maxC = r.consumableCount;
       });
 
       headers = ['BILL ID', 'UID', 'DATE', 'BRANCH', 'MACHINERY', 'SERVICE'];
@@ -461,23 +455,6 @@ const Reports = () => {
 
   return (
     <div className="space-y-6">
-      {/* Connected Branch Indicator */}
-      <div className="bg-gradient-to-r from-sky-50 to-blue-50 border border-sky-200 rounded-xl p-4 shadow-sm">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Connected Branch</p>
-              <p className="text-base font-bold text-slate-900">{connectedBranch}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-slate-500">Branch ID:</span>
-            <span className="text-xs font-mono font-semibold bg-white px-2 py-1 rounded border border-slate-300">{branchId || '-'}</span>
-          </div>
-        </div>
-      </div>
-
       {/* Filter Section */}
       {showFilters && (
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
@@ -603,6 +580,13 @@ const Reports = () => {
                 {showFilters ? 'Hide Filters' : 'Show Filters'}
               </button>
               <button
+                onClick={downloadCSV}
+                disabled={reportData.length === 0}
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-all text-sm font-semibold shadow-sm disabled:bg-slate-400 disabled:cursor-not-allowed"
+              >
+                Export Report
+              </button>
+              <button
                 onClick={resetReport}
                 className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-all text-sm font-semibold shadow-sm"
               >
@@ -631,7 +615,7 @@ const Reports = () => {
                       <th className="text-left px-3 py-2.5 font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">BRANCH</th>
                       <th className="text-left px-3 py-2.5 font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">MACHINERY</th>
                       <th className="text-left px-3 py-2.5 font-semibold text-slate-600 uppercase tracking-wider whitespace-nowrap">SERVICE</th>
-                      {(() => {
+                      {reportType === 'billable' && (() => {
                         let maxC = 0;
                         reportData.forEach((r) => { if (r.consumableCount > maxC) maxC = r.consumableCount; });
                         const cols = [];

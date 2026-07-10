@@ -39,9 +39,26 @@ const Customization = () => {
 
   const fetchMachinery = async () => {
     try {
-      const { data } = await supabase.from('master_machinery').select('*, master_services(service_name)').eq('branch_id', branchId);
-      if (data) setMachinery(data || []);
-    } catch (error) { console.error('Error fetching machinery:', error); }
+      const { data, error } = await supabase
+        .from('master_machinery')
+        .select('*, master_services(service_name)')
+        .eq('branch_id', branchId);
+      
+      if (error) {
+        console.error('Error fetching machinery:', error);
+        setMachinery([]);
+        return;
+      }
+      
+      const machineryWithService = data.map(item => ({
+        ...item,
+        service_name: item.master_services?.service_name || 'Unknown'
+      }));
+      
+      setMachinery(machineryWithService || []);
+    } catch (error) { 
+      console.error('Error fetching machinery:', error); 
+    }
   };
 
   const fetchBillableConsumables = async () => {

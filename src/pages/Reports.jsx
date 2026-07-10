@@ -153,9 +153,9 @@ const Reports = () => {
         if (consumableIds.size > 0) {
           const { data: consumableRows } = await supabase
             .from('master_consumables')
-            .select('id, consumable_name')
+            .select('id, consumable_name, cost_unit')
             .in('id', Array.from(consumableIds));
-          if (consumableRows) consumableRows.forEach((c) => { consumableMap[c.id] = c.consumable_name; });
+          if (consumableRows) consumableRows.forEach((c) => { consumableMap[c.id] = { name: c.consumable_name, cost: c.cost_unit || 0 }; });
         }
 
         const processed = data.map((row) => {
@@ -168,14 +168,15 @@ const Reports = () => {
             const consumableId = row[`consumable_${i}_id`];
             const units = row[`consumable_${i}_units`];
             const batchId = row[`consumable_${i}_batch_id`];
-            const cost = row[`consumable_${i}_cost`];
             
             // Process billable items (has consumable_id but no batch_id)
             if (consumableId && !batchId) {
-              const name = consumableMap[consumableId] || '-';
+              const itemData = consumableMap[consumableId] || { name: '-', cost: 0 };
+              const name = typeof itemData === 'string' ? itemData : itemData.name;
+              const cost = typeof itemData === 'object' ? (itemData.cost || 0) : 0;
               consumables.push({ slot: i, name, units, cost });
               if (units) totalUnits += Number(units);
-              if (cost) totalCost += Number(cost);
+              totalCost += Number(units || 0) * Number(cost);
             }
             
             // Collect non-billable items (has batch_id) for NON-BILLABLE & ACTION column

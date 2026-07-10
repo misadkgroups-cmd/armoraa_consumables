@@ -305,114 +305,69 @@ export default function BillableConsumables() {
   };
 
   return (
-    <div className="space-y-4">
-      {/* Header Actions */}
-      <div className="flex justify-end gap-2">
-        <button
-          onClick={handleSave}
-          className="flex items-center gap-2 px-4 py-2 bg-sky-500 text-white rounded hover:bg-sky-600 transition-all text-sm font-semibold shadow-sm"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
-            <polyline points="20 6 9 17 4 12" />
-          </svg>
-          Save Record
-        </button>
-        <button
-          onClick={() => window.history.back()}
-          className="px-4 py-2 border border-slate-300 rounded hover:bg-slate-50 transition-all text-sm font-semibold text-slate-700"
-        >
-          Close
-        </button>
+    <div className="space-y-4 animate-fade-in">
+      {/* Page Header */}
+      <div className="page-header">
+        <div className="page-header-left">
+          <h1>Billable Consumables</h1>
+          <p>Record consumables used per patient bill</p>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={handleSave} className="btn btn-primary">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><polyline points="20 6 9 17 4 12"/></svg>
+            Save Record
+          </button>
+          <button onClick={() => window.history.back()} className="btn btn-secondary">Close</button>
+        </div>
       </div>
 
       {/* Top Filter Row */}
-      <div className="bg-white rounded-lg border border-slate-200 shadow-sm">
-        <div className="grid grid-cols-5 gap-0 divide-x divide-slate-200">
-          <div className="p-3 space-y-2">
-            <label className="text-[10px] font-bold tracking-wider text-slate-500 uppercase block">Bill ID</label>
-            <input
-              type="text"
-              value={billId}
-              onChange={(e) => setBillId(e.target.value)}
-              placeholder="Enter Bill ID"
-              className="w-full h-8 px-2.5 border border-slate-300 rounded text-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none"
-            />
-          </div>
-          <div className="p-3 space-y-2">
-            <label className="text-[10px] font-bold tracking-wider text-slate-500 uppercase block">Date</label>
-            <input
-              type="date"
-              value={reportDate}
-              onChange={(e) => setReportDate(e.target.value)}
-              className="w-full h-8 px-2.5 border border-slate-300 rounded text-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none"
-            />
-          </div>
-          <div className="p-3 space-y-2">
-            <label className="text-[10px] font-bold tracking-wider text-slate-500 uppercase block">UID</label>
-            <input
-              type="text"
-              value={uid}
-              onChange={(e) => setUid(e.target.value)}
-              placeholder="Enter UID"
-              className="w-full h-8 px-2.5 border border-slate-300 rounded text-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none"
-            />
-          </div>
-          <div className="p-3 space-y-2">
-            <label className="text-[10px] font-bold tracking-wider text-slate-500 uppercase block">Service</label>
-            <select
-              value={service}
-              onChange={(e) => {
-                const serviceId = e.target.value;
-                setService(serviceId);
-                setMachinery('');
-                if (serviceId) {
-                  fetchMachines(serviceId);
-                }
-              }}
-              className="w-full h-8 px-2.5 border border-slate-300 rounded text-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none bg-white"
-            >
-              <option value="">Select Service</option>
-              {services.map((opt) => (
-                <option key={opt.id} value={opt.id}>
-                  {opt.service_name}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="p-3 space-y-2">
-            <label className="text-[10px] font-bold tracking-wider text-slate-500 uppercase block">Machinery</label>
-            <select
-              value={machinery}
-              onChange={(e) => setMachinery(e.target.value)}
-              className="w-full h-8 px-2.5 border border-slate-300 rounded text-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none bg-white"
-            >
-              <option value="">Select Machinery</option>
-              {machines.map((opt) => (
-                <option key={opt.id} value={opt.id}>
-                  {opt.machine_name}
-                </option>
-              ))}
-            </select>
-          </div>
+      <div className="section-card" style={{ padding: 0 }}>
+        <div className="grid grid-cols-5 gap-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
+          {[
+            { label: 'Bill ID', field: 'billId', type: 'text', placeholder: 'Enter Bill ID' },
+            { label: 'Date', field: 'date', type: 'date', value: reportDate, onChange: setReportDate },
+            { label: 'UID', field: 'uid', type: 'text', placeholder: 'Enter UID' },
+            { label: 'Service', field: 'service', type: 'select', options: services.map(s => ({ value: s.id, label: s.service_name })), onChange: (v) => { setService(v); setMachinery(''); if (v) fetchMachines(v); } },
+            { label: 'Machinery', field: 'machinery', type: 'select', options: machines.map(m => ({ value: m.id, label: m.machine_name })) },
+          ].map((item) => (
+            <div key={item.field} className="p-4 space-y-1.5" style={{ borderRight: '1px solid var(--color-line-2)' }}>
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-muted">{item.label}</label>
+              {item.type === 'select' ? (
+                <select value={item.field === 'service' ? service : machinery} onChange={(e) => item.onChange ? item.onChange(e.target.value) : setMachinery(e.target.value)} className="form-input">
+                  <option value="">Select {item.label}</option>
+                  {item.options?.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              ) : (
+                <input type={item.type} value={item.field === 'billId' ? billId : uid} onChange={(e) => item.field === 'billId' ? setBillId(e.target.value) : setUid(e.target.value)} placeholder={item.placeholder} className="form-input" />
+              )}
+            </div>
+          ))}
         </div>
       </div>
 
       {/* Consumables Entry Matrix */}
-      <div className="bg-white rounded-lg border border-slate-200 shadow-sm overflow-hidden">
-        <div className="p-4 space-y-3">
-          {/* Header row */}
-          <div className="grid grid-cols-12 gap-2">
+      <div className="section-card">
+        <div className="section-card-header">
+          <div>
+            <div className="section-title">Consumables</div>
+            <div className="section-subtitle">Add consumable items used in this bill</div>
+          </div>
+        </div>
+        <div className="space-y-3">
+          {/* Header Row */}
+          <div className="grid grid-cols-12 gap-2 px-1">
             <div className="col-span-4">
-              <label className="text-[10px] font-bold tracking-wider text-slate-500 uppercase block mb-1">Select Consumable</label>
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted">Select Consumable</span>
             </div>
             <div className="col-span-2">
-              <label className="text-[10px] font-bold tracking-wider text-slate-500 uppercase block mb-1">Unit</label>
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted">Unit</span>
             </div>
             <div className="col-span-3">
-              <label className="text-[10px] font-bold tracking-wider text-slate-500 uppercase block mb-1">Add Batch ID</label>
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted">Batch ID</span>
             </div>
             <div className="col-span-3">
-              <label className="text-[10px] font-bold tracking-wider text-slate-500 uppercase block mb-1">Actions</label>
+              <span className="text-xs font-semibold uppercase tracking-wider text-muted">Actions</span>
             </div>
           </div>
 
@@ -420,115 +375,42 @@ export default function BillableConsumables() {
           {rows.map((row, index) => {
             const isBulk = row.consumableId?.startsWith('bulk_');
             return (
-              <div key={row.id} className={`grid grid-cols-12 gap-2 items-center ${row.units || row.batchId ? 'bg-sky-50/40 p-2 rounded' : ''}`}>
-                <div className="col-span-4 flex items-center gap-2">
-                  <select
-                    value={row.consumableId}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      if (val === '__clear__') {
-                        handleConsumableChange(row.id, '');
-                      } else {
-                        handleConsumableChange(row.id, val);
-                      }
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Backspace' || e.key === 'Delete') {
-                        e.preventDefault();
-                        handleConsumableChange(row.id, '');
-                      }
-                      handleConsumableKeyDown(e, row.id);
-                    }}
-                    data-row-id={row.id}
-                    className="w-full h-9 px-3 border border-slate-300 rounded-lg text-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none bg-white"
-                  >
+              <div key={row.id} className={`grid grid-cols-12 gap-2 items-center p-2 rounded-lg ${row.units || row.batchId ? 'bg-[#EEF2FF]' : ''}`}>
+                <div className="col-span-4">
+                  <select value={row.consumableId} onChange={(e) => handleConsumableChange(row.id, e.target.value === '__clear__' ? '' : e.target.value)} onKeyDown={(e) => handleConsumableKeyDown(e, row.id)} data-row-id={row.id} className="form-input">
                     <option value="">Select consumable...</option>
-                    {allConsumables.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
+                    {allConsumables.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>
                 </div>
                 <div className="col-span-2">
                   {isBulk ? (
-                    <div className="h-9 px-3 border border-emerald-200 rounded-lg text-sm text-emerald-700 font-semibold bg-emerald-50 flex items-center">
-                      USED
-                    </div>
+                    <div className="h-9 px-3 border border-[#A7F3D0] rounded-lg text-sm text-[#065F46] font-semibold bg-[#D1FAE5] flex items-center">USED</div>
                   ) : (
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={row.units}
-                      onChange={(e) => handleUnitsChange(row.id, e.target.value)}
-                      onKeyDown={(e) => handleUnitsKeyDown(e, row.id)}
-                      data-row-id={row.id}
-                      data-field="units"
-                      className="w-full h-9 px-3 border border-slate-300 rounded-lg text-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none"
-                      placeholder="Units"
-                    />
+                    <input type="text" inputMode="decimal" value={row.units} onChange={(e) => handleUnitsChange(row.id, e.target.value)} onKeyDown={(e) => handleUnitsKeyDown(e, row.id)} data-row-id={row.id} data-field="units" className="form-input" placeholder="Units" />
                   )}
                 </div>
                 <div className="col-span-3">
                   {isBulk ? (
-                    <select
-                      value={row.batchId}
-                      onChange={(e) => handleBatchIdChange(row.id, e.target.value)}
-                      onKeyDown={(e) => handleBatchKeyDown(e, row.id)}
-                      data-row-id={row.id}
-                      data-field="batch"
-                      className="w-full h-9 px-3 border border-slate-300 rounded-lg text-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none bg-white"
-                    >
+                    <select value={row.batchId} onChange={(e) => handleBatchIdChange(row.id, e.target.value)} onKeyDown={(e) => handleBatchKeyDown(e, row.id)} data-row-id={row.id} data-field="batch" className="form-input">
                       <option value="">Select Batch</option>
                       {(() => {
                         const selectedBulk = bulkItems.find(b => `bulk_${b.id}` === row.consumableId);
                         if (!selectedBulk) return null;
-                        const productBatches = bulkItems.filter(b => b.product_name === selectedBulk.product_name && b.status === 'Active');
-                        if (productBatches.length === 1) {
-                          return <option key={productBatches[0].id} value={productBatches[0].batch_id}>{productBatches[0].batch_id}</option>;
-                        }
-                        return productBatches.map(b => (
-                          <option key={b.id} value={b.batch_id}>{b.batch_id}</option>
-                        ));
+                        return bulkItems.filter(b => b.product_name === selectedBulk.product_name && b.status === 'Active').map(b => <option key={b.id} value={b.batch_id}>{b.batch_id}</option>);
                       })()}
                     </select>
                   ) : (
-                    <input
-                      type="text"
-                      value={row.batchId}
-                      onChange={(e) => handleBatchIdChange(row.id, e.target.value)}
-                      onKeyDown={(e) => handleBatchKeyDown(e, row.id)}
-                      data-row-id={row.id}
-                      data-field="batch"
-                      className="w-full h-9 px-3 border border-slate-300 rounded-lg text-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none"
-                      placeholder="Batch ID"
-                    />
+                    <input type="text" value={row.batchId} onChange={(e) => handleBatchIdChange(row.id, e.target.value)} onKeyDown={(e) => handleBatchKeyDown(e, row.id)} data-row-id={row.id} data-field="batch" className="form-input" placeholder="Batch ID" />
                   )}
                 </div>
                 <div className="col-span-3 flex items-center gap-2">
-                  <span className="text-xs text-slate-500">{index + 1}.</span>
-                  {row.units && !isBulk ? (
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5">USED</span>
-                  ) : null}
-                  <button
-                    onClick={() => addConsumableRow()}
-                    className="text-sky-700 hover:text-sky-900 text-xs font-semibold"
-                    title="Add another consumable"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
-                      <line x1="12" y1="5" x2="12" y2="19" />
-                      <line x1="5" y1="12" x2="19" y2="12" />
-                    </svg>
+                  <span className="text-xs text-muted">{index + 1}.</span>
+                  {row.units && !isBulk && <span className="tag tag-success">USED</span>}
+                  <button onClick={() => addConsumableRow()} className="btn btn-ghost btn-icon" title="Add another">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                   </button>
-                  <button
-                    onClick={() => removeConsumableRow(row.id)}
-                    className="text-red-600 hover:text-red-800 text-xs font-semibold"
-                    title="Remove"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
-                      <line x1="18" y1="6" x2="6" y2="18" />
-                      <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
+                  <button onClick={() => removeConsumableRow(row.id)} className="btn btn-ghost btn-icon" style={{ color: 'var(--color-danger)' }} title="Remove">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                   </button>
                 </div>
               </div>
@@ -536,48 +418,18 @@ export default function BillableConsumables() {
           })}
 
           {/* Add new row */}
-          <div className="grid grid-cols-12 gap-2 items-center pt-2 border-t border-slate-100">
+          <div className="grid grid-cols-12 gap-2 items-center pt-3" style={{ borderTop: '1px solid var(--color-line-2)' }}>
             <div className="col-span-4">
-              <select
-                id="consumableSelect"
-                className="w-full h-9 px-3 border border-slate-300 rounded-lg text-sm focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 focus:outline-none bg-white"
-                value=""
-                onChange={(e) => {
-                  const selectedId = e.target.value;
-                  if (selectedId) {
-                    addConsumableRow(selectedId);
-                    e.target.value = '';
-                  }
-                }}
-              >
-                <option value="">+</option>
-                {allConsumables.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
+              <select id="consumableSelect" className="form-input" value="" onChange={(e) => { if (e.target.value) { addConsumableRow(e.target.value); e.target.value = ''; } }}>
+                <option value="">+ Add consumable</option>
+                {allConsumables.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </div>
-            <div className="col-span-2">
-              <div className="h-9 px-3 border border-slate-200 rounded-lg text-sm text-slate-400 flex items-center bg-slate-50">
-                -
-              </div>
-            </div>
-            <div className="col-span-3">
-              <div className="h-9 px-3 border border-slate-200 rounded-lg text-sm text-slate-400 flex items-center bg-slate-50">
-                -
-              </div>
-            </div>
+            <div className="col-span-2"><div className="h-9 px-3 border border-[var(--color-line)] rounded-lg text-muted flex items-center bg-[var(--color-tint-2)]">-</div></div>
+            <div className="col-span-3"><div className="h-9 px-3 border border-[var(--color-line)] rounded-lg text-muted flex items-center bg-[var(--color-tint-2)]">-</div></div>
             <div className="col-span-3 flex items-center">
-              <button
-                onClick={() => addConsumableRow()}
-                className="text-sky-700 hover:text-sky-900"
-                title="Add another consumable row"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5">
-                  <line x1="12" y1="5" x2="12" y2="19" />
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
+              <button onClick={() => addConsumableRow()} className="btn btn-ghost btn-icon" title="Add consumable row">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
               </button>
             </div>
           </div>
@@ -586,20 +438,9 @@ export default function BillableConsumables() {
 
       {/* Toast Notification */}
       {toast && (
-        <div
-          className={`fixed right-4 bottom-4 px-4 py-3 rounded-lg shadow-lg ${
-            toast.type === 'success' ? 'bg-emerald-500 text-white' : toast.type === 'warning' ? 'bg-amber-500 text-white' : 'bg-red-500 text-white'
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">{toast.message}</span>
-            <button onClick={() => setToast(null)} className="ml-2 hover:opacity-75">
-              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
-            </button>
-          </div>
+        <div className={`toast ${toast.type === 'success' ? 'toast-success' : toast.type === 'warning' ? 'toast-warning' : 'toast-error'}`}>
+          <span>{toast.message}</span>
+          <button onClick={() => setToast(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', opacity: 0.7, fontSize: 16, lineHeight: 1 }}>×</button>
         </div>
       )}
     </div>

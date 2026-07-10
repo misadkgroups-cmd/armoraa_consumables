@@ -1,330 +1,156 @@
-import { useState, useEffect } from 'react';
-import { supabase } from '../config/supabase';
+import { useState } from 'react';
+import Overview from './Overview';
+import Customization from './Customization';
+import NonBillableConsumables from './NonBillableConsumables';
+import BillableConsumables from './BillableConsumables';
+import Reports from './Reports';
 import { useBranch } from '../context/BranchContext';
 
-const Dashboard = () => {
-  const { branchId, branches } = useBranch();
-  const [dateRange, setDateRange] = useState('last7');
-  const [customStart, setCustomStart] = useState('');
-  const [customEnd, setCustomEnd] = useState('');
-  const [stats, setStats] = useState({
-    lastWeek: 0,
-    thisMonth: 0,
-    overall: 0,
-    totalCost: 0,
-  });
-  const [serviceData, setServiceData] = useState([]);
-  const [billableConsumables, setBillableConsumables] = useState([]);
-  const [nonBillableConsumables, setNonBillableConsumables] = useState([]);
-  const [loading, setLoading] = useState(false);
+const navSections = [
+  {
+    group: 'Main',
+    items: [
+      { id: 'overview', label: 'Dashboard Overview', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
+    ]
+  },
+  {
+    group: 'Consumables',
+    items: [
+      { id: 'billable', label: 'Billable Consumables', icon: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z M14 2 14 8 20 8 M16 13H8 M16 17H8 M10 9 9 9 8 9' },
+      { id: 'non-billable', label: 'Non-Billable Consumables', icon: 'M1 3h15v13H1z M16 8l4 0 3 3v5H16V8z M5.5 18.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z M18.5 18.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z' },
+    ]
+  },
+  {
+    group: 'Reports',
+    items: [
+      { id: 'reports', label: 'Reports', icon: 'M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z' },
+    ]
+  },
+  {
+    group: 'Settings',
+    items: [
+      { id: 'customization', label: 'Customization', icon: 'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.64l-1.92-3.32c-.12-.22-.39-.29-.61-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.49-.41h-3.84c-.24 0-.44.17-.49.41l-.36 2.54c-.59.24-1.12.57-1.62.94l-2.39-.96c-.23-.08-.49 0-.61.22L2.74 8.87c-.12.22-.07.49.12.64l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.64l1.92 3.32c.12.22.39.29.61.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.25.41.49.41h3.84c.24 0 .44-.17.49-.41l.36-2.54c.59-.24 1.12-.57 1.62-.94l2.39.96c.23.08.49 0 .61-.22l1.92-3.32c.12-.22.07-.49-.12-.64l-2.03-1.58zM12 15c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3z' },
+    ]
+  }
+];
 
-  const getDateRange = () => {
-    const today = new Date();
-    let start = new Date();
-    let end = today;
+const NavIcon = ({ path }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+    <path d={path} />
+  </svg>
+);
 
-    if (dateRange === 'last7') {
-      start = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-    } else if (dateRange === 'last30') {
-      start = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
-    } else if (dateRange === 'thisMonth') {
-      start = new Date(today.getFullYear(), today.getMonth(), 1);
-    } else if (dateRange === 'custom' && customStart && customEnd) {
-      start = new Date(customStart);
-      end = new Date(customEnd);
-    }
+const Dashboard = ({ currentPage = 'overview', onNavigate, onLogout }) => {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const { branchName, switchBranch } = useBranch();
 
-    return {
-      start: start.toISOString().split('T')[0],
-      end: end.toISOString().split('T')[0],
-    };
-  };
-
-  const fetchDashboard = async () => {
-    setLoading(true);
-    try {
-      const { start, end } = getDateRange();
-      
-      // Fetch billable reports
-      let query = supabase
-        .from('billable_report')
-        .select('*')
-        .gte('report_date', start)
-        .lte('report_date', end);
-
-      if (branchId) query = query.eq('branch_id', branchId);
-
-      const { data: bills } = await query;
-
-      // Calculate counts
-      const billsArray = bills || [];
-      const lastWeekStart = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-      const lastMonthStart = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-      const thisMonthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
-
-      const lastWeekCount = billsArray.filter(b => b.report_date >= lastWeekStart).length;
-      const thisMonthCount = billsArray.filter(b => b.report_date >= thisMonthStart).length;
-      const overallCount = billsArray.length;
-
-      // Calculate total cost
-      let totalCost = 0;
-      billsArray.forEach(bill => {
-        for (let i = 1; i <= 14; i++) {
-          const units = bill[`consumable_${i}_units`];
-          const batchId = bill[`consumable_${i}_batch_id`];
-          if (units && !batchId) totalCost += Number(units);
-        }
-      });
-
-      setStats({
-        lastWeek: lastWeekCount,
-        thisMonth: thisMonthCount,
-        overall: overallCount,
-        totalCost,
-      });
-
-      // Fetch service-wise data (sorted low to high)
-      const serviceQuery = supabase
-        .from('master_services')
-        .select('id, service_name');
-
-      const { data: services } = await serviceQuery;
-
-      const serviceCounts = {};
-      if (services) {
-        services.forEach(s => {
-          serviceCounts[s.id] = { name: s.service_name, count: 0 };
-        });
-      }
-
-      if (branchId) {
-        billsArray.forEach(bill => {
-          if (bill.service_id && serviceCounts[bill.service_id]) {
-            serviceCounts[bill.service_id].count++;
-          }
-        });
-      }
-
-      const sortedServices = Object.values(serviceCounts)
-        .sort((a, b) => a.count - b.count)
-        .filter(s => s.count > 0);
-
-      setServiceData(sortedServices);
-
-      // Fetch billable consumables usage
-      const consumableIds = new Set();
-      billsArray.forEach(row => {
-        for (let i = 1; i <= 14; i++) {
-          if (row[`consumable_${i}_id`] && !row[`consumable_${i}_batch_id`]) {
-            consumableIds.add(row[`consumable_${i}_id`]);
-          }
-        }
-      });
-
-      let consumableMap = {};
-      if (consumableIds.size > 0) {
-        const { data: consumables } = await supabase
-          .from('master_consumables')
-          .select('id, consumable_name')
-          .in('id', Array.from(consumableIds));
-        
-        if (consumables) {
-          consumables.forEach(c => {
-            consumableMap[c.id] = c.consumable_name;
-          });
-        }
-      }
-
-      const consumableCounts = {};
-      billsArray.forEach(row => {
-        for (let i = 1; i <= 14; i++) {
-          const cId = row[`consumable_${i}_id`];
-          const units = row[`consumable_${i}_units`];
-          const batchId = row[`consumable_${i}_batch_id`];
-          
-          if (cId && units && !batchId) {
-            const name = consumableMap[cId] || 'Unknown';
-            if (!consumableCounts[name]) {
-              consumableCounts[name] = { name, totalUnits: 0 };
-            }
-            consumableCounts[name].totalUnits += Number(units);
-          }
-        }
-      });
-
-      const sortedConsumables = Object.values(consumableCounts)
-        .sort((a, b) => b.totalUnits - a.totalUnits)
-        .slice(0, 10);
-
-      setBillableConsumables(sortedConsumables);
-
-      // Fetch non-billable usage
-      const bulkQuery = supabase
-        .from('bulk_consumables_registry')
-        .select('*')
-        .gte('open_date', start)
-        .lte('open_date', end);
-
-      if (branchId) bulkQuery.eq('branch_id', branchId);
-
-      const { data: bulkData } = await bulkQuery;
-
-      const nonBillableCounts = {};
-      if (bulkData) {
-        bulkData.forEach(bulk => {
-          const name = bulk.product_name;
-          if (!nonBillableCounts[name]) {
-            nonBillableCounts[name] = { name, count: 0 };
-          }
-          nonBillableCounts[name].count++;
-        });
-      }
-
-      const sortedNonBillable = Object.values(nonBillableCounts)
-        .sort((a, b) => b.count - a.count)
-        .slice(0, 10);
-
-      setNonBillableConsumables(sortedNonBillable);
-
-    } catch (error) {
-      console.error('Error fetching dashboard:', error);
-    } finally {
-      setLoading(false);
+  const renderPage = () => {
+    switch (currentPage) {
+      case 'overview': return <Overview />;
+      case 'billable': return <BillableConsumables />;
+      case 'non-billable': return <NonBillableConsumables />;
+      case 'reports': return <Reports />;
+      case 'customization': return <Customization />;
+      default: return <Overview />;
     }
   };
-
-  useEffect(() => {
-    fetchDashboard();
-  }, [branchId, dateRange, customStart, customEnd]);
-
-  const maxServiceCount = Math.max(...serviceData.map(s => s.count), 1);
 
   return (
-    <div className="space-y-6 p-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold text-slate-900">Dashboard</h1>
-        <button onClick={fetchDashboard} className="px-4 py-2 bg-sky-600 text-white rounded-lg hover:bg-sky-700 text-sm font-semibold shadow-sm">
-          Refresh
-        </button>
-      </div>
-
-      {/* Date Filter */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
-        <div className="flex flex-wrap gap-2">
-          <button onClick={() => setDateRange('last7')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${dateRange === 'last7' ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
-            Last 7 Days
-          </button>
-          <button onClick={() => setDateRange('last30')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${dateRange === 'last30' ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
-            Last 30 Days
-          </button>
-          <button onClick={() => setDateRange('thisMonth')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${dateRange === 'thisMonth' ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
-            This Month
-          </button>
-          <button onClick={() => setDateRange('custom')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${dateRange === 'custom' ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
-            Custom
-          </button>
-          {dateRange === 'custom' && (
-            <>
-              <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="h-9 px-3 border border-slate-300 rounded-lg text-sm" />
-              <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="h-9 px-3 border border-slate-300 rounded-lg text-sm" />
-            </>
-          )}
+    <div className="app-container">
+      {/* ===== LEFT SIDEBAR ===== */}
+      <aside className={`sidebar ${sidebarCollapsed ? 'w-[72px]' : 'w-[218px]'}`}>
+        <div className="sidebar-home">
+          <div className="sidebar-logo">A</div>
+          {!sidebarCollapsed && <span className="sidebar-brand">ARMORAA</span>}
         </div>
-      </div>
-
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-          <div className="text-sm font-medium text-slate-500 mb-2">Last Week Bills</div>
-          <div className="text-3xl font-bold text-sky-600">{stats.lastWeek}</div>
-        </div>
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-          <div className="text-sm font-medium text-slate-500 mb-2">This Month Bills</div>
-          <div className="text-3xl font-bold text-emerald-600">{stats.thisMonth}</div>
-        </div>
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-          <div className="text-sm font-medium text-slate-500 mb-2">Overall Bills</div>
-          <div className="text-3xl font-bold text-purple-600">{stats.overall}</div>
-        </div>
-      </div>
-
-      {/* Service-wise Chart */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-        <h3 className="text-lg font-semibold text-slate-900 mb-4">Service-wise Bills (Low to High)</h3>
-        {serviceData.length === 0 ? (
-          <div className="text-center py-8 text-slate-500">No data available</div>
-        ) : (
-          <div className="space-y-3">
-            {serviceData.map((service, idx) => (
-              <div key={idx} className="flex items-center gap-3">
-                <div className="w-48 text-sm text-slate-700 truncate">{service.name}</div>
-                <div className="flex-1 bg-slate-100 rounded-full h-8 overflow-hidden">
+        
+        <nav className="sidebar-nav">
+          {navSections.map((section) => (
+            <div key={section.group}>
+              {!sidebarCollapsed && <div className="sidebar-group">{section.group}</div>}
+              {section.items.map((item) => {
+                const isActive = currentPage === item.id || (currentPage === 'queue' && item.id === 'queue') || (currentPage === 'appointments' && item.id === 'appointments');
+                return (
                   <div
-                    className="bg-sky-500 h-full rounded-full flex items-center justify-end pr-2"
-                    style={{ width: `${(service.count / maxServiceCount) * 100}%` }}
+                    key={item.id}
+                    onClick={() => onNavigate(item.id)}
+                    className={`sidebar-item ${isActive ? 'active' : ''}`}
                   >
-                    <span className="text-xs font-semibold text-white">{service.count}</span>
+                    <span className={`sidebar-icon ${isActive ? 'text-white' : ''}`}>
+                      <NavIcon path={item.icon} />
+                    </span>
+                    {!sidebarCollapsed && (
+                      <>
+                        <span className="flex-1">{item.label}</span>
+                        {item.badge && <span className="sidebar-pill">{item.badge}</span>}
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </nav>
+
+        <div className="sidebar-footer">
+          {!sidebarCollapsed && 'ARMORAA CLINIC SUITE · ODOO 18 CE'}
+        </div>
+      </aside>
+
+      {/* ===== MAIN AREA ===== */}
+      <div className="main-container">
+        {/* Top Navigation */}
+        <div className="topnav">
+          <div className="topnav-apps">▦</div>
+          <div className="topnav-appname">
+            {navSections.find(s => s.items.find(i => i.id === currentPage))?.items.find(i => i.id === currentPage)?.label || 'Dashboard'}
+          </div>
+          <div className="topnav-menu" style={{marginLeft: '20px', display: 'flex', alignItems: 'center'}}>
+            <span style={{fontSize: '12px', opacity: 0.9, color: '#fff'}}>{branchName} Branch</span>
+          </div>
+          <div className="topnav-menu">
+            {currentPage === 'appointments' || currentPage === 'queue' ? (
+              <>
+                <div className="topnav-menu-item">Appointments
+                  <div className="dropdown">
+                    <div className="dropdown-header">Operations</div>
+                    <div className="dropdown-item" onClick={() => onNavigate('appointments')}>Calendar</div>
+                    <div className="dropdown-item" onClick={() => onNavigate('queue')}>Front-Desk Queue</div>
+                    <div className="dropdown-item" onClick={() => onNavigate('queue')}>Video Consults</div>
+                    <div className="dropdown-divider"></div>
+                    <div className="dropdown-header">Schedule</div>
+                    <div className="dropdown-item" onClick={() => onNavigate('schedules')}>Doctor Schedules</div>
                   </div>
                 </div>
-              </div>
-            ))}
+                <div className="topnav-menu-item">Clinical
+                  <div className="dropdown">
+                    <div className="dropdown-item" onClick={() => onNavigate('prescriptions')}>Prescriptions</div>
+                    <div className="dropdown-item" onClick={() => onNavigate('lab_orders')}>Lab Orders</div>
+                    <div className="dropdown-item" onClick={() => onNavigate('services')}>Services & Packages</div>
+                  </div>
+                </div>
+              </>
+            ) : null}
           </div>
-        )}
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Billable Consumables Chart */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-          <h3 className="text-lg font-semibold text-slate-900 mb-4">Top Billable Consumables</h3>
-          {billableConsumables.length === 0 ? (
-            <div className="text-center py-8 text-slate-500">No data available</div>
-          ) : (
-            <div className="space-y-2 max-h-96 overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 sticky top-0">
-                  <tr>
-                    <th className="text-left px-3 py-2 text-xs font-semibold text-slate-600 uppercase">Consumable</th>
-                    <th className="text-right px-3 py-2 text-xs font-semibold text-slate-600 uppercase">Units</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {billableConsumables.map((item, idx) => (
-                    <tr key={idx} className="border-b border-slate-100">
-                      <td className="px-3 py-2 text-slate-800">{item.name}</td>
-                      <td className="px-3 py-2 text-right font-semibold text-slate-900">{item.totalUnits}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <div className="topnav-systray">
+            <div style={{position: 'relative'}}>
+              <div className="topnav-avatar" style={{cursor: 'pointer', fontWeight: 600, background: '#fff', color: '#6F68B6'}} onClick={() => {
+                const dd = document.getElementById('userDropdown');
+                dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+              }}>FD</div>
+              <div className="dropdown" id="userDropdown" style={{top: '36px', right: '0', left: 'auto', minWidth: '180px', display: 'none', position: 'absolute', zIndex: 1000}}>
+                <div className="dropdown-item" style={{cursor: 'pointer', fontWeight: 500}} onClick={() => {
+                  document.getElementById('userDropdown').style.display = 'none';
+                  if (onLogout) onLogout();
+                }}>Logout</div>
+              </div>
             </div>
-          )}
+          </div>
         </div>
 
-        {/* Non-Billable Consumables Chart */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
-          <h3 className="text-lg font-semibold text-slate-900 mb-4">Top Non-Billable Consumables</h3>
-          {nonBillableConsumables.length === 0 ? (
-            <div className="text-center py-8 text-slate-500">No data available</div>
-          ) : (
-            <div className="space-y-2 max-h-96 overflow-y-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50 sticky top-0">
-                  <tr>
-                    <th className="text-left px-3 py-2 text-xs font-semibold text-slate-600 uppercase">Product Name</th>
-                    <th className="text-right px-3 py-2 text-xs font-semibold text-slate-600 uppercase">Used Count</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {nonBillableConsumables.map((item, idx) => (
-                    <tr key={idx} className="border-b border-slate-100">
-                      <td className="px-3 py-2 text-slate-800">{item.name}</td>
-                      <td className="px-3 py-2 text-right font-semibold text-slate-900">{item.count}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+        {/* Content Area */}
+        <div className="content-area">
+          {renderPage()}
         </div>
       </div>
     </div>

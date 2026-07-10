@@ -4,86 +4,193 @@ import { useBranch } from '../context/BranchContext';
 
 const Overview = () => {
   const { branchId } = useBranch();
+  const [dateRange, setDateRange] = useState('last7');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
   const [stats, setStats] = useState({
-    totalMasterConsumables: 0,
-    activeServices: 0,
-    trackedMachinery: 0,
-    billsEntered: 0,
-    bulkOpenThisWeek: 0,
-    bulkCompletedThisWeek: 0,
+    lastWeek: 0,
+    thisMonth: 0,
+    overall: 0,
+    totalCost: 0,
   });
-  const [recentActivity, setRecentActivity] = useState([]);
-  const [topConsumables, setTopConsumables] = useState([]);
-  const [patientRecords, setPatientRecords] = useState([]);
+  const [serviceData, setServiceData] = useState([]);
+  const [billableConsumables, setBillableConsumables] = useState([]);
+  const [nonBillableConsumables, setNonBillableConsumables] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  const getDateRange = () => {
+    const today = new Date();
+    let start = new Date();
+    let end = today;
+
+    if (dateRange === 'last7') {
+      start = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+    } else if (dateRange === 'last30') {
+      start = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+    } else if (dateRange === 'thisMonth') {
+      start = new Date(today.getFullYear(), today.getMonth(), 1);
+    } else if (dateRange === 'custom' && customStart && customEnd) {
+      start = new Date(customStart);
+      end = new Date(customEnd);
+    }
+
+    return {
+      start: start.toISOString().split('T')[0],
+      end: end.toISOString().split('T')[0],
+    };
+  };
 
   useEffect(() => {
     if (branchId) {
       fetchOverviewData();
     }
-  }, [branchId]);
+  }, [branchId, dateRange, customStart, customEnd]);
 
   const fetchOverviewData = async () => {
     setLoading(true);
     try {
-      const [consumablesRes, servicesRes, machineryRes] = await Promise.all([
-        supabase.from('master_consumables').select('*', { count: 'exact' }).eq('branch_id', branchId),
-        supabase.from('master_services').select('*', { count: 'exact' }),
-        supabase.from('master_machinery').select('*', { count: 'exact' }),
-      ]);
+      const { start, end } = getDateRange();
 
-      let totalBills = 0;
-      
-      // Try to fetch patient_records if table exists
-      let recordsRes = { data: [] };
-      try {
-        const result = await supabase.from('patient_records').select('*').eq('branch_id', branchId).order('created_at', { ascending: false }).limit(10);
-        if (!result.error) {
-          recordsRes = result;
-          totalBills = result.data?.length || 0;
+      // Fetch billable reports
+      let query = supabase
+        .from('billable_report')
+        .select('*')
+        .gte('report_date', start)
+        .lte('report_date', end);
+
+      if (branchId) query = query.eq('branch_id', branchId);
+
+      const { data: bills } = await query;
+      const billsArray = bills || [];
+
+      // Calculate counts
+      const lastWeekStart = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const thisMonthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+
+      const lastWeekCount = billsArray.filter(b => b.report_date >= lastWeekStart).length;
+      const thisMonthCount = billsArray.filter(b => b.report_date >= thisMonthStart).length;
+      const overallCount = billsArray.length;
+
+      // Get consumable names and costs
+      const consumableIds = new Set();
+      billsArray.forEach(row => {
+        for (let i = 1; i <= 14; i++) {
+          if (row[`consumable_${i}_id`]) consumableIds.add(row[`consumable_${i}_id`]);
         }
-      } catch (e) {
-        console.log('patient_records table not found');
-      }
-
-      // Calculate week boundaries
-      const now = new Date();
-      const weekStart = new Date(now);
-      weekStart.setDate(now.getDate() - now.getDay());
-      weekStart.setHours(0, 0, 0, 0);
-
-      setStats({
-        totalMasterConsumables: consumablesRes.count || 0,
-        activeServices: servicesRes.count || 0,
-        trackedMachinery: machineryRes.count || 0,
-        billsEntered: totalBills,
-        bulkOpenThisWeek: 0,
-        bulkCompletedThisWeek: 0,
       });
 
-      if (recordsRes.data && recordsRes.data.length > 0) {
-        setRecentActivity(recordsRes.data.slice(0, 10));
+      let consumableMap = {};
+      if (consumableIds.size > 0) {
+        const { data: consumables } = await supabase
+          .from('master_consumables')
+          .select('id, consumable_name, cost_unit')
+          .in('id', Array.from(consumableIds));
         
-        // Build consumable usage map
-        const usageMap = {};
-        recordsRes.data.forEach(record => {
-          const jsonb = record.consumables_jsonb || {};
-          Object.entries(jsonb).forEach(([key, value]) => {
-            if (value) {
-              usageMap[key] = (usageMap[key] || 0) + 1;
-            }
+        if (consumables) {
+          consumables.forEach(c => {
+            consumableMap[c.id] = { name: c.consumable_name, cost: c.cost_unit || 0 };
           });
-        });
-
-        const sortedUsage = Object.entries(usageMap)
-          .sort(([, a], [, b]) => b - a)
-          .slice(0, 7);
-        
-        setTopConsumables(sortedUsage.map(([name, count]) => ({ name, count })));
-      } else {
-        setRecentActivity([]);
-        setTopConsumables([]);
+        }
       }
+
+      // Calculate total cost
+      let totalCost = 0;
+      billsArray.forEach(bill => {
+        for (let i = 1; i <= 14; i++) {
+          const cId = bill[`consumable_${i}_id`];
+          const units = bill[`consumable_${i}_units`];
+          const batchId = bill[`consumable_${i}_batch_id`];
+          if (cId && units && !batchId) {
+            const itemData = consumableMap[cId] || { name: '-', cost: 0 };
+            totalCost += Number(units) * Number(itemData.cost);
+          }
+        }
+      });
+
+      setStats({
+        lastWeek: lastWeekCount,
+        thisMonth: thisMonthCount,
+        overall: overallCount,
+        totalCost,
+      });
+
+      // Fetch service-wise data (sorted low to high)
+      const { data: services } = await supabase
+        .from('master_services')
+        .select('id, service_name');
+
+      const serviceCounts = {};
+      if (services) {
+        services.forEach(s => {
+          serviceCounts[s.id] = { name: s.service_name, count: 0 };
+        });
+      }
+
+      if (branchId) {
+        billsArray.forEach(bill => {
+          if (bill.service_id && serviceCounts[bill.service_id]) {
+            serviceCounts[bill.service_id].count++;
+          }
+        });
+      }
+
+      const sortedServices = Object.values(serviceCounts)
+        .sort((a, b) => a.count - b.count)
+        .filter(s => s.count > 0);
+
+      setServiceData(sortedServices);
+
+      // Fetch billable consumables usage
+      const consumableCounts = {};
+      billsArray.forEach(row => {
+        for (let i = 1; i <= 14; i++) {
+          const cId = row[`consumable_${i}_id`];
+          const units = row[`consumable_${i}_units`];
+          const batchId = row[`consumable_${i}_batch_id`];
+          
+          if (cId && units && !batchId) {
+            const itemData = consumableMap[cId] || { name: 'Unknown', cost: 0 };
+            if (!consumableCounts[itemData.name]) {
+              consumableCounts[itemData.name] = { name: itemData.name, totalUnits: 0 };
+            }
+            consumableCounts[itemData.name].totalUnits += Number(units);
+          }
+        }
+      });
+
+      const sortedConsumables = Object.values(consumableCounts)
+        .sort((a, b) => b.totalUnits - a.totalUnits)
+        .slice(0, 10);
+
+      setBillableConsumables(sortedConsumables);
+
+      // Fetch non-billable usage
+      const bulkQuery = supabase
+        .from('bulk_consumables_registry')
+        .select('*')
+        .gte('open_date', start)
+        .lte('open_date', end);
+
+      if (branchId) bulkQuery.eq('branch_id', branchId);
+
+      const { data: bulkData } = await bulkQuery;
+
+      const nonBillableCounts = {};
+      if (bulkData) {
+        bulkData.forEach(bulk => {
+          if (!nonBillableCounts[bulk.product_name]) {
+            nonBillableCounts[bulk.product_name] = { name: bulk.product_name, count: 0 };
+          }
+          nonBillableCounts[bulk.product_name].count++;
+        });
+      }
+
+      const sortedNonBillable = Object.values(nonBillableCounts)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 10);
+
+      setNonBillableConsumables(sortedNonBillable);
+
     } catch (error) {
       console.error('Error fetching overview data:', error);
     } finally {
@@ -91,18 +198,7 @@ const Overview = () => {
     }
   };
 
-  const getActivityText = (record) => {
-    const service = record.master_services?.service_name || 'Unknown Service';
-    const time = new Date(record.created_at).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    return `${service} - ${time}`;
-  };
-
-  const getActivityBadge = (record) => {
-    const jsonb = record.consumables_jsonb || {};
-    const usedCount = Object.values(jsonb).filter(v => v).length;
-    if (usedCount > 0) return { text: `${usedCount} items`, color: 'bg-sky-100 text-sky-700' };
-    return { text: 'View', color: 'bg-slate-100 text-slate-600' };
-  };
+  const maxServiceCount = Math.max(...serviceData.map(s => s.count), 1);
 
   if (loading) {
     return (
@@ -114,91 +210,127 @@ const Overview = () => {
 
   return (
     <div className="space-y-6 animate-fade-in">
-      {/* Top Metric Cards Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
-          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">Bills Entered</div>
-          <div className="text-3xl font-bold text-slate-900">{stats.billsEntered}</div>
-          <div className="text-xs text-slate-500 mt-1">Total records</div>
-        </div>
-
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
-          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">Non-Billable Opened (This Week)</div>
-          <div className="text-3xl font-bold text-sky-600">{stats.bulkOpenThisWeek}</div>
-          <div className="text-xs text-slate-500 mt-1">Active bulk items</div>
-        </div>
-
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
-          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">Completed (This Week)</div>
-          <div className="text-3xl font-bold text-emerald-600">{stats.bulkCompletedThisWeek}</div>
-          <div className="text-xs text-slate-500 mt-1">Marked as done</div>
-        </div>
-
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-5 py-4">
-          <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">Master Consumables</div>
-          <div className="text-3xl font-bold text-slate-900">{stats.totalMasterConsumables}</div>
-          <div className="text-xs text-slate-500 mt-1">Configured items</div>
+      {/* Date Filters */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => setDateRange('last7')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${dateRange === 'last7' ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
+            Last 7 Days
+          </button>
+          <button onClick={() => setDateRange('last30')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${dateRange === 'last30' ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
+            Last 30 Days
+          </button>
+          <button onClick={() => setDateRange('thisMonth')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${dateRange === 'thisMonth' ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
+            This Month
+          </button>
+          <button onClick={() => setDateRange('custom')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${dateRange === 'custom' ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}`}>
+            Custom
+          </button>
+          {dateRange === 'custom' && (
+            <>
+              <input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="h-9 px-3 border border-slate-300 rounded-lg text-sm" />
+              <input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="h-9 px-3 border border-slate-300 rounded-lg text-sm" />
+            </>
+          )}
         </div>
       </div>
 
-      {/* Split Chart Metric Groups */}
-      <div className="grid grid-cols-12 gap-6">
-        {/* Left Panel */}
-        <div className="col-span-7 space-y-6">
-          {/* Recent Activity */}
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 hover:shadow-md transition-shadow duration-300">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">Recent Activity</h3>
-            <div className="space-y-2">
-              {recentActivity.map((record, index) => {
-                const badge = getActivityBadge(record);
-                return (
-                  <div key={index} className="flex items-center justify-between p-3 rounded-lg hover:bg-slate-50 transition-all border border-slate-100">
-                    <div className="flex-1">
-                      <div className="text-sm font-medium text-slate-900">{getActivityText(record)}</div>
-                      <div className="text-xs text-slate-500 mt-0.5">Bill ID: {record.bill_id}</div>
-                    </div>
-                    <span className={`text-[10px] font-semibold px-2.5 py-1 rounded-full ${badge.color}`}>
-                      {badge.text}
-                    </span>
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+          <div className="text-sm font-medium text-slate-500 mb-2">Last Week Bills</div>
+          <div className="text-3xl font-bold text-sky-600">{stats.lastWeek}</div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+          <div className="text-sm font-medium text-slate-500 mb-2">This Month Bills</div>
+          <div className="text-3xl font-bold text-emerald-600">{stats.thisMonth}</div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+          <div className="text-sm font-medium text-slate-500 mb-2">Overall Bills</div>
+          <div className="text-3xl font-bold text-purple-600">{stats.overall}</div>
+        </div>
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+          <div className="text-sm font-medium text-slate-500 mb-2">Total Cost</div>
+          <div className="text-3xl font-bold text-slate-900">₹{stats.totalCost.toFixed(2)}</div>
+        </div>
+      </div>
+
+      {/* Service-wise Chart */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+        <h3 className="text-lg font-semibold text-slate-900 mb-4">Service-wise Bills (Low to High)</h3>
+        {serviceData.length === 0 ? (
+          <div className="text-center py-8 text-slate-500">No data available</div>
+        ) : (
+          <div className="space-y-3">
+            {serviceData.map((service, idx) => (
+              <div key={idx} className="flex items-center gap-3">
+                <div className="w-48 text-sm text-slate-700 truncate">{service.name}</div>
+                <div className="flex-1 bg-slate-100 rounded-full h-8 overflow-hidden">
+                  <div
+                    className="bg-gradient-to-r from-sky-400 to-sky-600 h-full rounded-full flex items-center justify-end pr-2 transition-all duration-500"
+                    style={{ width: `${(service.count / maxServiceCount) * 100}%` }}
+                  >
+                    <span className="text-xs font-semibold text-white">{service.count}</span>
                   </div>
-                );
-              })}
-              {recentActivity.length === 0 && (
-                <div className="text-center py-8 text-slate-500 text-sm">No recent activity</div>
-              )}
-            </div>
+                </div>
+              </div>
+            ))}
           </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Billable Consumables Chart */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+          <h3 className="text-lg font-semibold text-slate-900 mb-4">Top Billable Consumables</h3>
+          {billableConsumables.length === 0 ? (
+            <div className="text-center py-8 text-slate-500">No data available</div>
+          ) : (
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 sticky top-0">
+                  <tr>
+                    <th className="text-left px-3 py-2 text-xs font-semibold text-slate-600 uppercase">Consumable</th>
+                    <th className="text-right px-3 py-2 text-xs font-semibold text-slate-600 uppercase">Units Used</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {billableConsumables.map((item, idx) => (
+                    <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="px-3 py-2.5 text-slate-800">{item.name}</td>
+                      <td className="px-3 py-2.5 text-right font-semibold text-slate-900">{item.totalUnits}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
-        {/* Right Panel */}
-        <div className="col-span-5 space-y-6">
-          {/* Consumables Used - Units Only (No Cost) */}
-          <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 hover:shadow-md transition-shadow duration-300">
-            <h3 className="text-lg font-semibold text-slate-900 mb-4">Consumables Used (Units)</h3>
-            <div className="space-y-3">
-              {topConsumables.map((item, index) => {
-                const maxCount = topConsumables[0]?.count || 1;
-                const percentage = (item.count / maxCount) * 100;
-                return (
-                  <div key={item.name}>
-                    <div className="flex items-center justify-between mb-1">
-                      <div className="text-xs font-medium text-slate-700">{item.name}</div>
-                      <div className="text-xs font-semibold text-slate-900">{item.count} units</div>
-                    </div>
-                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-purple-500 rounded-full transition-all"
-                        style={{ width: `${percentage}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                );
-              })}
-              {topConsumables.length === 0 && (
-                <div className="text-center py-8 text-slate-500 text-sm">No usage data available</div>
-              )}
+        {/* Non-Billable Consumables Chart */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6">
+          <h3 className="text-lg font-semibold text-slate-900 mb-4">Top Non-Billable Consumables</h3>
+          {nonBillableConsumables.length === 0 ? (
+            <div className="text-center py-8 text-slate-500">No data available</div>
+          ) : (
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50 sticky top-0">
+                  <tr>
+                    <th className="text-left px-3 py-2 text-xs font-semibold text-slate-600 uppercase">Product Name</th>
+                    <th className="text-right px-3 py-2 text-xs font-semibold text-slate-600 uppercase">Used Count</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {nonBillableConsumables.map((item, idx) => (
+                    <tr key={idx} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="px-3 py-2.5 text-slate-800">{item.name}</td>
+                      <td className="px-3 py-2.5 text-right font-semibold text-slate-900">{item.count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

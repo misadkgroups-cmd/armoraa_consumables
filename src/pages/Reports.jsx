@@ -170,7 +170,7 @@ const Reports = () => {
             const batchId = row[`consumable_${i}_batch_id`];
             const cost = row[`consumable_${i}_cost`];
             
-            // Only process billable items (those with consumable_id, not batch_id)
+            // Process billable items (has consumable_id but no batch_id)
             if (consumableId && !batchId) {
               const name = consumableMap[consumableId] || '-';
               consumables.push({ slot: i, name, units, cost });
@@ -178,7 +178,7 @@ const Reports = () => {
               if (cost) totalCost += Number(cost);
             }
             
-            // Check for non-billable items separately
+            // Collect non-billable items (has batch_id) for NON-BILLABLE & ACTION column
             if (batchId && bulkItems) {
               const bulkItem = bulkItems.find(b => b.batch_id === batchId);
               if (bulkItem && !nonBillableUsed.find(n => n.batch_id === batchId)) {
@@ -332,7 +332,7 @@ const Reports = () => {
     } else {
       let maxConsumables = 0;
       reportData.forEach((r) => {
-        if (r.consumableCount > maxC) maxC = r.consumableCount;
+        if (r.consumableCount > maxConsumables) maxConsumables = r.consumableCount;
       });
 
       headers = ['BILL ID', 'UID', 'DATE', 'BRANCH', 'MACHINERY', 'SERVICE'];

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
 
@@ -15,7 +15,8 @@ export default function BillableConsumables() {
   const [allConsumables, setAllConsumables] = useState([]);
   const [rows, setRows] = useState([]);
   const [toast, setToast] = useState(null);
-  const [reportDate, setReportDate] = useState(new Date().toISOString().split('T')[0]);
+  const [reportDate, setReportDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const billIdRef = useRef(null);
 
   useEffect(() => {
     if (branchId) {
@@ -24,6 +25,8 @@ export default function BillableConsumables() {
       fetchConsumables();
       fetchBulkItems();
     }
+    // Auto-focus Bill ID on load for fast keyboard entry
+    setTimeout(() => billIdRef.current?.focus(), 100);
   }, [branchId]);
 
   useEffect(() => {
@@ -133,12 +136,16 @@ export default function BillableConsumables() {
       ...prev,
       { id: newId, consumableId: selectedConsumableId || '', units: selectedConsumableId?.startsWith('bulk_') ? 'USED' : '', batchId: initialBatch }
     ]);
+    // Focus the new row's consumable dropdown (spreadsheet-style flow)
     setTimeout(() => {
-      if (!selectedConsumableId?.startsWith('bulk_')) {
-        const unitsInput = document.querySelector(`input[data-row-id="${newId}"][data-field="units"]`);
-        if (unitsInput) unitsInput.focus();
+      const sel = document.querySelector(`select[data-row-id="${newId}"][data-field="consumable"]`);
+      if (sel) {
+        sel.focus();
+        if (sel.tagName === 'SELECT' && typeof sel.showPicker === 'function') {
+          try { sel.showPicker(); } catch (_) {}
+        }
       }
-    }, 50);
+    }, 60);
   };
 
   const removeConsumableRow = (id) => {
@@ -163,8 +170,12 @@ export default function BillableConsumables() {
     if (e.key === 'Enter') {
       e.preventDefault();
       const row = rows.find((r) => r.id === id);
-      if (!row || !row.consumableId) return;
-      
+      if (!row || !row.consumableId) {
+        // Nothing selected yet → open the dropdown for quick pick
+        const sel = e.target;
+        if (sel && typeof sel.showPicker === 'function') { try { sel.showPicker(); } catch (_) {} }
+        return;
+      }
       if (row.consumableId.startsWith('bulk_')) {
         const batchInput = document.querySelector(`select[data-row-id="${id}"][data-field="batch"]`);
         if (batchInput) batchInput.focus();
@@ -191,9 +202,14 @@ export default function BillableConsumables() {
       } else {
         const currentIndex = rows.findIndex((r) => r.id === id);
         if (currentIndex < rows.length - 1) {
-          const nextUnits = document.querySelector(`input[data-row-id="${rows[currentIndex + 1].id}"][data-field="units"]`);
-          if (nextUnits) nextUnits.focus();
+          // Move to NEXT row's consumable dropdown (spreadsheet-style)
+          const nextConsumable = document.querySelector(`select[data-row-id="${rows[currentIndex + 1].id}"][data-field="consumable"]`);
+          if (nextConsumable) {
+            nextConsumable.focus();
+            if (typeof nextConsumable.showPicker === 'function') { try { nextConsumable.showPicker(); } catch (_) {} }
+          }
         } else {
+          // Last row → auto-add a new empty row and focus its consumable dropdown
           addConsumableRow();
         }
       }
@@ -205,7 +221,7 @@ export default function BillableConsumables() {
         removeConsumableRow(id);
       } else {
         setRows((prev) => prev.map((r) => (r.id === id ? { ...r, units: '' } : r)));
-        const consumableSelect = document.querySelector(`select[data-row-id="${id}"]`);
+        const consumableSelect = document.querySelector(`select[data-row-id="${id}"][data-field="consumable"]`);
         if (consumableSelect) consumableSelect.focus();
       }
     }
@@ -326,8 +342,8 @@ export default function BillableConsumables() {
         <div className="grid grid-cols-5 gap-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
           {[
             { label: 'Bill ID', field: 'billId', type: 'text', placeholder: 'Enter Bill ID' },
-            { label: 'Date', field: 'date', type: 'date', value: reportDate, onChange: setReportDate },
             { label: 'UID', field: 'uid', type: 'text', placeholder: 'Enter UID' },
+            { label: 'Date', field: 'date', type: 'date', value: reportDate, onChange: setReportDate },
             { label: 'Service', field: 'service', type: 'select', options: services.map(s => ({ value: s.id, label: s.service_name })), onChange: (v) => { setService(v); setMachinery(''); if (v) fetchMachines(v); } },
             { label: 'Machinery', field: 'machinery', type: 'select', options: machines.map(m => ({ value: m.id, label: m.machine_name })) },
           ].map((item) => (
@@ -339,7 +355,18 @@ export default function BillableConsumables() {
                   {item.options?.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                 </select>
               ) : (
-                <input type={item.type} value={item.field === 'billId' ? billId : uid} onChange={(e) => item.field === 'billId' ? setBillId(e.target.value) : setUid(e.target.value)} placeholder={item.placeholder} className="form-input" />
+                <input
+                  ref={item.field === 'billId' ? billIdRef : undefined}
+                  type={item.type}
+                  value={item.field === 'billId' ? billId : item.field === 'uid' ? uid : reportDate}
+                  onChange={(e) => {
+                    if (item.field === 'billId') setBillId(e.target.value);
+                    else if (item.field === 'uid') setUid(e.target.value);
+                    else item.onChange(e.target.value);
+                  }}
+                  placeholder={item.placeholder}
+                  className="form-input"
+                />
               )}
             </div>
           ))}
@@ -377,7 +404,7 @@ export default function BillableConsumables() {
             return (
               <div key={row.id} className={`grid grid-cols-12 gap-2 items-center p-2 rounded-lg ${row.units || row.batchId ? 'bg-[#EEF2FF]' : ''}`}>
                 <div className="col-span-4">
-                  <select value={row.consumableId} onChange={(e) => handleConsumableChange(row.id, e.target.value === '__clear__' ? '' : e.target.value)} onKeyDown={(e) => handleConsumableKeyDown(e, row.id)} data-row-id={row.id} className="form-input">
+                  <select value={row.consumableId} onChange={(e) => handleConsumableChange(row.id, e.target.value === '__clear__' ? '' : e.target.value)} onKeyDown={(e) => handleConsumableKeyDown(e, row.id)} data-row-id={row.id} data-field="consumable" className="form-input">
                     <option value="">Select consumable...</option>
                     {allConsumables.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                   </select>

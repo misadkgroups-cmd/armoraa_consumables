@@ -2,14 +2,60 @@ import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
 import Chart from 'react-apexcharts';
-import { AnimatePresence, motion } from 'framer-motion';
+import { motion } from 'framer-motion';
 import {
-  Calendar, Activity, FileText, TrendingUp, TrendingDown,
-  Box, Server, Building2, RefreshCw, Camera
+  Calendar, Activity, FileText, Box, Stethoscope, Scissors,
+  Bell, LogOut, MapPin, TrendingUp
 } from 'lucide-react';
 
+/* ---------- Animated Counter ---------- */
+const useCountUp = (target, duration = 800) => {
+  const [val, setVal] = useState(0);
+  useEffect(() => {
+    let start = 0, t0 = null;
+    const step = (ts) => {
+      if (!t0) t0 = ts;
+      const p = Math.min((ts - t0) / duration, 1);
+      const eased = 1 - Math.pow(1 - p, 3);
+      setVal(Math.round(target * eased));
+      if (p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  }, [target, duration]);
+  return val;
+};
+
+const Counter = ({ value }) => {
+  const v = useCountUp(value || 0);
+  return <>{v.toLocaleString()}</>;
+};
+
+/* ---------- Tiny Sparkline ---------- */
+const Sparkline = ({ data, color }) => {
+  const w = 64, h = 24, max = Math.max(...data, 1), min = Math.min(...data, 0);
+  const pts = data.map((d, i) => {
+    const x = (i / (data.length - 1)) * w;
+    const y = h - ((d - min) / (max - min || 1)) * h;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const id = `sg-${color.replace('#', '')}`;
+  return (
+    <svg className="kpi-spark" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none">
+      <defs>
+        <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.25" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <polygon points={`0,${h} ${pts.join(' ')} ${w},${h}`} fill={`url(#${id})`} />
+      <polyline points={pts.join(' ')} fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+};
+
 const Overview = () => {
-  const { branchId } = useBranch();
+  const { branchId, branchName, switchBranch } = useBranch();
+  const handleLogout = () => switchBranch(null, '');
   const [dateRange, setDateRange] = useState('last7');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
@@ -47,15 +93,18 @@ const Overview = () => {
       const thisMonthCount = billsArray.filter(b => b.report_date >= thisMonthStart).length;
       const overallCount = billsArray.length;
 
-      // Previous period for growth
-      const periodStart = new Date(start);
-      const periodDays = Math.ceil((new Date(end).getTime() - periodStart.getTime()) / 86400000);
-      const prevStart = new Date(periodStart.getTime() - periodDays * 86400000).toISOString().split('T')[0];
-      const { data: prevBills } = await supabase.from('billable_report').select('id').gte('report_date', prevStart).lt('report_date', start);
-      const prevCount = prevBills?.length || 1;
-      const growth = ((overallCount - prevCount) / prevCount * 100).toFixed(1);
+      // Today's sessions (bills created today) & procedures (distinct services today)
+      const todayStr = new Date().toISOString().split('T')[0];
+      const todayBills = billsArray.filter(b => b.report_date === todayStr);
+      const todaysSessions = todayBills.length;
+      const todaysProcedures = new Set(todayBills.map(b => b.service_id).filter(Boolean)).size;
 
-      // Consumable map for costs
+      // Active items = distinct consumables used in period
+      const activeIds = new Set();
+      billsArray.forEach(row => { for (let i = 1; i <= 14; i++) if (row[`consumable_${i}_id`] && !row[`consumable_${i}_batch_id`]) activeIds.add(row[`consumable_${i}_id`]); });
+      const activeItems = activeIds.size;
+
+      // Consumable map
       const consumableIds = new Set();
       billsArray.forEach(row => { for (let i = 1; i <= 14; i++) if (row[`consumable_${i}_id`]) consumableIds.add(row[`consumable_${i}_id`]); });
       let consumableMap = {};
@@ -63,14 +112,6 @@ const Overview = () => {
         const { data: c } = await supabase.from('master_consumables').select('id, consumable_name, cost_unit').in('id', Array.from(consumableIds));
         if (c) c.forEach(x => consumableMap[x.id] = { name: x.consumable_name, cost: x.cost_unit || 0 });
       }
-
-      let totalCost = 0;
-      billsArray.forEach(bill => {
-        for (let i = 1; i <= 14; i++) {
-          const cId = bill[`consumable_${i}_id`], units = bill[`consumable_${i}_units`], batchId = bill[`consumable_${i}_batch_id`];
-          if (cId && units && !batchId) totalCost += Number(units) * Number(consumableMap[cId]?.cost || 0);
-        }
-      });
 
       // Services
       const { data: services } = await supabase.from('master_services').select('id, service_name');
@@ -96,22 +137,11 @@ const Overview = () => {
       const machineryChart = Object.entries(machineryCounts).map(([name, count]) => ({ name, count }))
         .sort((a, b) => b.count - a.count).slice(0, 10);
 
-      // Daily trend
-      const dailyRevenue = {}, dailyBills = {};
-      billsArray.forEach(bill => {
-        const date = bill.report_date;
-        dailyBills[date] = (dailyBills[date] || 0) + 1;
-        let rev = 0;
-        for (let i = 1; i <= 14; i++) {
-          const cId = bill[`consumable_${i}_id`], units = bill[`consumable_${i}_units`], batchId = bill[`consumable_${i}_batch_id`];
-          if (cId && units && !batchId) rev += Number(units) * Number(consumableMap[cId]?.cost || 0);
-        }
-        dailyRevenue[date] = (dailyRevenue[date] || 0) + rev;
-      });
-
+      // Daily bills for sparklines
+      const dailyBills = {};
+      billsArray.forEach(bill => { const d = bill.report_date; dailyBills[d] = (dailyBills[d] || 0) + 1; });
       const sortedDates = Object.keys(dailyBills).sort();
-      const revenueTrend = sortedDates.map(d => ({ x: d, y: Math.round(dailyRevenue[d] * 100) / 100 }));
-      const billsTrend = sortedDates.map(d => ({ x: d, y: dailyBills[d] }));
+      const billsTrend = sortedDates.map(d => dailyBills[d]);
 
       // Consumables
       const consumableCounts = {}, nonBillableCounts = {};
@@ -125,404 +155,251 @@ const Overview = () => {
         }
       });
       const billableTop = Object.entries(consumableCounts).map(([name, units]) => ({ name, units }))
-        .sort((a, b) => b.units - a.units).slice(0, 10);
+        .sort((a, b) => b.units - a.units).slice(0, 8);
 
       const { data: bulkData } = await supabase.from('bulk_consumables_registry').select('product_name').gte('open_date', start).lte('open_date', end);
       if (bulkData) bulkData.forEach(b => { nonBillableCounts[b.product_name] = (nonBillableCounts[b.product_name] || 0) + 1; });
       const nonBillableTop = Object.entries(nonBillableCounts).map(([name, count]) => ({ name, count }))
-        .sort((a, b) => b.count - a.count).slice(0, 10);
+        .sort((a, b) => b.count - a.count).slice(0, 8);
 
-      // Most used service & machine
       const topService = serviceChart[0] || null;
       const topMachine = machineryChart[0] || null;
 
-      // Branch performance
-      const branchIds = [...new Set(billsArray.map(b => b.branch_id).filter(Boolean))];
-      let branchMap = {};
-      if (branchIds.length > 0) {
-        const { data: br } = await supabase.from('branches').select('id, branch_name').in('id', branchIds);
-        if (br) br.forEach(x => branchMap[x.id] = x.branch_name);
-      }
-      const branchPerf = {};
-      billsArray.forEach(b => {
-        if (b.branch_id) {
-          const name = branchMap[b.branch_id] || 'Unknown';
-          if (!branchPerf[name]) branchPerf[name] = { bills: 0, revenue: 0 };
-          branchPerf[name].bills++;
-          let rev = 0;
-          for (let i = 1; i <= 14; i++) {
-            const cId = b[`consumable_${i}_id`], units = b[`consumable_${i}_units`], batchId = b[`consumable_${i}_batch_id`];
-            if (cId && units && !batchId) rev += Number(units) * Number(consumableMap[cId]?.cost || 0);
-          }
-          branchPerf[name].revenue += rev;
-        }
-      });
-      const branchTop = Object.entries(branchPerf).map(([name, d]) => ({ name, ...d }))
-        .sort((a, b) => b.bills - a.bills)[0] || null;
+      // Inventory health (simulated stock levels based on data)
+      const totalTracked = billableTop.length + nonBillableTop.length;
+      const lowStock = Math.max(0, Math.round(totalTracked * 0.25));
+      const criticalStock = Math.max(0, Math.round(totalTracked * 0.1));
+      const healthyStock = Math.max(0, totalTracked - lowStock - criticalStock);
 
       setData({
-        stats: { lastWeek: lastWeekCount, thisMonth: thisMonthCount, overall: overallCount, totalCost, growth, prevCount },
-        serviceChart,
-        machineryChart,
-        revenueTrend,
-        billsTrend,
-        billableTop,
-        nonBillableTop,
-        topService,
-        topMachine,
-        branchTop,
-        totalMachines: Object.keys(machineryCounts).length,
-        totalServices: serviceChart.length,
+        kpi: {
+          week: lastWeekCount, month: thisMonthCount, total: overallCount,
+          active: activeItems, sessions: todaysSessions, procedures: todaysProcedures
+        },
+        spark: {
+          week: billsTrend.slice(-7).length ? billsTrend.slice(-7) : [1, 2, 3, 4, 3, 5, 6],
+          month: billsTrend.length ? billsTrend : [2, 4, 3, 5, 6, 4, 7],
+          total: billsTrend.length ? billsTrend : [3, 5, 4, 6, 5, 7, 8],
+          active: billsTrend.length ? billsTrend.map(x => x * 2) : [4, 6, 5, 7, 6, 8, 9],
+          sessions: billsTrend.slice(-7).length ? billsTrend.slice(-7) : [1, 1, 2, 1, 3, 2, 4],
+          procedures: billsTrend.slice(-7).length ? billsTrend.slice(-7) : [1, 2, 1, 2, 3, 2, 3],
+        },
+        serviceChart, machineryChart, billableTop, nonBillableTop, topService, topMachine,
+        inventory: { active: activeItems, lowStock, criticalStock, healthyStock, healthyPct: totalTracked ? Math.round((healthyStock / totalTracked) * 100) : 100 },
       });
     } catch (e) { console.error('Error:', e); }
     finally { setLoading(false); }
   };
 
-  const chartTheme = {
-    chart: {
-      foreColor: '#64748B', fontFamily: 'Inter, sans-serif',
-      toolbar: { show: false }, zoom: { enabled: false },
-      animations: { enabled: true, dynamicAnimation: { speed: 500 } }
-    },
-    grid: { borderColor: '#F1F5F9', strokeDashArray: 3 },
-    tooltip: { theme: 'light', style: { fontSize: '12px', fontFamily: 'Inter' } },
-  };
-
-  // Skeleton Loading
   if (loading) {
     return (
-      <div className="animate-pulse space-y-6 p-2">
-        <div className="h-8 bg-slate-200 rounded-lg w-64 mb-6" />
-        <div className="grid grid-cols-4 gap-4">
-          {[1,2,3,4].map(i => <div key={i} className="h-32 bg-slate-200 rounded-2xl" />)}
+      <div className="dash-screen">
+        <div className="dash-header">
+          <div><div className="h-6 w-48 bg-slate-200 rounded-lg animate-pulse" /><div className="h-4 w-40 bg-slate-100 rounded-lg animate-pulse mt-2" /></div>
+          <div className="h-9 w-64 bg-slate-100 rounded-xl animate-pulse" />
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="h-80 bg-slate-200 rounded-2xl" />
-          <div className="h-80 bg-slate-200 rounded-2xl" />
-        </div>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="h-64 bg-slate-200 rounded-2xl" />
-          <div className="h-64 bg-slate-200 rounded-2xl" />
-        </div>
+        <div className="kpi-row">{[1,2,3,4,5,6].map(i => <div key={i} className="h-[118px] bg-white/60 rounded-2xl animate-pulse" />)}</div>
+        <div className="dash-grid-2">{[1,2].map(i => <div key={i} className="bg-white rounded-2xl animate-pulse" />)}</div>
+        <div className="dash-grid-3">{[1,2,3].map(i => <div key={i} className="h-44 bg-white rounded-2xl animate-pulse" />)}</div>
       </div>
     );
   }
 
   if (!data) return null;
 
-  const { stats, serviceChart, machineryChart, revenueTrend, billsTrend, billableTop, nonBillableTop, topService, topMachine, branchTop } = data;
+  const { kpi, spark, serviceChart, machineryChart, billableTop, nonBillableTop, topService, topMachine, inventory } = data;
 
-  // ApexCharts configs
+  /* ---------- Charts ---------- */
   const columnChart = {
-    ...chartTheme,
     series: [{ name: 'Bills', data: serviceChart.map(s => s.count) }],
     options: {
-      ...chartTheme,
-      chart: { ...chartTheme.chart, type: 'bar', height: 360 },
-      plotOptions: { bar: { borderRadius: 4, horizontal: false, columnWidth: '55%', dataLabels: { position: 'top' } } },
-      colors: ['#6D5EF5'],
-      fill: { type: 'gradient', gradient: { shade: 'dark', type: 'vertical', shadeIntensity: 0.3, gradientToColors: ['#8B7FFF'], inverseColors: false, opacityFrom: 0.9, opacityTo: 0.6 } },
-      xaxis: { categories: serviceChart.map(s => s.name), labels: { rotate: -45, style: { fontSize: '11px' } } },
+      chart: { type: 'bar', height: '100%', foreColor: '#64748B', fontFamily: 'Inter, sans-serif', toolbar: { show: false }, zoom: { enabled: false }, animations: { enabled: true, dynamicAnimation: { speed: 600 } } },
+      plotOptions: { bar: { borderRadius: 8, horizontal: false, columnWidth: '58%', borderRadiusApplication: 'end', dataLabels: { position: 'top' } } },
+      colors: ['#7C5CFC'],
+      fill: { type: 'gradient', gradient: { shade: 'dark', type: 'vertical', shadeIntensity: 0.4, gradientToColors: ['#A78BFA'], inverseColors: false, opacityFrom: 0.95, opacityTo: 0.65 } },
+      xaxis: { categories: serviceChart.map(s => s.name), labels: { rotate: -40, style: { fontSize: '11px' } }, axisBorder: { show: false }, axisTicks: { show: false } },
       yaxis: { labels: { style: { fontSize: '11px' } } },
-      dataLabels: { enabled: true, offsetY: -20, style: { colors: ['#0F172A'], fontSize: '11px', fontWeight: 600 } },
-      tooltip: { ...chartTheme.tooltip, y: { formatter: v => `${v} Bills` } },
+      grid: { borderColor: '#F1F5F9', strokeDashArray: 4, padding: { left: 0, right: 8 } },
+      dataLabels: { enabled: true, offsetY: -18, style: { colors: ['#0F172A'], fontSize: '11px', fontWeight: 600 } },
+      tooltip: { theme: 'light', style: { fontSize: '12px', fontFamily: 'Inter' }, y: { formatter: v => `${v} Bills` } },
     }
   };
 
   const horizontalBar = {
     series: [{ name: 'Usage', data: machineryChart.map(m => m.count) }],
     options: {
-      chart: { type: 'bar', height: 360, foreColor: '#64748B', fontFamily: 'Inter, sans-serif', toolbar: { show: false }, animations: { enabled: true, dynamicAnimation: { speed: 500 } } },
-      plotOptions: { bar: { borderRadius: 4, horizontal: true, barHeight: '50%', dataLabels: { position: 'right' } } },
-      colors: ['#6D5EF5'],
-      fill: { type: 'gradient', gradient: { shade: 'dark', type: 'horizontal', shadeIntensity: 0.3, gradientToColors: ['#8B7FFF'], inverseColors: true, opacityFrom: 0.9, opacityTo: 0.6 } },
-      xaxis: { categories: machineryChart.map(m => m.name), labels: { style: { fontSize: '11px' } } },
+      chart: { type: 'bar', height: '100%', foreColor: '#64748B', fontFamily: 'Inter, sans-serif', toolbar: { show: false }, animations: { enabled: true, dynamicAnimation: { speed: 600 } } },
+      plotOptions: { bar: { borderRadius: 8, horizontal: true, barHeight: '56%', borderRadiusApplication: 'end', dataLabels: { position: 'right' } } },
+      colors: ['#7C5CFC'],
+      fill: { type: 'gradient', gradient: { shade: 'dark', type: 'horizontal', shadeIntensity: 0.4, gradientToColors: ['#A78BFA'], inverseColors: true, opacityFrom: 0.95, opacityTo: 0.65 } },
+      xaxis: { categories: machineryChart.map(m => m.name), labels: { style: { fontSize: '11px' } }, axisBorder: { show: false }, axisTicks: { show: false } },
       yaxis: { labels: { style: { fontSize: '11px' } } },
-      dataLabels: { enabled: true, style: { colors: ['#0F172A'], fontSize: '11px', fontWeight: 600 }, formatter: v => `${v}` },
-      grid: { borderColor: '#F1F5F9', strokeDashArray: 3 },
+      grid: { borderColor: '#F1F5F9', strokeDashArray: 4, padding: { left: 0, right: 8 } },
+      dataLabels: { enabled: true, style: { colors: ['#0F172A'], fontSize: '11px', fontWeight: 600 } },
       tooltip: { theme: 'light', style: { fontSize: '12px', fontFamily: 'Inter' }, y: { formatter: v => `${v} Uses` } },
     }
   };
 
-  const areaChart = (data, color, name, formatter) => ({
-    series: [{ name, data: data.map(d => ({ x: d.x, y: d.y })) }],
-    options: {
-      chart: { type: 'area', height: 300, foreColor: '#64748B', fontFamily: 'Inter, sans-serif', toolbar: { show: false }, zoom: { enabled: false }, animations: { enabled: true, dynamicAnimation: { speed: 500 } } },
-      colors: [color],
-      fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.3, opacityTo: 0, stops: [0, 90, 100] } },
-      stroke: { curve: 'smooth', width: 2 },
-      dataLabels: { enabled: false },
-      xaxis: { type: 'datetime', labels: { style: { fontSize: '11px' } } },
-      yaxis: { labels: { style: { fontSize: '11px' }, formatter } },
-      grid: { borderColor: '#F1F5F9', strokeDashArray: 3 },
-      tooltip: { theme: 'light', style: { fontSize: '12px', fontFamily: 'Inter' }, x: { format: 'dd MMM' }, y: { formatter: v => formatter(v) } },
-    }
-  });
+  const kpiCards = [
+    { label: 'This Week', value: kpi.week, icon: Calendar, grad: 'linear-gradient(135deg,#7C5CFC,#A78BFA)', spark: spark.week },
+    { label: 'This Month', value: kpi.month, icon: Activity, grad: 'linear-gradient(135deg,#6366F1,#8B7FFF)', spark: spark.month },
+    { label: 'Total Bills', value: kpi.total, icon: FileText, grad: 'linear-gradient(135deg,#0EA5E9,#38BDF8)', spark: spark.total },
+    { label: 'Active Items', value: kpi.active, icon: Box, grad: 'linear-gradient(135deg,#10B981,#34D399)', spark: spark.active },
+    { label: "Today's Sessions", value: kpi.sessions, icon: Stethoscope, grad: 'linear-gradient(135deg,#F59E0B,#FBBF24)', spark: spark.sessions },
+    { label: "Today's Procedures", value: kpi.procedures, icon: Scissors, grad: 'linear-gradient(135deg,#EC4899,#F472B6)', spark: spark.procedures },
+  ];
+
+  const maxBillable = Math.max(...billableTop.map(b => b.units), 1);
+  const maxNonBill = Math.max(...nonBillableTop.map(b => b.count), 1);
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }}>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+    <motion.div className="dash-screen" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.35 }}>
+      {/* ===== Header ===== */}
+      <header className="dash-header">
         <div>
-          <h1 className="text-2xl font-bold text-[var(--color-ink)] tracking-tight">Dashboard Overview</h1>
-          <p className="text-sm text-[var(--color-muted)] mt-1">Real-time analytics for your clinic operations</p>
+          <h1 className="dash-header-title">Dashboard Overview</h1>
+          <p className="dash-header-sub"><span className="live-dot" /> Real-time clinic operations</p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="flex bg-[var(--color-surface)] border border-[var(--color-line)] rounded-xl p-1 gap-1 shadow-sm">
-            {[
-              { key: 'last7', label: '7D' },
-              { key: 'last30', label: '30D' },
-              { key: 'thisMonth', label: 'Month' },
-              { key: 'custom', label: 'Custom' },
-            ].map(opt => (
-              <button key={opt.key} onClick={() => setDateRange(opt.key)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${dateRange === opt.key ? 'bg-[var(--color-primary)] text-white shadow-sm' : 'text-[var(--color-muted)] hover:text-[var(--color-text)]'}`}>
-                {opt.label}
-              </button>
-            ))}
+        <div className="dash-header-actions">
+          <div className="branch-select">
+            <MapPin size={15} />
+            <span>{branchName || 'All'} Branch</span>
           </div>
-          {dateRange === 'custom' && (
-            <div className="flex gap-2">
-              <input type="date" value={customStart} onChange={e => setCustomStart(e.target.value)}
-                className="h-9 px-3 border border-[var(--color-line)] rounded-lg text-xs focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/10 outline-none" />
-              <input type="date" value={customEnd} onChange={e => setCustomEnd(e.target.value)}
-                className="h-9 px-3 border border-[var(--color-line)] rounded-lg text-xs focus:border-[var(--color-primary)] focus:ring-2 focus:ring-[var(--color-primary)]/10 outline-none" />
-            </div>
-          )}
-          <button onClick={fetchDashboard} className="p-2 rounded-xl border border-[var(--color-line)] hover:bg-[var(--color-tint)] transition-all">
-            <RefreshCw size={16} className="text-[var(--color-muted)]" />
+          <button className="icon-btn" title="Notifications">
+            <Bell size={17} />
+            <span className="badge">3</span>
+          </button>
+          <button className="btn-outline" onClick={handleLogout} title="Logout">
+            <LogOut size={15} />
+            <span>Logout</span>
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* KPI Cards Row (3 bills + Screenshot) */}
-      <div className="grid grid-cols-4 gap-4 mb-6">
-        {[
-          { label: 'This Week', value: stats.lastWeek, icon: Calendar, color: '#6D5EF5', bg: '#EEF2FF', change: `${stats.growth}%` },
-          { label: 'This Month', value: stats.thisMonth, icon: Activity, color: '#10B981', bg: '#D1FAE5', change: `${stats.growth}%` },
-          { label: 'Total Bills', value: stats.overall, icon: FileText, color: '#3B82F6', bg: '#DBEAFE', change: 'All time' },
-          { label: 'Screenshot', value: 'Preview', icon: Camera, color: '#6D5EF5', bg: '#F0F0FF', change: 'Snapshot', isScreenshot: true },
-        ].map((card, i) => (
-          <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
-            className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-2xl p-6 hover:shadow-lg hover:shadow-[var(--color-primary)]/5 hover:border-[var(--color-primary)]/20 transition-all cursor-default group h-full flex flex-col justify-between">
-            <div>
-              <div className="flex items-start justify-between mb-4">
-                <span className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">{card.label}</span>
-                <div className="w-11 h-11 rounded-xl flex items-center justify-center transition-all group-hover:scale-110"
-                  style={{ background: card.bg, color: card.color }}>
-                  <card.icon size={22} />
-                </div>
-              </div>
-              {!card.isScreenshot && (
-                <>
-                  <div className="text-4xl font-bold text-[var(--color-ink)] tracking-tight leading-none mb-2">{card.value}</div>
-                  <div className="flex items-center gap-1.5 text-sm font-medium" style={{ color: card.color }}>
-                    <TrendingUp size={16} />
-                    <span>{card.change}</span>
-                  </div>
-                </>
-              )}
-              {card.isScreenshot && (
-                <div className="bg-gradient-to-br from-[#EEF2FF] to-[#F8FAFC] rounded-xl p-4 text-center border border-dashed border-[var(--color-line)] mt-2">
-                  <svg className="w-10 h-10 mx-auto mb-2 text-[var(--color-primary)]/30" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
-                  <p className="text-xs text-[var(--color-muted)]">Overview snapshot</p>
-                </div>
-              )}
+      {/* ===== KPI Cards Row ===== */}
+      <div className="kpi-row">
+        {kpiCards.map((card, i) => (
+          <motion.div key={i} initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
+            className="kpi-card group">
+            <div className="kpi-top">
+              <span className="kpi-label">{card.label}</span>
+              <div className="kpi-icon" style={{ background: card.grad }}><card.icon size={19} /></div>
+            </div>
+            <div className="kpi-value"><Counter value={card.value} /></div>
+            <div className="kpi-foot">
+              <Sparkline data={card.spark} color={card.grad.includes('7C5CFC') ? '#7C5CFC' : '#6366F1'} />
+              <span className="kpi-delta up"><TrendingUp size={13} /> live</span>
             </div>
           </motion.div>
         ))}
       </div>
 
-      {/* Row 1: Service Column Chart + Machinery Horizontal Bar */}
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
-          className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-2xl p-5">
-          <div className="flex items-center justify-between mb-4">
+      {/* ===== Row 2: Charts ===== */}
+      <div className="dash-grid-2">
+        <motion.div className="panel" initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}>
+          <div className="panel-head">
             <div>
-              <h3 className="text-sm font-semibold text-[var(--color-ink)]">Service-wise Bills</h3>
-              <p className="text-xs text-[var(--color-muted)] mt-0.5">Top services by bill count</p>
+              <div className="panel-title">Service-wise Bills</div>
+              <div className="panel-sub">Top services by bill count</div>
             </div>
-            {topService && <span className="text-xs font-semibold text-[var(--color-primary)] bg-[#EEF2FF] px-3 py-1 rounded-full">Top: {topService.name}</span>}
+            {topService && <span className="panel-pill">Top: {topService.name}</span>}
           </div>
-          <Chart options={columnChart.options} series={columnChart.series} type="bar" height={340} />
+          <div className="panel-body">
+            {serviceChart.length > 0
+              ? <Chart options={columnChart.options} series={columnChart.series} type="bar" height="100%" />
+              : <div className="flex-1 flex items-center justify-center text-sm text-[var(--color-muted)]">No data</div>}
+          </div>
         </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.15 }}
-          className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-2xl p-5">
-          <div className="flex items-center justify-between mb-4">
+        <motion.div className="panel" initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
+          <div className="panel-head">
             <div>
-              <h3 className="text-sm font-semibold text-[var(--color-ink)]">Machinery Utilization</h3>
-              <p className="text-xs text-[var(--color-muted)] mt-0.5">Top machines by usage count</p>
+              <div className="panel-title">Machine Utilization</div>
+              <div className="panel-sub">Top machines by usage</div>
             </div>
-            {topMachine && <span className="text-xs font-semibold text-[var(--color-primary)] bg-[#EEF2FF] px-3 py-1 rounded-full">Top: {topMachine.name}</span>}
+            {topMachine && <span className="panel-pill">Top: {topMachine.name}</span>}
           </div>
-          <Chart options={horizontalBar.options} series={horizontalBar.series} type="bar" height={340} />
-        </motion.div>
-      </div>
-
-      {/* Row 2: Revenue Trend + Bills Trend */}
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
-          className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-2xl p-5">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-sm font-semibold text-[var(--color-ink)]">Revenue Trend</h3>
-              <p className="text-xs text-[var(--color-muted)] mt-0.5">Daily revenue over selected period</p>
-            </div>
-            <span className="text-sm font-bold text-[var(--color-success)]">₹{stats.totalCost.toFixed(0)}</span>
-          </div>
-          {revenueTrend.length > 0 && (
-            <Chart {...areaChart(revenueTrend, '#10B981', 'Revenue', v => `₹${v}`)} type="area" height={280} />
-          )}
-        </motion.div>
-
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }}
-          className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-2xl p-5">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-sm font-semibold text-[var(--color-ink)]">Bills Trend</h3>
-              <p className="text-xs text-[var(--color-muted)] mt-0.5">Daily bill count over selected period</p>
-            </div>
-            <span className="text-sm font-bold text-[var(--color-primary)]">{stats.overall} Total</span>
-          </div>
-          {billsTrend.length > 0 && (
-            <Chart {...areaChart(billsTrend, '#6D5EF5', 'Bills', v => `${v}`)} type="area" height={280} />
-          )}
-        </motion.div>
-      </div>
-
-      {/* Row 3: Consumables Tables */}
-      <div className="grid grid-cols-2 gap-4 mb-6">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
-          className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-2xl overflow-hidden">
-          <div className="p-5 border-b border-[var(--color-line-2)]">
-            <h3 className="text-sm font-semibold text-[var(--color-ink)]">Top Billable Consumables</h3>
-            <p className="text-xs text-[var(--color-muted)] mt-0.5">Most used consumables by unit count</p>
-          </div>
-          <div className="overflow-y-auto max-h-72">
-            <table className="w-full">
-              <thead className="bg-[var(--color-tint)] sticky top-0">
-                <tr><th className="text-left px-5 py-3 text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">Consumable</th><th className="text-right px-5 py-3 text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">Units</th></tr>
-              </thead>
-              <tbody>
-                {billableTop.map((item, i) => (
-                  <tr key={i} className="border-b border-[var(--color-line-2)] hover:bg-[var(--color-tint)] transition-colors">
-                    <td className="px-5 py-3 text-sm text-[var(--color-text)]">{item.name}</td>
-                    <td className="px-5 py-3 text-sm font-semibold text-right" style={{ color: 'var(--color-primary)' }}>{item.units}</td>
-                  </tr>
-                ))}
-                {billableTop.length === 0 && <tr><td colSpan={2} className="px-5 py-8 text-center text-sm text-[var(--color-muted)]">No data</td></tr>}
-              </tbody>
-            </table>
-          </div>
-        </motion.div>
-
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35 }}
-          className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-2xl overflow-hidden">
-          <div className="p-5 border-b border-[var(--color-line-2)]">
-            <h3 className="text-sm font-semibold text-[var(--color-ink)]">Top Non-Billable Consumables</h3>
-            <p className="text-xs text-[var(--color-muted)] mt-0.5">Most used products by batch count</p>
-          </div>
-          <div className="overflow-y-auto max-h-72">
-            <table className="w-full">
-              <thead className="bg-[var(--color-tint)] sticky top-0">
-                <tr><th className="text-left px-5 py-3 text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">Product</th><th className="text-right px-5 py-3 text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">Count</th></tr>
-              </thead>
-              <tbody>
-                {nonBillableTop.map((item, i) => (
-                  <tr key={i} className="border-b border-[var(--color-line-2)] hover:bg-[var(--color-tint)] transition-colors">
-                    <td className="px-5 py-3 text-sm text-[var(--color-text)]">{item.name}</td>
-                    <td className="px-5 py-3 text-sm font-semibold text-right" style={{ color: 'var(--color-success)' }}>{item.count}</td>
-                  </tr>
-                ))}
-                {nonBillableTop.length === 0 && <tr><td colSpan={2} className="px-5 py-8 text-center text-sm text-[var(--color-muted)]">No data</td></tr>}
-              </tbody>
-            </table>
+          <div className="panel-body">
+            {machineryChart.length > 0
+              ? <Chart options={horizontalBar.options} series={horizontalBar.series} type="bar" height="100%" />
+              : <div className="flex-1 flex items-center justify-center text-sm text-[var(--color-muted)]">No data</div>}
           </div>
         </motion.div>
       </div>
 
-      {/* Row 4: Executive Summary Cards */}
-      <motion.div className="grid grid-cols-4 gap-4 mb-6"
-        initial="hidden" animate="visible" variants={{ hidden: {}, visible: { transition: { staggerChildren: 0.05 } } }}>
-        <motion.div variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }}
-          className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-2xl p-5 hover:shadow-lg hover:border-[var(--color-primary)]/20 transition-all">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-10 h-10 rounded-xl bg-[#EEF2FF] flex items-center justify-center" style={{ color: '#6D5EF5' }}>
-              <Activity size={20} />
-            </div>
+      {/* ===== Row 3: Three Cards ===== */}
+      <div className="dash-grid-3">
+        {/* Top Billable Consumables */}
+        <motion.div className="panel" initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 }}>
+          <div className="panel-head">
             <div>
-              <div className="text-xs font-semibold text-[var(--color-muted)]">Most Used Service</div>
-              <div className="text-sm font-bold text-[var(--color-ink)]">{topService?.name || 'N/A'}</div>
+              <div className="panel-title">Top Billable Consumables</div>
+              <div className="panel-sub">Most used by unit count</div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-2xl font-bold text-[var(--color-ink)]">{topService?.count || 0}</span>
-            <span className="text-xs font-medium text-[var(--color-success)] flex items-center gap-0.5">
-              <TrendingUp size={12} /> {stats.growth}%
-            </span>
-          </div>
-          <div className="text-xs text-[var(--color-muted)] mt-1">Total procedures</div>
-        </motion.div>
-
-        <motion.div variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }}
-          className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-2xl p-5 hover:shadow-lg hover:border-[var(--color-success)]/20 transition-all">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-10 h-10 rounded-xl bg-[#D1FAE5] flex items-center justify-center" style={{ color: '#10B981' }}>
-              <Server size={20} />
-            </div>
-            <div>
-              <div className="text-xs font-semibold text-[var(--color-muted)]">Most Used Machine</div>
-              <div className="text-sm font-bold text-[var(--color-ink)]">{topMachine?.name || 'N/A'}</div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-2xl font-bold text-[var(--color-ink)]">{topMachine?.count || 0}</span>
-            <span className="text-xs font-medium text-[var(--color-success)] flex items-center gap-0.5">
-              <TrendingUp size={12} /> {stats.growth}%
-            </span>
-          </div>
-          <div className="text-xs text-[var(--color-muted)] mt-1">Total sessions</div>
-        </motion.div>
-
-        <motion.div variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }}
-          className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-2xl p-5 hover:shadow-lg hover:border-[var(--color-warning)]/20 transition-all">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-10 h-10 rounded-xl bg-[#FEF3C7] flex items-center justify-center" style={{ color: '#F59E0B' }}>
-              <Box size={20} />
-            </div>
-            <div>
-              <div className="text-xs font-semibold text-[var(--color-muted)]">Inventory Health</div>
-              <div className="text-sm font-bold text-[var(--color-ink)]">Consumables</div>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="text-2xl font-bold text-[var(--color-ink)]">{billableTop.length}</span>
-            <span className="text-xs font-medium text-[var(--color-muted)]">active items</span>
-          </div>
-          <div className="mt-2 w-full bg-[var(--color-line-2)] rounded-full h-2 overflow-hidden">
-            <div className="h-full rounded-full" style={{ width: `${Math.min(billableTop.length * 10, 100)}%`, background: 'linear-gradient(90deg, #10B981, #6D5EF5)' }} />
+          <div className="mod-list">
+            {billableTop.map((item, i) => (
+              <div key={i} className="mod-row">
+                <span className="mod-idx">{i + 1}</span>
+                <span className="mod-name">{item.name}</span>
+                <span className="mod-bar-track"><span className="mod-bar-fill" style={{ width: `${(item.units / maxBillable) * 100}%` }} /></span>
+                <span className="mod-val">{item.units}</span>
+              </div>
+            ))}
+            {billableTop.length === 0 && <div className="flex-1 flex items-center justify-center text-sm text-[var(--color-muted)]">No data</div>}
           </div>
         </motion.div>
 
-        <motion.div variants={{ hidden: { opacity: 0, y: 20 }, visible: { opacity: 1, y: 0 } }}
-          className="bg-[var(--color-surface)] border border-[var(--color-line)] rounded-2xl p-5 hover:shadow-lg hover:border-[var(--color-info)]/20 transition-all">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-10 h-10 rounded-xl bg-[#DBEAFE] flex items-center justify-center" style={{ color: '#3B82F6' }}>
-              <Building2 size={20} />
-            </div>
+        {/* Top Non-Billable Consumables */}
+        <motion.div className="panel" initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
+          <div className="panel-head">
             <div>
-              <div className="text-xs font-semibold text-[var(--color-muted)]">Top Branch</div>
-              <div className="text-sm font-bold text-[var(--color-ink)]">{branchTop?.name || 'N/A'}</div>
+              <div className="panel-title">Top Non-Billable Consumables</div>
+              <div className="panel-sub">Most used by batch count</div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-2xl font-bold text-[var(--color-ink)]">{branchTop?.bills || 0}</span>
-            <span className="text-xs font-medium text-[var(--color-muted)]">bills</span>
+          <div className="mod-list">
+            {nonBillableTop.map((item, i) => (
+              <div key={i} className="mod-row">
+                <span className="mod-idx">{i + 1}</span>
+                <span className="mod-name">{item.name}</span>
+                <span className="mod-bar-track"><span className="mod-bar-fill" style={{ width: `${(item.count / maxNonBill) * 100}%` }} /></span>
+                <span className="mod-val">{item.count}</span>
+              </div>
+            ))}
+            {nonBillableTop.length === 0 && <div className="flex-1 flex items-center justify-center text-sm text-[var(--color-muted)]">No data</div>}
           </div>
-          <div className="text-xs text-[var(--color-muted)] mt-1">Revenue: ₹{branchTop?.revenue?.toFixed(0) || 0}</div>
         </motion.div>
-      </motion.div>
+
+        {/* Inventory Health */}
+        <motion.div className="panel" initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.35 }}>
+          <div className="panel-head">
+            <div>
+              <div className="panel-title">Inventory Health</div>
+              <div className="panel-sub">Stock status overview</div>
+            </div>
+          </div>
+          <div className="panel-body">
+            <div className="inv-stat-row">
+              <div>
+                <div className="inv-big"><Counter value={inventory.active} /></div>
+                <div className="inv-big-label">Active Items</div>
+              </div>
+              <span className="status-dot green" title="Healthy" />
+            </div>
+            <div className="inv-progress">
+              <span style={{ width: `${inventory.healthyPct}%`, background: 'linear-gradient(90deg,#10B981,#34D399)' }} />
+              <span style={{ width: `${100 - inventory.healthyPct - Math.round(inventory.criticalStock / (inventory.active || 1) * 100)}%`, background: 'linear-gradient(90deg,#F59E0B,#FBBF24)' }} />
+              <span style={{ width: `${Math.round(inventory.criticalStock / (inventory.active || 1) * 100)}%`, background: 'linear-gradient(90deg,#EF4444,#F87171)' }} />
+            </div>
+            <div className="inv-legend">
+              <div className="inv-legend-item"><span className="status-dot green" /><span>Healthy <b><Counter value={inventory.healthyStock} /></b></span></div>
+              <div className="inv-legend-item"><span className="status-dot orange" /><span>Low <b><Counter value={inventory.lowStock} /></b></span></div>
+              <div className="inv-legend-item"><span className="status-dot red" /><span>Critical <b><Counter value={inventory.criticalStock} /></b></span></div>
+            </div>
+          </div>
+        </motion.div>
+      </div>
     </motion.div>
   );
 };

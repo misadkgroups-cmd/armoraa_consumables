@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import Overview from './Overview';
 import Customization from './Customization';
 import NonBillableConsumables from './NonBillableConsumables';
@@ -35,13 +34,12 @@ const navSections = [
 ];
 
 const NavIcon = ({ path }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className="w-[18px] h-[18px]">
     <path d={path} />
   </svg>
 );
 
-const Dashboard = ({ currentPage = 'overview', onNavigate, onLogout }) => {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+const Dashboard = ({ currentPage = 'overview', onNavigate }) => {
   const { branchName } = useBranch();
 
   const renderPage = () => {
@@ -55,27 +53,19 @@ const Dashboard = ({ currentPage = 'overview', onNavigate, onLogout }) => {
     }
   };
 
-  const getPageLabel = () => {
-    for (const section of navSections) {
-      const found = section.items.find(i => i.id === currentPage);
-      if (found) return found.label;
-    }
-    return 'Dashboard';
-  };
-
   return (
     <div className="app-container">
-      {/* Premium Sidebar */}
-      <aside className="sidebar" style={{ width: sidebarCollapsed ? '72px' : '240px' }}>
+      {/* Premium Glass Sidebar */}
+      <aside className="sidebar">
         <div className="sidebar-header">
           <div className="sidebar-logo">A</div>
-          {!sidebarCollapsed && <span className="sidebar-brand">ARMORAA</span>}
+          <span className="sidebar-brand">ARMORAA</span>
         </div>
-        
+
         <nav className="sidebar-nav">
           {navSections.map((section) => (
             <div key={section.group}>
-              {!sidebarCollapsed && <div className="sidebar-group">{section.group}</div>}
+              <div className="sidebar-group">{section.group}</div>
               {section.items.map((item) => {
                 const isActive = currentPage === item.id;
                 return (
@@ -83,17 +73,12 @@ const Dashboard = ({ currentPage = 'overview', onNavigate, onLogout }) => {
                     key={item.id}
                     onClick={() => onNavigate(item.id)}
                     className={`sidebar-item ${isActive ? 'active' : ''}`}
-                    title={sidebarCollapsed ? item.label : undefined}
+                    title={item.label}
                   >
                     <span className="sidebar-icon">
                       <NavIcon path={item.icon} />
                     </span>
-                    {!sidebarCollapsed && (
-                      <>
-                        <span className="flex-1">{item.label}</span>
-                        {item.badge && <span className="sidebar-pill">{item.badge}</span>}
-                      </>
-                    )}
+                    <span className="flex-1">{item.label}</span>
                   </div>
                 );
               })}
@@ -103,60 +88,16 @@ const Dashboard = ({ currentPage = 'overview', onNavigate, onLogout }) => {
 
         <div className="sidebar-footer">
           <div className="sidebar-footer-avatar">AD</div>
-          {!sidebarCollapsed && (
-            <div className="sidebar-footer-info">
-              <div className="sidebar-footer-name">Admin</div>
-              <div className="sidebar-footer-role">{branchName}</div>
-            </div>
-          )}
+          <div className="sidebar-footer-info">
+            <div className="sidebar-footer-name">Admin</div>
+            <div className="sidebar-footer-role">{branchName}</div>
+          </div>
         </div>
       </aside>
 
       {/* Main Area */}
       <div className="main-container">
-        {/* Premium Top Navbar */}
-        <div className="topnav">
-          <button
-            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-            className="topnav-btn"
-            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4">
-              <line x1="3" y1="12" x2="21" y2="12" />
-              <line x1="3" y1="6" x2="21" y2="6" />
-              <line x1="3" y1="18" x2="21" y2="18" />
-            </svg>
-          </button>
-
-          <div style={{ fontWeight: 600, fontSize: '14px', color: 'var(--color-ink)' }}>
-            {getPageLabel()}
-          </div>
-
-          <div className="topnav-search">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <input type="text" placeholder="Search anything..." />
-          </div>
-
-          <div className="topnav-branch">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-3.5 h-3.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/><circle cx="12" cy="10" r="3"/></svg>
-            <span>{branchName} Branch</span>
-          </div>
-
-          <div className="topnav-actions">
-            <button className="topnav-btn" title="Notifications">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>
-              <span className="badge">3</span>
-            </button>
-          </div>
-
-          <div className="topnav-user" onClick={onLogout} title="Logout">
-            <div className="topnav-user-avatar">AD</div>
-            <span className="topnav-user-name">Admin</span>
-          </div>
-        </div>
-
-        {/* Content Area */}
-        <div className="content-area">
+        <div className="content-area" style={{ padding: 0 }}>
           {renderPage()}
         </div>
       </div>

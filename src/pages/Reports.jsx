@@ -126,12 +126,12 @@ const Reports = () => {
           const nonBillableUsed = [];
           let totalUnits = 0;
           let totalCost = 0;
-          
+
           for (let i = 1; i <= 14; i++) {
             const consumableId = row[`consumable_${i}_id`];
             const units = row[`consumable_${i}_units`];
             const batchId = row[`consumable_${i}_batch_id`];
-            
+
             if (consumableId && !batchId) {
               const itemData = consumableMap[consumableId] || { name: '-', cost: 0 };
               const name = typeof itemData === 'string' ? itemData : itemData.name;
@@ -140,7 +140,7 @@ const Reports = () => {
               if (units) totalUnits += Number(units);
               totalCost += Number(units || 0) * Number(cost);
             }
-            
+
             if (batchId && bulkItems) {
               const bulkItem = bulkItems.find(b => b.batch_id === batchId);
               if (bulkItem && !nonBillableUsed.find(n => n.batch_id === batchId)) {
@@ -160,6 +160,7 @@ const Reports = () => {
             consumableCount: consumables.length,
             consumables,
             nonBillableUsed,
+            nonBillableCount: nonBillableUsed.length,
             totalUnits,
             totalCost
           };
@@ -250,7 +251,7 @@ const Reports = () => {
         return values;
       });
     }
-    const csvRows = [headers.join(','), ...rows.map(r => r.join(','))];
+    const csvRows = [headers.join(','), ...rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))];
     const csv = csvRows.join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = window.URL.createObjectURL(blob);
@@ -260,6 +261,9 @@ const Reports = () => {
     a.click();
     window.URL.revokeObjectURL(url);
   };
+
+  const [toast, setToast] = useState(null);
+  const showToast = (type, message) => { setToast({ type, message }); setTimeout(() => setToast(null), 3500); };
 
   const [editingBill, setEditingBill] = useState(null);
   const [editRows, setEditRows] = useState([]);
@@ -271,16 +275,43 @@ const Reports = () => {
         setEditingBill(data);
         const rows = [];
         for (let i = 1; i <= 14; i++) {
-          if (data[`consumable_${i}_id`]) rows.push({ id: Date.now() + i, consumableId: data[`consumable_${i}_id`], units: data[`consumable_${i}_units`] || '', batchId: data[`consumable_${i}_batch_id`] || '' });
+          if (data[`consumable_${i}_id`] || data[`consumable_${i}_batch_id`]) {
+            rows.push({ id: Date.now() + i, consumableId: data[`consumable_${i}_id`] || '', units: data[`consumable_${i}_units`] || '', batchId: data[`consumable_${i}_batch_id`] || '' });
+          }
         }
+        if (rows.length === 0) rows.push({ id: Date.now(), consumableId: '', units: '', batchId: '' });
         setEditRows(rows);
       }
     } catch (error) { console.error('Error fetching bill for edit:', error); }
   };
 
-  const updateBill = async () => {
+  const logAudit = async (previous, updated, changedFields) => {
     try {
-      const updatePayload = { bill_id: editingBill.bill_id, uid: editingBill.uid, service_id: editingBill.service_id, machinery_id: editingBill.machinery_id, report_date: editingBill.report_date };
+      await supabase.from('report_audit_log').insert({
+        report_id: editingBill?.id,
+        bill_id: editingBill?.bill_id,
+        updated_by: editingBill?.updated_by || 'Admin',
+        updated_at: new Date().toISOString(),
+        previous_value: previous,
+        new_value: updated,
+        changed_fields: changedFields,
+      });
+    } catch (e) { console.warn('Audit log skipped (table may not exist):', e?.message || e); }
+  };
+
+  const updateBill = async () => {
+    if (!editingBill) return;
+    try {
+      const previous = {
+        bill_id: editingBill.bill_id, uid: editingBill.uid, report_date: editingBill.report_date,
+        service_id: editingBill.service_id, machinery_id: editingBill.machinery_id,
+      };
+      const updatePayload = {
+        bill_id: editingBill.bill_id, uid: editingBill.uid,
+        service_id: editingBill.service_id || null, machinery_id: editingBill.machinery_id || null,
+        report_date: editingBill.report_date,
+        updated_at: new Date().toISOString(),
+      };
       const maxSlots = Math.min(editRows.length, 14);
       for (let i = 0; i < maxSlots; i++) {
         const row = editRows[i];
@@ -289,13 +320,44 @@ const Reports = () => {
         updatePayload[`consumable_${i + 1}_batch_id`] = row.batchId || null;
       }
       for (let i = maxSlots; i < 14; i++) { updatePayload[`consumable_${i + 1}_id`] = null; updatePayload[`consumable_${i + 1}_units`] = null; updatePayload[`consumable_${i + 1}_batch_id`] = null; }
+
       const { error } = await supabase.from('billable_report').update(updatePayload).eq('id', editingBill.id);
-      if (!error) { setEditingBill(null); setEditRows([]); generateReport(); setToast({ type: 'success', message: 'Bill updated successfully' }); setTimeout(() => setToast(null), 3000); }
-      else { console.error('Update error:', error); }
-    } catch (error) { console.error('Error updating bill:', error); }
+      if (!error) {
+        await logAudit(previous, { ...updatePayload }, Object.keys(updatePayload));
+        setEditingBill(null); setEditRows([]);
+        showToast('success', 'Record updated successfully');
+        generateReport();
+      } else {
+        console.error('Update error:', error);
+        showToast('error', error.message || 'Failed to update record');
+      }
+    } catch (error) {
+      console.error('Error updating bill:', error);
+      showToast('error', error?.message || 'Failed to update record');
+    }
   };
 
-  const [toast, setToast] = useState(null);
+  const deleteBill = async (billId) => {
+    if (!window.confirm(`Delete bill ${billId}? This cannot be undone.`)) return;
+    try {
+      const { error } = await supabase.from('billable_report').delete().eq('bill_id', billId);
+      if (!error) {
+        showToast('success', 'Record deleted successfully');
+        generateReport();
+      } else {
+        console.error('Delete error:', error);
+        showToast('error', error.message || 'Failed to delete record');
+      }
+    } catch (error) {
+      console.error('Error deleting bill:', error);
+      showToast('error', error?.message || 'Failed to delete record');
+    }
+  };
+
+  const fmtDate = (d) => {
+    if (!d) return '-';
+    try { return format(new Date(d), 'dd MMM yyyy'); } catch { return d; }
+  };
 
   return (
     <div className="animate-fade-in">
@@ -381,12 +443,12 @@ const Reports = () => {
             </div>
           </div>
           <div className="overflow-x-auto">
-            <table>
+            <table className="rpt-table">
               <thead>
                 <tr>
                   {reportType === 'non-billable' ? (
                     <>
-                      <th>Product Name</th>
+                      <th className="rpt-c-branch">Product Name</th>
                       <th>Total Batches</th>
                       <th>Active</th>
                       <th>Completed</th>
@@ -394,27 +456,31 @@ const Reports = () => {
                     </>
                   ) : (
                     <>
-                      <th>Bill ID</th>
-                      <th>UID</th>
-                      <th>Date</th>
-                      <th>Branch</th>
-                      <th>Machinery</th>
-                      <th>Service</th>
-                      {reportType === 'billable' && (() => {
-                        let maxC = 0;
-                        reportData.forEach((r) => { if (r.consumableCount > maxC) maxC = r.consumableCount; });
+                      <th className="rpt-c-billid">Bill ID</th>
+                      <th className="rpt-c-uid">UID</th>
+                      <th className="rpt-c-date">Date</th>
+                      <th className="rpt-c-branch">Branch</th>
+                      <th className="rpt-c-machinery">Machinery</th>
+                      <th className="rpt-c-service">Service</th>
+                      {(() => {
+                        const maxC = reportData.reduce((m, r) => Math.max(m, r.consumableCount), 0);
+                        const maxN = reportData.reduce((m, r) => Math.max(m, r.nonBillableCount || 0), 0);
                         const cols = [];
                         for (let i = 1; i <= maxC; i++) {
-                          cols.push(<th key={`h-${i}`} style={{ background: '#EEF2FF' }}>CONSUMABLE - {i}</th>);
-                          cols.push(<th key={`hu-${i}`} style={{ background: '#EEF2FF' }}>UNITS - {i}</th>);
-                          cols.push(<th key={`hc-${i}`} style={{ background: '#EEF2FF' }}>COST - {i}</th>);
+                          cols.push(<th key={`h-${i}`} className="rpt-c-consumable" style={{ background: 'var(--color-tint-2)' }}>CONSUMABLE - {i}</th>);
+                          cols.push(<th key={`hu-${i}`} className="rpt-c-units" style={{ background: 'var(--color-tint-2)' }}>UNITS - {i}</th>);
+                          cols.push(<th key={`hc-${i}`} className="rpt-c-cost" style={{ background: 'var(--color-tint-2)' }}>COST - {i}</th>);
+                        }
+                        for (let i = 1; i <= maxN; i++) {
+                          cols.push(<th key={`nh-${i}`} className="rpt-c-nonbill" style={{ background: '#F0FDF4' }}>NON-BILLABLE - {i}</th>);
+                          cols.push(<th key={`nb-${i}`} className="rpt-c-units" style={{ background: '#F0FDF4' }}>BATCH - {i}</th>);
                         }
                         return cols;
                       })()}
+                      <th className="rpt-c-total" style={{ background: 'var(--color-warnb)' }}>Total Cost</th>
+                      <th className="rpt-c-actions sticky" style={{ background: 'var(--color-tint-2)' }}>Actions</th>
                     </>
                   )}
-                  {reportType === 'billable' && <th style={{ background: '#FEF3C7' }}>Total</th>}
-                  {reportType === 'billable' && <th>NON-BILLABLE & Action</th>}
                 </tr>
               </thead>
               <tbody>
@@ -422,53 +488,51 @@ const Reports = () => {
                   <tr key={index}>
                     {reportType === 'non-billable' ? (
                       <>
-                        <td className="font-medium">{row.product_name}</td>
-                        <td>{row.total_batches}</td>
-                        <td><span className="tag tag-success">{row.active_batches}</span></td>
-                        <td><span className="tag tag-neutral">{row.completed_batches}</span></td>
-                        <td className="font-semibold">{row.total_units}</td>
+                        <td className="font-medium rpt-wrap">{row.product_name}</td>
+                        <td className="rpt-nowrap">{row.total_batches}</td>
+                        <td className="rpt-nowrap"><span className="tag tag-success">{row.active_batches}</span></td>
+                        <td className="rpt-nowrap"><span className="tag tag-neutral">{row.completed_batches}</span></td>
+                        <td className="font-semibold rpt-nowrap">{row.total_units}</td>
                       </>
                     ) : (
                       <>
-                        <td className="font-medium">{row.bill_id}</td>
-                        <td>{row.uid}</td>
-                        <td>{row.report_date}</td>
-                        <td>{row.branch_name || '-'}</td>
-                        <td>{row.machine_name || '-'}</td>
-                        <td>{row.service_name || '-'}</td>
+                        <td className="rpt-nowrap">{row.bill_id}</td>
+                        <td className="rpt-nowrap">{row.uid}</td>
+                        <td className="rpt-nowrap"><span className="rpt-date">{fmtDate(row.report_date)}</span></td>
+                        <td className="rpt-nowrap">{row.branch_name || '-'}</td>
+                        <td className="rpt-nowrap">{row.machine_name || '-'}</td>
+                        <td className="rpt-wrap">{row.service_name || '-'}</td>
                         {(() => {
-                          let maxC = 0;
-                          reportData.forEach((r) => { if (r.consumableCount > maxC) maxC = r.consumableCount; });
-                          return Array.from({ length: maxC }, (_, i) => {
-                            const c = row.consumables.find((x) => x.slot === i + 1);
-                            return [
-                              <td key={`d-${i}`}>{c ? c.name : '-'}</td>,
-                              <td key={`du-${i}`} style={{ textAlign: 'center' }}>{c && c.units ? c.units : '-'}</td>,
-                              <td key={`dc-${i}`} style={{ textAlign: 'right' }}>{c && c.cost ? `$${c.cost}` : '-'}</td>
-                            ];
-                          });
+                          const maxC = reportData.reduce((m, r) => Math.max(m, r.consumableCount), 0);
+                          const maxN = reportData.reduce((m, r) => Math.max(m, r.nonBillableCount || 0), 0);
+                          const cells = [];
+                          for (let i = 1; i <= maxC; i++) {
+                            const c = row.consumables.find((x) => x.slot === i);
+                            cells.push(<td key={`d-${i}`} className="rpt-wrap">{c ? c.name : '-'}</td>);
+                            cells.push(<td key={`du-${i}`} className="rpt-nowrap" style={{ textAlign: 'center' }}>{c && c.units ? c.units : '-'}</td>);
+                            cells.push(<td key={`dc-${i}`} className="rpt-nowrap" style={{ textAlign: 'right' }}>{c && c.cost ? `${c.cost}` : '-'}</td>);
+                          }
+                          for (let i = 1; i <= maxN; i++) {
+                            const nb = row.nonBillableUsed[i - 1];
+                            cells.push(<td key={`n-${i}`} className="rpt-wrap">{nb ? nb.name : '-'}</td>);
+                            cells.push(<td key={`nb-${i}`} className="rpt-nowrap" style={{ textAlign: 'center' }}>{nb ? nb.batch_id : '-'}</td>);
+                          }
+                          return cells;
                         })()}
+                        <td className="rpt-nowrap rpt-total-cost" style={{ background: 'var(--color-warnb)' }}>
+                          {row.totalCost || 0}
+                        </td>
+                        <td className="rpt-actions-cell">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button onClick={() => openEditBill(row.bill_id)} className="rpt-act-icon edit" title="Edit Record" aria-label="Edit Record">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                            </button>
+                            <button onClick={() => deleteBill(row.bill_id)} className="rpt-act-icon del" title="Delete Record" aria-label="Delete Record">
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                            </button>
+                          </div>
+                        </td>
                       </>
-                    )}
-                    {reportType === 'billable' && (
-                      <td style={{ background: '#FEF3C7' }}>
-                        <div className="font-semibold">
-                          Units: {row.totalUnits || 0} | Cost: ${row.totalCost || 0}
-                        </div>
-                      </td>
-                    )}
-                    {reportType === 'billable' && (
-                      <td>
-                        <div className="flex flex-col gap-1">
-                          <button onClick={() => openEditBill(row.bill_id)} className="btn btn-ghost btn-sm" style={{ color: 'var(--color-primary)' }}>Edit</button>
-                          {row.nonBillableUsed?.length > 0 && (
-                            <div className="text-xs text-muted">
-                              <div className="font-semibold">Non-Billable:</div>
-                              {row.nonBillableUsed.map((nb, i) => <div key={i}>{nb.name} ({nb.batch_id}) - {nb.units} units</div>)}
-                            </div>
-                          )}
-                        </div>
-                      </td>
                     )}
                   </tr>
                 ))}
@@ -489,7 +553,7 @@ const Reports = () => {
       {/* Edit Modal */}
       {editingBill && (
         <div className="modal-overlay">
-          <div className="modal" style={{ maxWidth: 800 }}>
+          <div className="modal" style={{ maxWidth: 820 }}>
             <div className="modal-header">
               <h3>Edit Bill - {editingBill.bill_id}</h3>
               <button onClick={() => { setEditingBill(null); setEditRows([]); }} className="btn btn-ghost btn-icon">×</button>
@@ -502,7 +566,7 @@ const Reports = () => {
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-muted block mb-1">UID</label>
-                  <input type="text" value={editingBill.uid} onChange={(e) => setEditingBill({...editingBill, uid: e.target.value})} className="form-input" />
+                  <input type="text" value={editingBill.uid || ''} onChange={(e) => setEditingBill({...editingBill, uid: e.target.value})} className="form-input" />
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-muted block mb-1">Date</label>
@@ -544,7 +608,7 @@ const Reports = () => {
             </div>
             <div className="modal-footer">
               <button onClick={() => { setEditingBill(null); setEditRows([]); }} className="btn btn-secondary">Cancel</button>
-              <button onClick={updateBill} className="btn btn-primary">Update Bill</button>
+              <button onClick={updateBill} className="btn btn-primary">Update Record</button>
             </div>
           </div>
         </div>

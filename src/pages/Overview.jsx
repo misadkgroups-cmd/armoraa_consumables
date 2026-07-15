@@ -264,7 +264,6 @@ const Overview = () => {
           <BranchSwitcher />
           <button className="icon-btn" title="Notifications">
             <Bell size={17} />
-            <span className="badge">3</span>
           </button>
         </div>
       </header>

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import SearchableDropdown from './SearchableDropdown';
 
 export default function AddConsumableModal({ open, onClose, onSave }) {
   const [form, setForm] = useState({ name: '', category: '', type: '', description: '', unitPrice: '', stock: '', service: '', status: 'active' });
@@ -6,8 +7,7 @@ export default function AddConsumableModal({ open, onClose, onSave }) {
 
   if (!open) return null;
 
-  function change(e) {
-    const { name, value } = e.target;
+  function change(name, value) {
     setForm((s) => ({ ...s, [name]: value }));
   }
 
@@ -39,10 +39,7 @@ export default function AddConsumableModal({ open, onClose, onSave }) {
           <input name="service" value={form.service} onChange={change} placeholder="Service" className="border p-2 rounded" />
           <input name="unitPrice" value={form.unitPrice} onChange={change} placeholder="Unit Price" className="border p-2 rounded" />
           <input name="stock" value={form.stock} onChange={change} placeholder="Stock Quantity" className="border p-2 rounded" />
-          <select name="status" value={form.status} onChange={change} className="border p-2 rounded">
-            <option value="active">Active</option>
-            <option value="out_of_stock">Out Of Stock</option>
-          </select>
+          <SearchableDropdown value={form.status} onChange={(val) => change('status', val)} options={[{value:'active',label:'Active'},{value:'out_of_stock',label:'Out Of Stock'}]} placeholder="Select status" displayKey="label" valueKey="value" />
           <textarea name="description" value={form.description} onChange={change} placeholder="Description" className="border p-2 rounded md:col-span-2" />
         </div>
         <div className="flex justify-end space-x-2 mt-4">

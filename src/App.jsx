@@ -6,14 +6,19 @@ import './App.css';
 
 const AppContent = () => {
   const [currentPage, setCurrentPage] = useState('overview');
-  const { branchId, switchBranch } = useBranch();
+  const { branchId, switchBranch, loginMis, logout } = useBranch();
 
   if (!branchId) {
-    return <Welcome onBranchSelect={(id, name) => switchBranch(id, name)} />;
+    return (
+      <Welcome
+        onBranchSelect={(id, name) => switchBranch(id, name)}
+        onMisLogin={loginMis}
+      />
+    );
   }
 
   const handleLogout = () => {
-    switchBranch(null, '');
+    logout();
     setCurrentPage('overview');
   };
 

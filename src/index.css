@@ -450,3 +450,169 @@ body {
 .rpt-act-icon.del { color: var(--color-danger); }
 .rpt-act-icon.del:hover { background: var(--color-danb); border-color: var(--color-danger); }
 .rpt-total-cost { font-weight: 700; font-size: 13px; color: var(--color-ink); white-space: nowrap; }
+
+/* ============================================================
+   GLOBAL LAYOUT STANDARDS - Match Dashboard Overview
+   ============================================================ */
+/* Page wrapper - consistent padding and spacing */
+.page-wrapper {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  max-width: 100%;
+}
+
+/* Card component - standardized across all pages */
+.card {
+  background: var(--color-surface);
+  border-radius: 16px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+  padding: 24px;
+  border: 1px solid var(--color-line);
+}
+
+/* Section headers */
+.section-header {
+  margin-bottom: 8px;
+}
+.section-header h2 {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--color-ink);
+  letter-spacing: -0.02em;
+  margin-bottom: 4px;
+}
+.section-header p {
+  font-size: 14px;
+  color: #64748b;
+  margin: 0;
+}
+
+/* Page header standard - match dashboard */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.page-header-left h1 {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--color-ink);
+  letter-spacing: -0.02em;
+  margin-bottom: 4px;
+}
+.page-header-left p {
+  font-size: 14px;
+  color: #64748b;
+  margin: 0;
+}
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Consistent spacing utilities */
+.gap-24 { gap: 24px; }
+.mb-24 { margin-bottom: 24px; }
+.mt-24 { margin-top: 24px; }
+
+/* Table improvements - consistent across all pages */
+.table-container { 
+  width: 100%; 
+  overflow-x: auto; 
+  border-radius: 16px; 
+  border: 1px solid var(--color-line); 
+  background: var(--color-surface); 
+  box-shadow: 0 2px 10px rgba(0,0,0,0.04);
+}
+.rpt-table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+.rpt-table th { position: sticky; top: 0; z-index: 2; font-size: 10.5px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--color-muted); text-align: left; padding: 14px 20px; background: var(--color-tint-2); border-bottom: 1px solid var(--color-line); white-space: nowrap; min-height: 52px; }
+.rpt-table td { font-size: 13px; color: var(--color-text); padding: 14px 20px; border-bottom: 1px solid var(--color-line-2); vertical-align: middle; min-height: 52px; }
+.rpt-table tbody tr { transition: var(--transition-fast); }
+.rpt-table tbody tr:hover { background: var(--color-tint); }
+.rpt-table tbody tr:last-child td { border-bottom: none; }
+
+/* Column alignment utilities */
+.rpt-c-service { width: 260px; text-align: left; }
+.rpt-c-units { width: 120px; text-align: center; }
+.rpt-c-date { width: 140px; text-align: left; }
+.rpt-c-cost { width: 120px; text-align: right; }
+.rpt-c-actions { width: 140px; text-align: center; }
+.rpt-nowrap { white-space: nowrap; }
+.rpt-wrap { word-break: break-word; overflow-wrap: anywhere; }
+
+/* Table action buttons */
+.rpt-actions-cell { white-space: nowrap; }
+.rpt-act-icon { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--color-line); cursor: pointer; transition: var(--transition-fast); background: var(--color-surface); }
+.rpt-act-icon.edit { color: var(--color-primary); }
+.rpt-act-icon.edit:hover { background: var(--color-tint); border-color: var(--color-primary); }
+.rpt-act-icon.del { color: var(--color-danger); }
+.rpt-act-icon.del:hover { background: var(--color-danb); border-color: var(--color-danger); }
+.rpt-act-icon.archive { color: var(--color-warning); }
+.rpt-act-icon.archive:hover { background: var(--color-warnb); border-color: var(--color-warning); }
+
+/* ============================================================
+    FORM SPACING IMPROVEMENTS
+    ============================================================ */
+.form-input { height: 44px; padding: 0 16px; border: 1px solid var(--color-line); border-radius: 11px; background: var(--color-surface); font-size: 13px; color: var(--color-text); transition: var(--transition-fast); width: 100%; }
+.form-input:focus { outline: none; border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(124,92,252,0.1); }
+.form-input::placeholder { color: var(--color-muted); }
+.space-y-1 { margin-bottom: 8px; }
+.space-y-1 label { display: block; margin-bottom: 6px; }
+.space-y-1\.5 { margin-bottom: 12px; }
+.space-y-1\.5 label { display: block; margin-bottom: 8px; }
+.grid.gap-4 { gap: 16px; }
+.grid.gap-2 { gap: 8px; }
+.grid.gap-3 { gap: 12px; }
+
+/* ============================================================
+    CUSTOMIZATION MODULE — PREMIUM ADMIN
+    ============================================================ */
+.cust-wrap { display: flex; flex-direction: column; gap: 18px; }
+.seg-tabs { display: flex; gap: 4px; padding: 5px; background: var(--color-tint-2); border: 1px solid var(--color-line); border-radius: 14px; position: sticky; top: 0; z-index: 20; box-shadow: var(--shadow-sm); }
+.seg-tab { flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 14px; border-radius: 10px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--color-muted); border: none; background: transparent; transition: var(--transition-fast); white-space: nowrap; }
+.seg-tab:hover { color: var(--color-text); background: rgba(255,255,255,0.6); }
+.seg-tab.active { color: var(--color-primary); background: #fff; box-shadow: var(--shadow-sm); }
+.seg-tab svg { width: 16px; height: 16px; }
+.cust-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.cust-head h2 { font-size: 19px; font-weight: 800; color: var(--color-ink); letter-spacing: -0.02em; }
+.cust-head p { font-size: 12.5px; color: var(--color-muted); margin-top: 3px; }
+.cust-actions { display: flex; align-items: center; gap: 10px; }
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.stat-box { background: var(--color-surface); border: 1px solid var(--color-line); border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; transition: var(--transition-normal); }
+.stat-box:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); border-color: rgba(124,92,252,0.2); }
+.stat-box .v { font-size: 24px; font-weight: 800; color: var(--color-ink); letter-spacing: -0.03em; }
+.stat-box .l { font-size: 11px; font-weight: 600; color: var(--color-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.stat-box .ic { width: 30px; height: 30px; border-radius: 9px; display: flex; align-items: center; justify-content: center; color: #fff; margin-bottom: 2px; }
+.search-box { display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px; flex: 1; max-width: 320px; border: 1px solid var(--color-line); border-radius: 11px; background: var(--color-surface); transition: var(--transition-fast); }
+.search-box:focus-within { border-color: var(--color-primary); box-shadow: 0 0 0 3px rgba(124,92,252,0.1); }
+.search-box input { border: none; outline: none; background: transparent; flex: 1; font-size: 13px; color: var(--color-text); }
+.search-box svg { color: var(--color-muted); width: 15px; height: 15px; }
+.dt { width: 100%; border-collapse: separate; border-spacing: 0; }
+.dt thead th { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-muted); text-align: left; padding: 14px 20px; background: var(--color-tint-2); border-bottom: 1px solid var(--color-line); white-space: nowrap; min-height: 52px; }
+.dt tbody td { font-size: 13px; color: var(--color-text); padding: 14px 20px; border-bottom: 1px solid var(--color-line-2); vertical-align: middle; min-height: 52px; }
+.dt tbody tr { transition: var(--transition-fast); }
+.dt tbody tr:hover { background: var(--color-tint); }
+.dt tbody tr:last-child td { border-bottom: none; }
+.ia { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--color-line); background: var(--color-surface); cursor: pointer; transition: var(--transition-fast); color: var(--color-muted); }
+.ia:hover { background: var(--color-tint); color: var(--color-primary); border-color: var(--color-primary); }
+.ia.danger:hover { color: var(--color-danger); border-color: var(--color-danger); background: var(--color-danb); }
+.ia.archive:hover { color: var(--color-warning); border-color: var(--color-warning); }
+.sbadge { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; padding: 3px 10px; border-radius: 20px; }
+.sbadge.active { background: var(--color-okb); color: #065F46; }
+.sbadge.inactive { background: var(--color-warnb); color: #92400E; }
+.prem-empty { text-align: center; padding: 48px 24px; }
+.prem-empty .ico { width: 56px; height: 56px; border-radius: 16px; background: var(--color-tint); display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; color: var(--color-primary); }
+.prem-empty h3 { font-size: 16px; font-weight: 700; color: var(--color-ink); margin-bottom: 6px; }
+.prem-empty p { font-size: 13px; color: var(--color-muted); max-width: 320px; margin: 0 auto 16px; }
+.set-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.set-card { background: var(--color-surface); border: 1px solid var(--color-line); border-radius: 16px; padding: 20px; }
+.set-card h4 { font-size: 14px; font-weight: 700; color: var(--color-ink); margin-bottom: 14px; }
+.sw { position: relative; width: 44px; height: 24px; border-radius: 24px; background: var(--color-line); transition: var(--transition-fast); cursor: pointer; flex-shrink: 0; }
+.sw.on { background: var(--color-primary); }
+.sw::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: var(--transition-fast); box-shadow: var(--shadow-sm); }
+.sw.on::after { transform: translateX(20px); }

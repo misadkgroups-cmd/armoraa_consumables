@@ -1,11 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
+import BranchSwitcher from '../components/BranchSwitcher';
 import Chart from 'react-apexcharts';
 import { motion } from 'framer-motion';
 import {
   Calendar, Activity, FileText, Box, Stethoscope, Scissors,
-  Bell, LogOut, MapPin, TrendingUp
+  Bell, TrendingUp
 } from 'lucide-react';
 
 /* ---------- Animated Counter ---------- */
@@ -54,8 +55,7 @@ const Sparkline = ({ data, color }) => {
 };
 
 const Overview = () => {
-  const { branchId, branchName, switchBranch } = useBranch();
-  const handleLogout = () => switchBranch(null, '');
+  const { branchId } = useBranch();
   const [dateRange, setDateRange] = useState('last7');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
@@ -157,8 +157,8 @@ const Overview = () => {
       const billableTop = Object.entries(consumableCounts).map(([name, units]) => ({ name, units }))
         .sort((a, b) => b.units - a.units).slice(0, 8);
 
-      const { data: bulkData } = await supabase.from('bulk_consumables_registry').select('product_name').gte('open_date', start).lte('open_date', end);
-      if (bulkData) bulkData.forEach(b => { nonBillableCounts[b.product_name] = (nonBillableCounts[b.product_name] || 0) + 1; });
+      const { data: bulkData } = await supabase.from('non_billable_consumable_registry').select('product_id, master_non_billable_consumables(product_name)').gte('opening_date', start).lte('opening_date', end);
+      if (bulkData) bulkData.forEach(b => { const name = b.master_non_billable_consumables?.product_name || b.product_name || 'Non-Billable'; nonBillableCounts[name] = (nonBillableCounts[name] || 0) + 1; });
       const nonBillableTop = Object.entries(nonBillableCounts).map(([name, count]) => ({ name, count }))
         .sort((a, b) => b.count - a.count).slice(0, 8);
 
@@ -261,17 +261,10 @@ const Overview = () => {
           <p className="dash-header-sub"><span className="live-dot" /> Real-time clinic operations</p>
         </div>
         <div className="dash-header-actions">
-          <div className="branch-select">
-            <MapPin size={15} />
-            <span>{branchName || 'All'} Branch</span>
-          </div>
+          <BranchSwitcher />
           <button className="icon-btn" title="Notifications">
             <Bell size={17} />
             <span className="badge">3</span>
-          </button>
-          <button className="btn-outline" onClick={handleLogout} title="Logout">
-            <LogOut size={15} />
-            <span>Logout</span>
           </button>
         </div>
       </header>

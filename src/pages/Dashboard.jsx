@@ -4,6 +4,7 @@ import NonBillableConsumables from './NonBillableConsumables';
 import BillableConsumables from './BillableConsumables';
 import Reports from './Reports';
 import { useBranch } from '../context/BranchContext';
+import { LogOut } from 'lucide-react';
 
 const navSections = [
   {
@@ -22,13 +23,13 @@ const navSections = [
   {
     group: 'Analytics',
     items: [
-      { id: 'reports', label: 'Reports', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z' },
+      { id: 'reports', label: 'Reports', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z', misOnly: true },
     ]
   },
   {
     group: 'Settings',
     items: [
-      { id: 'customization', label: 'Customization', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z' },
+      { id: 'customization', label: 'Customization', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z', misOnly: true },
     ]
   }
 ];
@@ -39,8 +40,8 @@ const NavIcon = ({ path }) => (
   </svg>
 );
 
-const Dashboard = ({ currentPage = 'overview', onNavigate }) => {
-  const { branchName } = useBranch();
+const Dashboard = ({ currentPage = 'overview', onNavigate, onLogout }) => {
+  const { branchName, misMode } = useBranch();
 
   const renderPage = () => {
     switch (currentPage) {
@@ -63,35 +64,55 @@ const Dashboard = ({ currentPage = 'overview', onNavigate }) => {
         </div>
 
         <nav className="sidebar-nav">
-          {navSections.map((section) => (
-            <div key={section.group}>
-              <div className="sidebar-group">{section.group}</div>
-              {section.items.map((item) => {
-                const isActive = currentPage === item.id;
-                return (
-                  <div
-                    key={item.id}
-                    onClick={() => onNavigate(item.id)}
-                    className={`sidebar-item ${isActive ? 'active' : ''}`}
-                    title={item.label}
-                  >
-                    <span className="sidebar-icon">
-                      <NavIcon path={item.icon} />
-                    </span>
-                    <span className="flex-1">{item.label}</span>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
+          {navSections.map((section) => {
+            const visibleItems = section.items.filter(item => misMode || !item.misOnly);
+            if (visibleItems.length === 0) return null;
+            return (
+              <div key={section.group}>
+                <div className="sidebar-group">{section.group}</div>
+                {visibleItems.map((item) => {
+                  const isActive = currentPage === item.id;
+                  return (
+                    <div
+                      key={item.id}
+                      onClick={() => onNavigate(item.id)}
+                      className={`sidebar-item ${isActive ? 'active' : ''}`}
+                      title={item.label}
+                    >
+                      <span className="sidebar-icon">
+                        <NavIcon path={item.icon} />
+                      </span>
+                      <span className="flex-1">{item.label}</span>
+                      {item.misOnly && (
+                        <span className="text-[10px] text-violet-400/70">🔒</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
         </nav>
 
         <div className="sidebar-footer">
-          <div className="sidebar-footer-avatar">AD</div>
-          <div className="sidebar-footer-info">
-            <div className="sidebar-footer-name">Admin</div>
-            <div className="sidebar-footer-role">{branchName}</div>
+          <div className="flex items-center gap-3">
+            <div className="sidebar-footer-avatar">AD</div>
+            <div className="sidebar-footer-info">
+              <div className="sidebar-footer-name">
+                {misMode ? 'MIS Admin' : 'Branch User'}
+              </div>
+              <div className="sidebar-footer-role">{branchName}</div>
+            </div>
           </div>
+          <button
+            onClick={onLogout}
+            title="Logout"
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-bold text-white transition-all hover:shadow-[0_0_20px_rgba(139,92,246,0.6)]"
+            style={{ background: '#111827' }}
+          >
+            <LogOut size={15} />
+            <span>Logout</span>
+          </button>
         </div>
       </aside>
 

@@ -10,7 +10,10 @@ export const BranchProvider = ({ children }) => {
   const [branchName, setBranchName] = useState(() => {
     return localStorage.getItem('branchName') || '';
   });
-  const [loading, setLoading] = useState(false);
+  const [misMode, setMisMode] = useState(() => {
+    return localStorage.getItem('misMode') === 'true';
+  });
+  const [loading, _setLoading] = useState(false);
 
   useEffect(() => {
     if (branchId) {
@@ -28,13 +31,44 @@ export const BranchProvider = ({ children }) => {
     }
   }, [branchName]);
 
+  useEffect(() => {
+    if (misMode) {
+      localStorage.setItem('misMode', 'true');
+    } else {
+      localStorage.removeItem('misMode');
+    }
+  }, [misMode]);
+
   const switchBranch = (id, name) => {
+    setBranchId(id);
+    setBranchName(name);
+    setMisMode(false);
+  };
+
+  // Switch branch while keeping MIS mode active
+  const updateBranch = (id, name) => {
     setBranchId(id);
     setBranchName(name);
   };
 
+  const loginMis = (id = null, name = 'MIS') => {
+    if (id != null) {
+      setBranchId(id);
+      setBranchName(name);
+    } else {
+      setBranchName(name);
+    }
+    setMisMode(true);
+  };
+
+  const logout = () => {
+    setBranchId(null);
+    setBranchName('');
+    setMisMode(false);
+  };
+
   return (
-    <BranchContext.Provider value={{ branchId, branchName, loading, switchBranch }}>
+    <BranchContext.Provider value={{ branchId, branchName, misMode, loading, switchBranch, updateBranch, loginMis, logout }}>
       {children}
     </BranchContext.Provider>
   );

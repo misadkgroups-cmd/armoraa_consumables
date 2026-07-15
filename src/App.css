@@ -808,6 +808,54 @@ select.form-input {
   to { opacity: 1; transform: translateX(0); }
 }
 
+/* ===== WELCOME PAGE (Premium) ===== */
+.logo-container {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+.armoraa-logo {
+  width: 220px;
+  height: 220px;
+  object-fit: contain;
+  background: transparent;
+  mix-blend-mode: screen;
+  filter:
+    drop-shadow(0 0 30px rgba(139, 92, 246, .5))
+    drop-shadow(0 0 80px rgba(139, 92, 246, .3));
+  animation: floatLogo 6s ease-in-out infinite;
+}
+
+@keyframes floatLogo {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-12px); }
+}
+
+.brand-title {
+  font-size: 88px;
+  font-weight: 900;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  background: linear-gradient(90deg, #ffffff, #d8b4fe, #a855f7);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.login-card {
+  width: 520px;
+  padding: 48px;
+  border-radius: 32px;
+  background: rgba(15, 15, 25, .65);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(139, 92, 246, .25);
+  box-shadow:
+    0 0 80px rgba(139, 92, 246, .15),
+    inset 0 0 0 1px rgba(255, 255, 255, .03);
+}
+
 /* ===== ANIMATIONS ===== */
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(8px); }

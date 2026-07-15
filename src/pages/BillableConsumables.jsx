@@ -1,6 +1,23 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
+import SearchableDropdown from '../components/SearchableDropdown';
+import { prepareSavePayload } from '../utils/billableReportPayload';
+
+const FIELD_LABEL = {
+  fontSize: '11px',
+  fontWeight: 600,
+  color: '#475569',
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+};
+
+const CARD_STYLE = {
+  background: '#ffffff',
+  borderRadius: '12px',
+  border: '1px solid #e2e8f0',
+  boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+};
 
 export default function BillableConsumables() {
   const { branchId } = useBranch();
@@ -10,142 +27,162 @@ export default function BillableConsumables() {
   const [machinery, setMachinery] = useState('');
   const [services, setServices] = useState([]);
   const [machines, setMachines] = useState([]);
-  const [consumables, setConsumables] = useState([]);
-  const [bulkItems, setBulkItems] = useState([]);
+  // Active (non-completed) batch registry rows
+  const [registry, setRegistry] = useState([]);
+  // Combined dropdown options
   const [allConsumables, setAllConsumables] = useState([]);
   const [rows, setRows] = useState([]);
   const [toast, setToast] = useState(null);
   const [reportDate, setReportDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [machineryLocked, setMachineryLocked] = useState(false);
+  const [noMachineryMapping, setNoMachineryMapping] = useState(false);
   const billIdRef = useRef(null);
 
   useEffect(() => {
     if (branchId) {
       fetchServices();
       fetchMachines();
-      fetchConsumables();
-      fetchBulkItems();
+      fetchAllConsumables();
     }
-    // Auto-focus Bill ID on load for fast keyboard entry
     setTimeout(() => billIdRef.current?.focus(), 100);
   }, [branchId]);
 
   useEffect(() => {
-    const combined = [
-      ...consumables.map(c => ({ id: c.id, name: c.consumable_name, isBulk: false })),
-      ...bulkItems.map(b => ({ id: `bulk_${b.id}`, name: b.product_name, isBulk: true, bulkId: b.id }))
-    ];
-    setAllConsumables(combined);
-  }, [consumables, bulkItems]);
+    const onFocus = () => { if (branchId) { fetchAllConsumables(); } };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [branchId]);
+
+  // allConsumables is built by fetchAllConsumables() (unified billable + active registry batches).
+
+  useEffect(() => {
+    if (service) {
+      fetchMachinesForService(service);
+    } else {
+      setMachinery('');
+      setMachines([]);
+      setMachineryLocked(false);
+      setNoMachineryMapping(false);
+    }
+  }, [service]);
 
   const fetchServices = async () => {
     try {
-      let { data, error } = await supabase
-        .from('master_services')
-        .select('id, service_name')
-        .eq('branch_id', branchId)
-        .order('service_name');
-      
-      if (!data || data.length === 0) {
-        console.warn('No services for branch_id', branchId, 'fetching all');
-        const res = await supabase.from('master_services').select('id, service_name').order('service_name');
-        data = res.data;
-      }
-      
-      console.log('Services fetched:', data?.length || 0, error);
+      let { data, error } = await supabase.from('master_services').select('id, service_name').eq('branch_id', branchId).order('service_name');
+      if (!data || data.length === 0) { const res = await supabase.from('master_services').select('id, service_name').order('service_name'); data = res.data; }
       if (data) setServices(data || []);
     } catch (error) { console.error('Error fetching services:', error); }
   };
 
-  const fetchMachines = async (serviceId) => {
+  const fetchMachines = async () => {
     try {
-      let query = supabase
-        .from('master_machinery')
-        .select('id, machine_name')
-        .eq('branch_id', branchId)
-        .order('machine_name');
-      if (serviceId) {
-        query = query.eq('service_id', serviceId);
-      }
-      let { data } = await query;
-      
-      if (!data || data.length === 0) {
-        console.warn('No machinery for branch_id', branchId, 'fetching all');
-        let fallbackQuery = supabase.from('master_machinery').select('id, machine_name').order('machine_name');
-        if (serviceId) fallbackQuery = fallbackQuery.eq('service_id', serviceId);
-        const res = await fallbackQuery;
-        data = res.data;
-      }
-      
+      const { data, error } = await supabase.from('master_machinery').select('id, machine_name').eq('branch_id', branchId).order('machine_name');
       if (data) {
         const seen = new Set();
-        const unique = data.filter((m) => {
-          const key = m.machine_name.toLowerCase().trim();
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
-        setMachines(unique);
-        if (unique.length === 1) {
-          setMachinery(unique[0].id);
-        }
+        const uniq = data.filter(m => { const k = m.machine_name.toLowerCase().trim(); if (seen.has(k)) return false; seen.add(k); return true; });
+        setMachines(uniq);
       }
     } catch (error) { console.error('Error fetching machinery:', error); }
   };
 
-  const fetchBulkItems = async () => {
+  const fetchMachinesForService = async (serviceId) => {
     try {
-      const { data, error } = await supabase
-        .from('bulk_consumables_registry')
-        .select('id, product_name, batch_id, open_date, status, closing_date')
-        .eq('branch_id', branchId)
-        .order('open_date', { ascending: false });
-      if (!error && data) setBulkItems(data || []);
-    } catch (error) {
-      console.error('Error fetching bulk items:', error);
-      setBulkItems([]);
-    }
+      const { data: mappings, error: mappingError } = await supabase.from('master_machinery').select('id, machine_name').eq('service_id', serviceId).order('machine_name');
+      if (mappingError || !mappings || mappings.length === 0) {
+        setMachines([]); setMachinery(''); setMachineryLocked(false); setNoMachineryMapping(true);
+        showToast('warning', 'No machinery mapping found for selected service. Please configure the mapping in Customization → Machinery Mapping');
+        return;
+      }
+      setNoMachineryMapping(false);
+      const seen = new Set();
+      const unique = mappings.filter((m) => { const key = m.machine_name.toLowerCase().trim(); if (seen.has(key)) return false; seen.add(key); return true; });
+      setMachines(unique);
+      setMachineryLocked(true);
+      if (unique.length > 0) setMachinery(unique[0].id);
+    } catch (error) { console.error('Error fetching machinery for service:', error); setMachineryLocked(false); setNoMachineryMapping(true); }
   };
 
-  const fetchConsumables = async () => {
+  // Unified fetch:
+  // 1. Standard Master Consumables (billable items)
+  // 2. Active non-billable registry batches, grouped by unique product so the
+  //    "Select Consumable" dropdown shows clean product names. Each non-billable
+  //    option nests its available batches (each carrying its registry row id).
+  const fetchAllConsumables = async () => {
     try {
-      let { data } = await supabase
+      const { data: billables } = await supabase
         .from('master_consumables')
-        .select('id, consumable_name')
-        .eq('branch_id', branchId)
+        .select('id, consumable_name, cost_unit')
         .order('consumable_name');
-      
-      if (!data || data.length === 0) {
-        console.warn('No consumables for branch_id', branchId, 'fetching all');
-        const res = await supabase.from('master_consumables').select('id, consumable_name').order('consumable_name');
-        data = res.data;
-      }
-      
-      if (data) setConsumables(data || []);
-    } catch (error) { console.error('Error fetching consumables:', error); }
+
+      const { data: registryItems } = await supabase
+        .from('non_billable_consumable_registry')
+        .select('id, batch_id, product_id, status, master_non_billable_consumables ( product_name )')
+        .eq('status', 'active')
+        .eq('branch_id', branchId)
+        .order('batch_id');
+
+      const reg = registryItems || [];
+      setRegistry(reg);
+
+      // Group active registry rows by unique product_id, nesting batches inside.
+      const productMap = new Map();
+      reg.forEach(item => {
+        const pid = item.product_id;
+        if (!productMap.has(pid)) {
+          productMap.set(pid, {
+            id: `nbproduct-${pid}`,
+            rawId: pid,
+            name: item.master_non_billable_consumables?.product_name || 'Unknown',
+            type: 'nonbillable',
+            cost: 0,
+            batches: [],
+          });
+        }
+        productMap.get(pid).batches.push({ registryId: item.id, batchId: item.batch_id });
+      });
+
+      const combined = [
+        ...(billables || []).map(item => ({
+          id: `billable-${item.id}`,
+          rawId: item.id,
+          name: item.consumable_name,
+          type: 'billable',
+          cost: item.cost_unit || 0,
+          batches: [],
+        })),
+        ...Array.from(productMap.values()),
+      ];
+      setAllConsumables(combined);
+    } catch (error) { console.error('Error fetching unified consumables:', error); }
   };
 
-  const addConsumableRow = (selectedConsumableId) => {
-    if (allConsumables.length === 0) return;
+
+  // Resolve the registry row id for a non-billable product + batch
+  const getRegistryIdForProductBatch = (rawId, batchId) => {
+    if (!rawId || !batchId) return null;
+    const match = (registry || []).find(
+      r => r.product_id === Number(rawId) && r.batch_id === batchId
+    );
+    return match ? match.id : null;
+  };
+
+  const addConsumableRow = (selectedOptionId) => {
+    if ((allConsumables || []).length === 0) return;
+    if (!selectedOptionId) return;
+    const opt = allConsumables.find(c => c.id === selectedOptionId);
+    if (!opt) return;
+
+    const isNb = opt.type === 'nonbillable';
+    const firstBatch = isNb && opt.batches && opt.batches.length ? opt.batches[0] : null;
     const newId = Date.now();
-    let initialBatch = '';
-    if (selectedConsumableId && selectedConsumableId.startsWith('bulk_')) {
-      const bulkEntry = bulkItems.find(b => `bulk_${b.id}` === selectedConsumableId);
-      if (bulkEntry) initialBatch = bulkEntry.batch_id;
-    }
-    setRows((prev) => [
-      ...prev,
-      { id: newId, consumableId: selectedConsumableId || '', units: selectedConsumableId?.startsWith('bulk_') ? 'USED' : '', batchId: initialBatch }
-    ]);
-    // Focus the new row's consumable dropdown (spreadsheet-style flow)
-    setTimeout(() => {
-      const sel = document.querySelector(`select[data-row-id="${newId}"][data-field="consumable"]`);
-      if (sel) {
-        sel.focus();
-        if (sel.tagName === 'SELECT' && typeof sel.showPicker === 'function') {
-          try { sel.showPicker(); } catch (_) {}
-        }
-      }
-    }, 60);
+    setRows((prev) => [...prev, {
+      id: newId,
+      consumableId: selectedOptionId,
+      consumableType: opt.type,
+      units: isNb ? 'USED' : '',
+      batchId: firstBatch ? firstBatch.batchId : '',
+      registryId: firstBatch ? firstBatch.registryId : null,
+    }]);
   };
 
   const removeConsumableRow = (id) => {
@@ -155,39 +192,19 @@ export default function BillableConsumables() {
   const handleConsumableChange = (id, value) => {
     setRows((prev) => prev.map((r) => {
       if (r.id !== id) return r;
-      const isBulk = value.startsWith('bulk_');
-      const bulkEntry = isBulk ? bulkItems.find(b => `bulk_${b.id}` === value) : null;
+      const opt = allConsumables.find(c => c.id === value);
+      if (!opt) return { ...r, consumableId: value, consumableType: '', units: '', batchId: '', registryId: null };
+      const isNb = opt.type === 'nonbillable';
+      const firstBatch = isNb && opt.batches && opt.batches.length ? opt.batches[0] : null;
       return {
         ...r,
         consumableId: value,
-        units: isBulk ? 'USED' : '',
-        batchId: bulkEntry ? bulkEntry.batch_id : ''
+        consumableType: opt.type,
+        units: isNb ? 'USED' : '',
+        batchId: firstBatch ? firstBatch.batchId : '',
+        registryId: firstBatch ? firstBatch.registryId : null,
       };
     }));
-  };
-
-  const handleConsumableKeyDown = (e, id) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      const row = rows.find((r) => r.id === id);
-      if (!row || !row.consumableId) {
-        // Nothing selected yet → open the dropdown for quick pick
-        const sel = e.target;
-        if (sel && typeof sel.showPicker === 'function') { try { sel.showPicker(); } catch (_) {} }
-        return;
-      }
-      if (row.consumableId.startsWith('bulk_')) {
-        const batchInput = document.querySelector(`select[data-row-id="${id}"][data-field="batch"]`);
-        if (batchInput) batchInput.focus();
-      } else {
-        const unitsInput = document.querySelector(`input[data-row-id="${id}"][data-field="units"]`);
-        if (unitsInput) unitsInput.focus();
-      }
-    }
-    if (e.key === 'Backspace' || e.key === 'Delete') {
-      e.preventDefault();
-      handleConsumableChange(id, '');
-    }
   };
 
   const handleUnitsKeyDown = (e, id) => {
@@ -195,165 +212,111 @@ export default function BillableConsumables() {
       e.preventDefault();
       const row = rows.find((r) => r.id === id);
       if (!row || !row.units) return;
-      
-      if (row.consumableId?.startsWith('bulk_')) {
-        const batchInput = document.querySelector(`select[data-row-id="${id}"][data-field="batch"]`);
-        if (batchInput) batchInput.focus();
-      } else {
-        const currentIndex = rows.findIndex((r) => r.id === id);
-        if (currentIndex < rows.length - 1) {
-          // Move to NEXT row's consumable dropdown (spreadsheet-style)
-          const nextConsumable = document.querySelector(`select[data-row-id="${rows[currentIndex + 1].id}"][data-field="consumable"]`);
-          if (nextConsumable) {
-            nextConsumable.focus();
-            if (typeof nextConsumable.showPicker === 'function') { try { nextConsumable.showPicker(); } catch (_) {} }
-          }
-        } else {
-          // Last row → auto-add a new empty row and focus its consumable dropdown
-          addConsumableRow();
-        }
-      }
-    }
-    if (e.key === 'Backspace' && !e.target.value) {
-      e.preventDefault();
-      const row = rows.find((r) => r.id === id);
-      if (row && !row.consumableId) {
-        removeConsumableRow(id);
-      } else {
-        setRows((prev) => prev.map((r) => (r.id === id ? { ...r, units: '' } : r)));
-        const consumableSelect = document.querySelector(`select[data-row-id="${id}"][data-field="consumable"]`);
-        if (consumableSelect) consumableSelect.focus();
-      }
+      const batchInput = document.querySelector(`select[data-row-id="${id}"][data-field="batch"], input[data-row-id="${id}"][data-field="batch"]`);
+      if (batchInput) batchInput.focus();
     }
   };
 
   const handleBatchKeyDown = (e, id) => {
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      e.preventDefault();
-      const currentIndex = rows.findIndex((r) => r.id === id);
-      if (e.key === 'ArrowDown' && currentIndex < rows.length - 1) {
-        const nextBatch = document.querySelector(`select[data-row-id="${rows[currentIndex + 1].id}"][data-field="batch"], input[data-row-id="${rows[currentIndex + 1].id}"][data-field="batch"]`);
-        if (nextBatch) nextBatch.focus();
-      } else if (e.key === 'ArrowUp' && currentIndex > 0) {
-        const prevBatch = document.querySelector(`select[data-row-id="${rows[currentIndex - 1].id}"][data-field="batch"], input[data-row-id="${rows[currentIndex - 1].id}"][data-field="batch"]`);
-        if (prevBatch) prevBatch.focus();
-      }
-      return;
-    }
     if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault();
       const row = rows.find((r) => r.id === id);
-      if (!row) return;
-      if (!row.consumableId || !row.units) {
-        setToast({ type: 'warning', message: 'Please select consumable before proceeding' });
-        setTimeout(() => setToast(null), 3000);
-        return;
-      }
+      if (!row || !row.consumableId || !row.units) return;
       const currentIndex = rows.findIndex((r) => r.id === id);
       if (currentIndex < rows.length - 1) {
-        const nextBatch = document.querySelector(`select[data-row-id="${rows[currentIndex + 1].id}"][data-field="batch"], input[data-row-id="${rows[currentIndex + 1].id}"][data-field="batch"]`);
-        if (nextBatch) nextBatch.focus();
+        const nextConsumable = document.querySelector(`select[data-row-id="${rows[currentIndex + 1].id}"][data-field="consumable"]`);
+        if (nextConsumable) nextConsumable.focus();
       } else {
         addConsumableRow();
       }
     }
-    if (e.key === 'Backspace' && !e.target.value) {
-      e.preventDefault();
-      const row = rows.find((r) => r.id === id);
-      if (row && !row.units) {
-        const unitsInput = document.querySelector(`input[data-row-id="${id}"][data-field="units"]`);
-        if (unitsInput) unitsInput.focus();
-      }
-    }
+  };
+
+  const handleServiceChange = (value) => {
+    setService(value);
+    setMachinery(''); setMachineryLocked(false); setNoMachineryMapping(false);
   };
 
   const handleSave = async () => {
+    if (!service) { showToast('error', 'Please select a service'); return; }
+    if (!machinery) { showToast('error', 'No machinery mapped for selected service'); return; }
+    if (rows.length === 0) { showToast('error', 'Please add at least one consumable'); return; }
+
     try {
-      const reportPayload = {
-        branch_id: branchId,
-        bill_id: billId,
-        uid: uid,
-        service_id: service || null,
-        machinery_id: machinery || null,
-        report_date: reportDate,
-      };
-
-      const maxSlots = Math.min(rows.length, 14);
-      for (let i = 0; i < maxSlots; i++) {
-        const row = rows[i];
-        reportPayload[`consumable_${i + 1}_id`] = row.consumableId && !row.consumableId.startsWith('bulk_') ? Number(row.consumableId) : null;
-        reportPayload[`consumable_${i + 1}_units`] = row.units === 'USED' ? 1 : (row.units ? Number(row.units) : null);
-        reportPayload[`consumable_${i + 1}_batch_id`] = row.batchId || null;
-      }
-
-      for (let i = maxSlots; i < 14; i++) {
-        reportPayload[`consumable_${i + 1}_id`] = null;
-        reportPayload[`consumable_${i + 1}_units`] = null;
-      }
-
+      const reportPayload = prepareSavePayload({
+        rows,
+        allConsumables,
+        getRegistryId: getRegistryIdForProductBatch,
+        base: {
+          branchId,
+          billId,
+          uid,
+          serviceId: service,
+          machineryId: machinery,
+          reportDate,
+        },
+      });
       const { error } = await supabase.from('billable_report').insert(reportPayload);
-      if (!error) {
-        setBillId('');
-        setUid('');
-        setService('');
-        setMachinery('');
-        setRows([]); // Clear all rows after save
-        setToast({ type: 'success', message: 'Record saved successfully' });
-        setTimeout(() => setToast(null), 3000);
-      } else {
-        console.error('Save error:', error);
-        setToast({ type: 'error', message: error.message || 'Failed to save record' });
-        setTimeout(() => setToast(null), 3000);
-      }
-    } catch (e) {
-      console.error('Save exception:', e);
-      setToast({ type: 'error', message: 'Failed to save record' });
-      setTimeout(() => setToast(null), 3000);
-    }
+      if (!error) { showToast('success', 'Record saved successfully'); }
+      else { console.error('Save error:', error); showToast('error', error.message || 'Failed to save record'); }
+    } catch (e) { console.error('Save exception:', e); showToast('error', 'Failed to save record'); }
   };
 
-  const handleUnitsChange = (id, value) => {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, units: value } : r)));
+  const handleClear = () => {
+    if (billId || uid || rows.length > 0) { if (!window.confirm('Clear all entered data?')) return; }
+    setBillId(''); setUid(''); setService(''); setMachinery(''); setMachines([]); setMachineryLocked(false); setNoMachineryMapping(false); setRows([]);
+    setReportDate(new Date().toISOString().split('T')[0]); showToast('success', 'Form cleared');
   };
 
-  const handleBatchIdChange = (id, value) => {
-    setRows((prev) => prev.map((r) => (r.id === id ? { ...r, batchId: value } : r)));
+  const handleUnitsChange = (id, value) => { setRows((prev) => prev.map((r) => (r.id === id ? { ...r, units: value } : r))); };
+  const handleBatchIdChange = (id, value) => { setRows((prev) => prev.map((r) => (r.id === id ? { ...r, batchId: value } : r))); };
+  // When a non-billable batch is chosen from the dropdown, keep registryId in sync.
+  const handleBatchChange = (id, value) => {
+    setRows((prev) => prev.map((r) => {
+      if (r.id !== id) return r;
+      const opt = allConsumables.find(c => c.id === r.consumableId);
+      const batch = (opt?.batches || []).find(b => b.batchId === value);
+      return { ...r, batchId: value, registryId: batch ? batch.registryId : null };
+    }));
   };
+
+  const showToast = (type, message) => { setToast({ type, message }); setTimeout(() => setToast(null), 3000); };
 
   return (
-    <div className="space-y-4 animate-fade-in">
-      {/* Page Header */}
+    <div className="page-wrapper animate-fade-in">
       <div className="page-header">
         <div className="page-header-left">
           <h1>Billable Consumables</h1>
           <p>Record consumables used per patient bill</p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={handleSave} className="btn btn-primary">
+        <div className="page-header-actions">
+          <button onClick={handleSave} className="btn btn-primary" disabled={noMachineryMapping}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><polyline points="20 6 9 17 4 12"/></svg>
             Save Record
           </button>
-          <button onClick={() => window.history.back()} className="btn btn-secondary">Close</button>
+          <button onClick={handleClear} className="btn btn-secondary">Close</button>
         </div>
       </div>
 
-      {/* Top Filter Row */}
-      <div className="section-card" style={{ padding: 0 }}>
+      <div className="card" style={{ ...CARD_STYLE, padding: 0, overflow: 'visible' }}>
         <div className="grid grid-cols-5 gap-0" style={{ borderBottom: '1px solid var(--color-line)' }}>
           {[
             { label: 'Bill ID', field: 'billId', type: 'text', placeholder: 'Enter Bill ID' },
             { label: 'UID', field: 'uid', type: 'text', placeholder: 'Enter UID' },
             { label: 'Date', field: 'date', type: 'date', value: reportDate, onChange: setReportDate },
-            { label: 'Service', field: 'service', type: 'select', options: services.map(s => ({ value: s.id, label: s.service_name })), onChange: (v) => { setService(v); setMachinery(''); if (v) fetchMachines(v); } },
-            { label: 'Machinery', field: 'machinery', type: 'select', options: machines.map(m => ({ value: m.id, label: m.machine_name })) },
+            { label: 'Service', field: 'service', type: 'select', options: (services || []).map(s => ({ value: s.id, label: s.service_name })), onChange: handleServiceChange },
+            { label: 'Machinery', field: 'machinery', type: 'select', options: (machines || []).map(m => ({ value: m.id, label: m.machine_name })), disabled: machineryLocked },
           ].map((item) => (
             <div key={item.field} className="p-4 space-y-1.5" style={{ borderRight: '1px solid var(--color-line-2)' }}>
-              <label className="text-[10px] font-semibold uppercase tracking-wider text-muted">{item.label}</label>
+              <label style={FIELD_LABEL}>{item.label}</label>
               {item.type === 'select' ? (
-                <select value={item.field === 'service' ? service : machinery} onChange={(e) => item.onChange ? item.onChange(e.target.value) : setMachinery(e.target.value)} className="form-input">
-                  <option value="">Select {item.label}</option>
-                  {item.options?.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                </select>
+                <SearchableDropdown
+                  value={item.field === 'service' ? service : machinery}
+                  onChange={(val) => item.onChange ? item.onChange(val) : setMachinery(val)}
+                  options={item.options || []}
+                  placeholder={`Select ${item.label}...`}
+                  displayKey="label" valueKey="value" disabled={item.disabled || false}
+                />
               ) : (
                 <input
                   ref={item.field === 'billId' ? billIdRef : undefined}
@@ -364,93 +327,102 @@ export default function BillableConsumables() {
                     else if (item.field === 'uid') setUid(e.target.value);
                     else item.onChange(e.target.value);
                   }}
-                  placeholder={item.placeholder}
-                  className="form-input"
+                  placeholder={item.placeholder} className="form-input"
                 />
+              )}
+              {item.field === 'machinery' && machineryLocked && (
+                <div style={{ fontSize: 11, color: 'var(--color-warning, #B45309)', marginTop: 4, lineHeight: 1.4 }}>
+                  ⚠️ This machinery field is auto-locked based on the selected service and cannot be manually modified.
+                </div>
+              )}
+              {item.field === 'machinery' && noMachineryMapping && (
+                <div style={{ fontSize: 11, color: 'var(--color-danger, #DC2626)', marginTop: 4, lineHeight: 1.4 }}>
+                  No machinery mapping found for selected service. Please configure the mapping in: Customization → Machinery Mapping
+                </div>
               )}
             </div>
           ))}
         </div>
       </div>
 
-      {/* Consumables Entry Matrix */}
-      <div className="section-card">
-        <div className="section-card-header">
-          <div>
-            <div className="section-title">Consumables</div>
-            <div className="section-subtitle">Add consumable items used in this bill</div>
-          </div>
+      <div className="card" style={{ ...CARD_STYLE, marginTop: 20 }}>
+        <div className="section-header">
+          <h2 style={{ fontWeight: 700, fontSize: 18, color: '#1e293b' }}>Consumables</h2>
+          <p>Select a consumable (billable or non-billable) and its batch</p>
         </div>
         <div className="space-y-3">
-          {/* Header Row */}
           <div className="grid grid-cols-12 gap-2 px-1">
-            <div className="col-span-4">
-              <span className="text-xs font-semibold uppercase tracking-wider text-muted">Select Consumable</span>
-            </div>
-            <div className="col-span-2">
-              <span className="text-xs font-semibold uppercase tracking-wider text-muted">Unit</span>
-            </div>
-            <div className="col-span-3">
-              <span className="text-xs font-semibold uppercase tracking-wider text-muted">Batch ID</span>
-            </div>
-            <div className="col-span-3">
-              <span className="text-xs font-semibold uppercase tracking-wider text-muted">Actions</span>
-            </div>
+            <div className="col-span-4"><span style={FIELD_LABEL}>Select Consumable</span></div>
+            <div className="col-span-2"><span style={FIELD_LABEL}>Unit</span></div>
+            <div className="col-span-3"><span style={FIELD_LABEL}>Batch ID</span></div>
+            <div className="col-span-3"><span style={FIELD_LABEL}>Actions</span></div>
           </div>
 
-          {/* Added rows */}
           {rows.map((row, index) => {
-            const isBulk = row.consumableId?.startsWith('bulk_');
+            const isNb = row.consumableType === 'nonbillable';
+            const opt = allConsumables.find(c => c.id === row.consumableId);
             return (
               <div key={row.id} className={`grid grid-cols-12 gap-2 items-center p-2 rounded-lg ${row.units || row.batchId ? 'bg-[#EEF2FF]' : ''}`}>
                 <div className="col-span-4">
-                  <select value={row.consumableId} onChange={(e) => handleConsumableChange(row.id, e.target.value === '__clear__' ? '' : e.target.value)} onKeyDown={(e) => handleConsumableKeyDown(e, row.id)} data-row-id={row.id} data-field="consumable" className="form-input">
-                    <option value="">Select consumable...</option>
-                    {allConsumables.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  </select>
+                  <SearchableDropdown
+                    value={row.consumableId}
+                    onChange={(val) => handleConsumableChange(row.id, val === '__clear__' ? '' : val)}
+                    options={(allConsumables || []).map(c => ({ value: c.id, label: c.name }))}
+                    placeholder="Select consumable..."
+                    displayKey="label" valueKey="value"
+                  />
                 </div>
                 <div className="col-span-2">
-                  {isBulk ? (
+                  {isNb ? (
                     <div className="h-9 px-3 border border-[#A7F3D0] rounded-lg text-sm text-[#065F46] font-semibold bg-[#D1FAE5] flex items-center">USED</div>
                   ) : (
-                    <input type="text" inputMode="decimal" value={row.units} onChange={(e) => handleUnitsChange(row.id, e.target.value)} onKeyDown={(e) => handleUnitsKeyDown(e, row.id)} data-row-id={row.id} data-field="units" className="form-input" placeholder="Units" />
+                    <input type="text" inputMode="decimal" value={row.units} onChange={(e) => handleUnitsChange(row.id, e.target.value)} onKeyDown={(e) => handleUnitsKeyDown(e, row.id)} className="form-input" placeholder="Units" />
                   )}
                 </div>
                 <div className="col-span-3">
-                  {isBulk ? (
-                    <select value={row.batchId} onChange={(e) => handleBatchIdChange(row.id, e.target.value)} onKeyDown={(e) => handleBatchKeyDown(e, row.id)} data-row-id={row.id} data-field="batch" className="form-input">
-                      <option value="">Select Batch</option>
-                      {(() => {
-                        const selectedBulk = bulkItems.find(b => `bulk_${b.id}` === row.consumableId);
-                        if (!selectedBulk) return null;
-                        return bulkItems.filter(b => b.product_name === selectedBulk.product_name && b.status === 'Active').map(b => <option key={b.id} value={b.batch_id}>{b.batch_id}</option>);
-                      })()}
-                    </select>
+                  {isNb ? (
+                    <SearchableDropdown
+                      value={row.batchId}
+                      onChange={(val) => handleBatchChange(row.id, val)}
+                      options={(opt?.batches || []).map(b => ({ value: b.batchId, label: b.batchId }))}
+                      placeholder={(opt?.batches?.length) ? 'Select Batch' : 'No Batches'}
+                      displayKey="label" valueKey="value"
+                      disabled={!row.consumableId}
+                    />
                   ) : (
-                    <input type="text" value={row.batchId} onChange={(e) => handleBatchIdChange(row.id, e.target.value)} onKeyDown={(e) => handleBatchKeyDown(e, row.id)} data-row-id={row.id} data-field="batch" className="form-input" placeholder="Batch ID" />
+                    // NEW UPDATED BATCH ID INPUT COLUMN — master (billable) items are auto-locked.
+                    // 1. Automatically disable the field since billable items require no batch.
+                    // 2. Visual styling class shows users it is locked out.
+                    <input
+                      type="text"
+                      value=""
+                      onChange={(e) => handleBatchIdChange(row.id, e.target.value)}
+                      onKeyDown={(e) => handleBatchKeyDown(e, row.id)}
+                      disabled
+                      className="form-input bg-gray-100 cursor-not-allowed opacity-50"
+                      placeholder="— Not Required —"
+                    />
                   )}
                 </div>
-                <div className="col-span-3 flex items-center gap-2">
+                <div className="col-span-3 flex items-center gap-3" style={{ height: '36px' }}>
                   <span className="text-xs text-muted">{index + 1}.</span>
-                  {row.units && !isBulk && <span className="tag tag-success">USED</span>}
-                  <button onClick={() => addConsumableRow()} className="btn btn-ghost btn-icon" title="Add another">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                  </button>
-                  <button onClick={() => removeConsumableRow(row.id)} className="btn btn-ghost btn-icon" style={{ color: 'var(--color-danger)' }} title="Remove">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                  </button>
+                  {row.units && !isNb && <span className="tag tag-success">USED</span>}
+                  <button onClick={() => addConsumableRow()} style={{ color: '#6366f1', fontWeight: 600, fontSize: 13, background: 'none', border: 'none', cursor: 'pointer' }}>Add Item</button>
+                  <button onClick={() => removeConsumableRow(row.id)} style={{ color: '#f43f5e', fontWeight: 600, fontSize: 13, background: 'none', border: 'none', cursor: 'pointer' }}>Remove</button>
                 </div>
               </div>
             );
           })}
 
-          {/* Add new row */}
           <div className="grid grid-cols-12 gap-2 items-center pt-3" style={{ borderTop: '1px solid var(--color-line-2)' }}>
             <div className="col-span-4">
-              <select id="consumableSelect" className="form-input" value="" onChange={(e) => { if (e.target.value) { addConsumableRow(e.target.value); e.target.value = ''; } }}>
-                <option value="">+ Add consumable</option>
-                {allConsumables.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
+              <SearchableDropdown
+                value=""
+                onChange={(val) => { if (val) addConsumableRow(val); }}
+                options={(allConsumables || []).map(c => ({ value: c.id, label: c.name }))}
+                placeholder="+ Add consumable"
+                displayKey="label" valueKey="value"
+              />
             </div>
             <div className="col-span-2"><div className="h-9 px-3 border border-[var(--color-line)] rounded-lg text-muted flex items-center bg-[var(--color-tint-2)]">-</div></div>
             <div className="col-span-3"><div className="h-9 px-3 border border-[var(--color-line)] rounded-lg text-muted flex items-center bg-[var(--color-tint-2)]">-</div></div>
@@ -463,7 +435,6 @@ export default function BillableConsumables() {
         </div>
       </div>
 
-      {/* Toast Notification */}
       {toast && (
         <div className={`toast ${toast.type === 'success' ? 'toast-success' : toast.type === 'warning' ? 'toast-warning' : 'toast-error'}`}>
           <span>{toast.message}</span>

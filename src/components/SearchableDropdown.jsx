@@ -24,11 +24,10 @@ const SearchableDropdown = ({ options = [], value, onChange, placeholder = "Sear
 
   useEffect(() => {
     if (isOpen) {
-      setSearchText('');
       setHighlightedIndex(-1);
-      setTimeout(() => inputRef.current?.focus(), 0);
+      if (!value) setSearchText('');
     }
-  }, [isOpen]);
+  }, [isOpen, value]);
 
   const filteredOptions = options.filter(opt => {
     const searchLower = searchText.toLowerCase();
@@ -44,9 +43,11 @@ const SearchableDropdown = ({ options = [], value, onChange, placeholder = "Sear
   };
 
   const handleInputFocus = () => {
-    setIsOpen(true);
-    if (selectedOption) {
-      setSearchText(selectedOption[displayKey] || '');
+    if (!isOpen) {
+      setIsOpen(true);
+      if (selectedOption) {
+        setSearchText(selectedOption[displayKey] || '');
+      }
     }
   };
 
@@ -109,6 +110,7 @@ const SearchableDropdown = ({ options = [], value, onChange, placeholder = "Sear
           background: disabled ? 'var(--color-tint-2, #f5f5f5)' : '',
           opacity: disabled ? 0.7 : 1
         }}
+        onMouseDown={(e) => { if (!disabled) e.stopPropagation(); }}
         onClick={() => !disabled && inputRef.current?.focus()}
       >
         <input

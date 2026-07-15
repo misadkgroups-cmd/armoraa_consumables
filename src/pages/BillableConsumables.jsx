@@ -330,11 +330,6 @@ export default function BillableConsumables() {
                   placeholder={item.placeholder} className="form-input"
                 />
               )}
-              {item.field === 'machinery' && machineryLocked && (
-                <div style={{ fontSize: 11, color: 'var(--color-warning, #B45309)', marginTop: 4, lineHeight: 1.4 }}>
-                  ⚠️ This machinery field is auto-locked based on the selected service and cannot be manually modified.
-                </div>
-              )}
               {item.field === 'machinery' && noMachineryMapping && (
                 <div style={{ fontSize: 11, color: 'var(--color-danger, #DC2626)', marginTop: 4, lineHeight: 1.4 }}>
                   No machinery mapping found for selected service. Please configure the mapping in: Customization → Machinery Mapping

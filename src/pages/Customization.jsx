@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../config/supabase';
-import { useBranch } from '../context/BranchContext';
 import { Search, Plus, Edit2, Trash2, X, Package, Settings, Cog, Boxes } from 'lucide-react';
 import SearchableDropdown from '../components/SearchableDropdown';
 
@@ -18,8 +17,6 @@ const StatCard = ({ icon: Icon, label, value, color }) => (<div className="stat-
 const Modal = ({ open, onClose, title, children }) => { if (!open) return null; return (<div className="modal-overlay"><div className="modal" style={{ maxWidth: 520 }}><div className="modal-header"><h3>{title}</h3><button onClick={onClose} className="btn btn-ghost btn-icon">×</button></div><div className="modal-body">{children}</div></div></div>); };
 
 const Customization = () => {
-  console.count('Customization Render');
-  const { branchId } = useBranch();
   const [tab, setTab] = useState('billable');
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -38,29 +35,32 @@ const Customization = () => {
   const [billable, setBillable] = useState([]);
   const [bSearch, setBSearch] = useState('');
   const [bModal, setBModal] = useState(null);
-  const [bForm, setBForm] = useState({ consumable_name: '', cost_unit: '', status: 'Active' });
+  const [bForm, setBForm] = useState({ consumable_name: '', default_unit: '', cost_unit: '' });
 
   const fetchBillable = useCallback(async () => {
-    try { const { data } = await supabase.from('master_consumables').select('*').order('consumable_name'); if (data) setBillable(data || []); }
+    try {
+      const { data } = await supabase.from('master_consumables').select('*').order('consumable_name');
+      if (data) setBillable(data || []);
+    }
     catch (e) { console.error(e); }
   }, []);
 
-  const openBModal = (mode, data = null) => { setBModal({ mode, data }); setBForm(data ? { consumable_name: data.consumable_name || '', cost_unit: data.cost_unit || '', status: data.status || 'Active' } : { consumable_name: '', cost_unit: '', status: 'Active' }); };
+  const openBModal = (mode, data = null) => { setBModal({ mode, data }); setBForm(data ? { consumable_name: data.consumable_name || '', default_unit: data.default_unit || '', cost_unit: data.cost_unit || '' } : { consumable_name: '', default_unit: '', cost_unit: '' }); };
   const saveBModal = async () => {
     if (!bForm.consumable_name) return showToast('error', 'Consumable Name is required');
+    if (!bForm.default_unit) return showToast('error', 'Default Unit is required');
     const cost = Number(bForm.cost_unit || 0);
     if (isNaN(cost) || cost < 0) return showToast('error', 'Cost must be a positive number');
-    const status = bForm.status || 'Active';
     setLoading(true);
     try {
       if (bModal.mode === 'add') {
         const { data: existing } = await supabase.from('master_consumables').select('id').ilike('consumable_name', bForm.consumable_name.trim());
         if (existing && existing.length) return showToast('warning', 'A consumable with this name already exists');
-        const { error } = await supabase.from('master_consumables').insert({ consumable_name: bForm.consumable_name.trim(), cost_unit: cost, status });
+        const { error } = await supabase.from('master_consumables').insert({ consumable_name: bForm.consumable_name.trim(), default_unit: bForm.default_unit.trim(), cost_unit: cost });
         if (error) throw error;
         showToast('success', 'Successfully added consumable');
       } else {
-        const { error } = await supabase.from('master_consumables').update({ consumable_name: bForm.consumable_name.trim(), cost_unit: cost, status }).eq('id', bModal.data.id);
+        const { error } = await supabase.from('master_consumables').update({ consumable_name: bForm.consumable_name.trim(), default_unit: bForm.default_unit.trim(), cost_unit: cost }).eq('id', bModal.data.id);
         if (error) throw error;
         showToast('success', 'Successfully updated consumable');
       }
@@ -178,14 +178,17 @@ const Customization = () => {
     try { const { data, error } = await supabase.from('master_machinery').select('*, master_services(service_name)').order('machine_name'); if (error) return; const mapped = (data || []).map(it => ({ ...it, service_name: it.master_services?.service_name || '-' })); setMachines(mapped); }
     catch (e) { console.error(e); }
   }, []);
-  const loadServicesForMach = useCallback(async () => { try { const { data } = await supabase.from('master_services').select('id, service_name').order('service_name'); setMachServices(data || []); } catch (e) { console.error(e); } }, []);
+  const loadServicesForMach = useCallback(async () => {
+    try { const { data } = await supabase.from('master_services').select('id, service_name').order('service_name'); setMachServices(data || []); }
+    catch (e) { console.error(e); }
+  }, []);
 
   const openMModal = (mode, data = null) => { setMModal({ mode, data }); setMForm(data ? { machine_name: data.machine_name || '', service_id: data.service_id || '' } : { machine_name: '', service_id: '' }); };
   const saveMModal = async () => {
     if (!mForm.machine_name || !mForm.service_id) return alert('Name and Service required');
     setLoading(true);
     try {
-      if (mModal.mode === 'add') { const { error } = await supabase.from('master_machinery').insert({ branch_id: branchId, machine_name: mForm.machine_name, service_id: Number(mForm.service_id) }); if (error) throw error; showToast('success', 'Machine added'); }
+      if (mModal.mode === 'add') { const { error } = await supabase.from('master_machinery').insert({ machine_name: mForm.machine_name, service_id: Number(mForm.service_id) }); if (error) throw error; showToast('success', 'Machine added'); }
       else { const { error } = await supabase.from('master_machinery').update({ machine_name: mForm.machine_name, service_id: Number(mForm.service_id) }).eq('id', mModal.data.id); if (error) throw error; showToast('success', 'Machine updated'); }
       setMModal(null);
       await fetchMachines();
@@ -197,35 +200,31 @@ const Customization = () => {
 
   // Load data once on mount
   useEffect(() => {
-    if (branchId) {
-      fetchBillable();
-      fetchNonBillable();
-      fetchServices();
-      fetchMachines();
-      loadServicesForMach();
-    }
-  }, [branchId, fetchBillable, fetchNonBillable, fetchServices, fetchMachines, loadServicesForMach]);
+    fetchBillable();
+    fetchNonBillable();
+    fetchServices();
+    fetchMachines();
+    loadServicesForMach();
+  }, [fetchBillable, fetchNonBillable, fetchServices, fetchMachines, loadServicesForMach]);
 
   const renderContent = () => {
     if (tab === 'general') return (<div className="set-card"><h4>Organization & Preferences</h4><div className="set-row"><div className="space-y-1"><label className="text-xs font-semibold text-muted block">Clinic Name</label><input className="form-input" value={settings.clinicName} onChange={(e) => setSettings({ ...settings, clinicName: e.target.value })} /></div><div className="space-y-1"><label className="text-xs font-semibold text-muted block">Date Format</label><SearchableDropdown value={settings.dateFormat} onChange={(val) => setSettings({ ...settings, dateFormat: val })} options={[{value:'dd MMM yyyy',label:'dd MMM yyyy'},{value:'MM-dd-yyyy',label:'MM-dd-yyyy'},{value:'yyyy-MM-dd',label:'yyyy-MM-dd'}]} placeholder="Select date format" displayKey="label" valueKey="value" /></div><div className="space-y-1"><label className="text-xs font-semibold text-muted block">Base Currency</label><SearchableDropdown value={settings.currency} onChange={(val) => setSettings({ ...settings, currency: val })} options={[{value:'INR',label:'INR'},{value:'USD',label:'USD'},{value:'EUR',label:'EUR'}]} placeholder="Select currency" displayKey="label" valueKey="value" /></div><div className="space-y-1"><label className="text-xs font-semibold text-muted block">Language</label><SearchableDropdown value={settings.language} onChange={(val) => setSettings({ ...settings, language: val })} options={[{value:'en',label:'English'}]} placeholder="Select language" displayKey="label" valueKey="value" /></div></div><div className="flex items-center justify-between mt-4 p-4 bg-[var(--color-tint-2)] rounded-xl border border-[var(--color-line)]"><div><div className="text-sm font-semibold text-ink">Enable Notifications</div><div className="text-xs text-muted mt-0.5">Alerts for system events</div></div><div className={`sw ${settings.notifications ? 'on' : ''}`} onClick={() => setSettings({ ...settings, notifications: !settings.notifications })} /></div><div className="flex justify-end mt-6"><button onClick={() => showToast('success', 'Settings saved')} className="btn btn-primary">Save Changes</button></div></div>);
 
-    const activeB = billable.filter(x => (x.status || 'Active') === 'Active').length;
-    const inactiveB = billable.filter(x => (x.status || 'Active') === 'Inactive').length;
     if (tab === 'billable') return (<>
       <SectionHeader title="Billable Consumables" subtitle={`${billable.length} items configured`} action={<div className="cust-actions"><div className="search-box"><Search size={15} /><input placeholder="Search consumable…" value={bSearch} onChange={(e) => setBSearch(e.target.value)} /></div><button onClick={() => openBModal('add')} className="btn btn-primary"><Plus size={16} /> Add Consumable</button></div>} />
-      <div className="stat-grid"><StatCard icon={Package} label="Total" value={billable.length} color="linear-gradient(135deg,#7C5CFC,#A78BFA)" /><StatCard icon={Package} label="Active" value={activeB} color="linear-gradient(135deg,#10B981,#34D399)" /><StatCard icon={Package} label="Inactive" value={inactiveB} color="linear-gradient(135deg,#EF4444,#F87171)" /></div>
+      <div className="stat-grid"><StatCard icon={Package} label="Total" value={billable.length} color="linear-gradient(135deg,#7C5CFC,#A78BFA)" /></div>
       <div className="table-container">
-        <table className="dt"><thead><tr><th style={{ width: 260 }}>Consumable Name</th><th style={{ width: 120 }}>Cost</th><th style={{ width: 100 }}>Status</th><th style={{ width: 100 }}>Actions</th></tr></thead>
+        <table className="dt"><thead><tr><th style={{ width: 260 }}>Consumable Name</th><th style={{ width: 100 }}>Default Unit</th><th style={{ width: 120 }}>Cost</th><th style={{ width: 100 }}>Actions</th></tr></thead>
         <tbody>
           {filteredB.length === 0 && (<tr><td colSpan="4"><div className="prem-empty"><div className="ico"><Package size={24} /></div><h3>No consumables found</h3><p>Add your first billable consumable to get started.</p><button onClick={() => openBModal('add')} className="btn btn-primary"><Plus size={16} /> Add Consumable</button></div></td></tr>)}
-          {filteredB.map(c => (<tr key={c.id}><td className="font-medium">{c.consumable_name}</td><td style={{ textAlign: 'right' }}>{c.cost_unit || 0}</td><td><span className={`sbadge ${c.status === 'Inactive' ? 'inactive' : 'active'}`}><span className={`status-dot ${c.status === 'Inactive' ? 'orange' : 'green'}`} /> {c.status || 'Active'}</span></td><td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}><div style={{ display: 'inline-flex', gap: 6 }}><button className="ia" title="Edit" onClick={() => openBModal('edit', c)}><Edit2 size={14} /></button><button className="ia danger" title="Delete" onClick={() => deleteB(c.id)}><Trash2 size={14} /></button></div></td></tr>))}
+          {filteredB.map(c => (<tr key={c.id}><td className="font-medium">{c.consumable_name}</td><td>{c.default_unit || '-'}</td><td style={{ textAlign: 'right' }}>{c.cost_unit || 0}</td><td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}><div style={{ display: 'inline-flex', gap: 6 }}><button className="ia" title="Edit" onClick={() => openBModal('edit', c)}><Edit2 size={14} /></button><button className="ia danger" title="Delete" onClick={() => deleteB(c.id)}><Trash2 size={14} /></button></div></td></tr>))}
         </tbody>
       </table>
     </div>
     <Modal open={!!bModal} onClose={() => setBModal(null)} title={bModal?.mode === 'add' ? 'Add Consumable' : 'Edit Consumable'}>
       <div className="space-y-4"><div className="space-y-1"><label className="text-xs font-semibold text-muted block">Consumable Name</label><input className="form-input" value={bForm.consumable_name} onChange={(e) => setBForm({ ...bForm, consumable_name: e.target.value })} /></div>
+      <div className="space-y-1"><label className="text-xs font-semibold text-muted block">Default Unit</label><input className="form-input" value={bForm.default_unit} onChange={(e) => setBForm({ ...bForm, default_unit: e.target.value })} placeholder="e.g. ml, packet, piece" /></div>
       <div className="space-y-1"><label className="text-xs font-semibold text-muted block">Cost</label><input className="form-input" type="number" value={bForm.cost_unit} onChange={(e) => setBForm({ ...bForm, cost_unit: e.target.value })} /></div>
-      <div className="space-y-1"><label className="text-xs font-semibold text-muted block">Status</label><SearchableDropdown value={bForm.status} onChange={(val) => setBForm({ ...bForm, status: val })} options={[{value:'Active',label:'Active'},{value:'Inactive',label:'Inactive'}]} placeholder="Select status" displayKey="label" valueKey="value" /></div>
       <div className="flex justify-end gap-3 mt-2"><button onClick={() => setBModal(null)} className="btn btn-secondary">Cancel</button><button onClick={saveBModal} disabled={loading} className="btn btn-primary">Save</button></div></div>
     </Modal>
     </>);

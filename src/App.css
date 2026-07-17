@@ -21,7 +21,9 @@
 
 /* ===== PREMIUM SIDEBAR ===== */
 .sidebar {
-  width: 240px;
+  width: 260px;
+  min-width: 260px;
+  height: 100vh;
   background: var(--color-surface);
   border-right: 1px solid var(--color-line);
   display: flex;
@@ -29,6 +31,13 @@
   flex-shrink: 0;
   transition: width var(--transition-normal);
   z-index: 30;
+}
+
+.sidebar-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sidebar-header {
@@ -58,6 +67,9 @@
   font-weight: 700;
   color: var(--color-ink);
   letter-spacing: -0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sidebar-nav {
@@ -73,13 +85,16 @@
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--color-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sidebar-item {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
+  padding: 9px 14px;
   border-radius: 8px;
   color: var(--color-text-secondary);
   cursor: pointer;
@@ -89,6 +104,9 @@
   transition: var(--transition-fast);
   position: relative;
   text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sidebar-item:hover {
@@ -104,17 +122,6 @@
 
 .sidebar-item:active {
   transform: scale(0.97);
-}
-
-/* Power button hover states */
-.logout-btn:hover {
-  background: #ffe3e3 !important;
-  transform: scale(1.04);
-  box-shadow: 0 0 0 1px rgba(255,77,77,0.15);
-}
-
-.logout-btn:active {
-  transform: scale(0.96);
 }
 
 .sidebar-item.active {
@@ -159,7 +166,9 @@
   padding: 12px 16px;
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
+  margin-top: auto;
 }
 
 .sidebar-footer-avatar {
@@ -188,6 +197,65 @@
 .sidebar-footer-role {
   font-size: 10.5px;
   color: var(--color-muted);
+}
+
+/* Collapsible sidebar */
+.sidebar.collapsed {
+  width: 70px;
+  min-width: 70px;
+}
+
+.sidebar.collapsed .sidebar-brand,
+.sidebar.collapsed .sidebar-label,
+.sidebar.collapsed .sidebar-group,
+.sidebar.collapsed .sidebar-footer-info {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-header {
+  justify-content: center;
+  padding: 16px 8px;
+}
+
+.sidebar.collapsed .sidebar-item {
+  justify-content: center;
+  padding: 8px;
+}
+
+.sidebar.collapsed .sidebar-footer {
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sidebar.collapsed .logout-btn {
+  margin-left: 0;
+}
+
+.sidebar-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 32px;
+  margin-bottom: 8px;
+  border: none;
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+  border-radius: 6px;
+  transition: var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.sidebar-toggle:hover {
+  background: var(--color-tint-2);
+  color: var(--color-primary);
+}
+
+/* Page wrapper */
+.page-wrapper {
+  animation: fadeIn 0.3s var(--ease-smooth);
 }
 
 /* ===== TOP NAVBAR (Stripe-style) ===== */
@@ -980,8 +1048,8 @@ select.form-input {
   width: 40px;
   height: 40px;
   border-radius: 10px;
-  background: #ffffff;
-  color: #7C3AED;
+  background: #18181B;
+  color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -989,12 +1057,41 @@ select.form-input {
   border: none;
   margin-left: auto;
   transition: var(--transition-fast);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+  position: relative;
 }
 
 .logout-btn:hover {
-  background: #f5f3ff;
-  box-shadow: 0 0 0 3px rgba(124,58,237,0.15);
+  background: #27272A;
+  transform: scale(1.05);
+  box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+}
+
+.logout-btn:active {
+  transform: scale(0.97);
+}
+
+.logout-btn::after {
+  content: 'Logout';
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background: #18181B;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s ease;
+}
+
+.logout-btn:hover::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
 /* ===== ANIMATIONS ===== */
@@ -1150,4 +1247,16 @@ select.form-input {
   font-size: 11px;
   font-weight: 700;
   color: #fff;
+}
+
+/* ===== BRANCH PASSWORD — SHAKE ON ERROR ===== */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-8px); }
+  40% { transform: translateX(8px); }
+  60% { transform: translateX(-6px); }
+  80% { transform: translateX(6px); }
+}
+.shake {
+  animation: shake 0.4s ease-in-out;
 }

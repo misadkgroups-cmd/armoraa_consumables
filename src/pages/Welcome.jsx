@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase } from '../config/supabase';
 
 const FALLBACK_MIS_PASSWORD = import.meta.env.VITE_MASTER_PASSWORD || 'armoraa@2026';
@@ -8,6 +8,7 @@ const MISModal = ({ onClose, onSuccess }) => {
   const [error, setError] = useState(false);
   const [checking, setChecking] = useState(true);
   const [expected, setExpected] = useState(FALLBACK_MIS_PASSWORD);
+  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     const fetchPassword = async () => {
@@ -36,6 +37,10 @@ const MISModal = ({ onClose, onSuccess }) => {
       setError(true);
     }
   };
+  
+  const handleMouseDown = () => setShowPassword(true);
+  const handleMouseUp = () => setShowPassword(false);
+  const handleMouseLeave = () => setShowPassword(false);
 
   return (
     <div
@@ -88,9 +93,9 @@ const MISModal = ({ onClose, onSuccess }) => {
         </div>
 
         {/* Input field */}
-        <div style={{ marginTop: 20 }}>
+        <div style={{ marginTop: 20, position: 'relative' }}>
           <input
-            type="password"
+            type={showPassword ? 'text' : 'password'}
             autoFocus
             disabled={checking}
             value={value}
@@ -106,16 +111,57 @@ const MISModal = ({ onClose, onSuccess }) => {
               borderRadius: 12,
               border: error ? '1px solid rgba(239,68,68,0.6)' : '1px solid rgba(109,62,255,0.35)',
               background: 'rgba(0,0,0,0.5)',
-              padding: '0 16px',
+              padding: '0 48px 0 16px',
               fontSize: 15,
               fontWeight: 600,
               color: '#fff',
               outline: 'none',
-              letterSpacing: value ? '0.15em' : '0',
+              letterSpacing: showPassword ? '0' : value ? '0.15em' : '0',
               boxShadow: error ? '0 0 0 4px rgba(239,68,68,0.12)' : 'none',
               boxSizing: 'border-box',
             }}
           />
+          <button
+            type="button"
+            onMouseDown={handleMouseDown}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseLeave}
+            onTouchStart={handleMouseDown}
+            onTouchEnd={handleMouseUp}
+            onTouchCancel={handleMouseLeave}
+            tabIndex={-1}
+            style={{
+              position: 'absolute',
+              right: 12,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              background: 'none',
+              border: 'none',
+              cursor: 'pointer',
+              padding: 8,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#6B7280',
+              transition: 'color 0.2s',
+              outline: 'none',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = '#D1D5DB'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = '#6B7280'; }}
+            title="Hold to show password"
+          >
+            {showPassword ? (
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                <line x1="1" y1="1" x2="23" y2="23"/>
+              </svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+            )}
+          </button>
           {error && (
             <p style={{ margin: '8px 0 0 0', textAlign: 'center', fontSize: 13, fontWeight: 600, color: '#F87171' }}>
               Invalid password
@@ -172,12 +218,185 @@ const MISModal = ({ onClose, onSuccess }) => {
   );
 };
 
+const BranchPasswordModal = ({ branch, onClose, onSuccess }) => {
+  const [value, setValue] = useState('');
+  const [error, setError] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => inputRef.current?.focus(), 50);
+    return () => clearTimeout(t);
+  }, []);
+
+  const handleVerify = async () => {
+    if (!value) return setError(true);
+    setChecking(true);
+    try {
+      const { data, error: dbErr } = await supabase
+        .from('branch_access')
+        .select('branch_password')
+        .eq('branch_id', branch.id)
+        .eq('status', 'Active')
+        .single();
+
+      // Spec-mapped passwords (used whenever the DB value isn't available,
+      // e.g. RLS blocks the anon SELECT or the row/table is missing)
+      const FALLBACK = {
+        'ANNA NAGAR': 'armoraa@02',
+        'ALWARPET': 'armoraa@10',
+        'VELACHERY': 'armoraa@2002',
+      };
+      const fallbackExpected = FALLBACK[String(branch.branch_name).toUpperCase().trim()] || null;
+
+      // Prefer the database value when it was actually returned
+      const expected = (data && data.branch_password)
+        ? data.branch_password
+        : fallbackExpected;
+
+      if (expected && value === expected) {
+        onSuccess();
+      } else {
+        setError(true);
+        setValue('');
+      }
+    } catch {
+      setError(true);
+      setValue('');
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const handleMouseDown = () => setShowPassword(true);
+  const handleMouseUp = () => setShowPassword(false);
+  const handleMouseLeave = () => setShowPassword(false);
+
+  return (
+    <div
+      className="fixed inset-0 z-[200] flex items-center justify-center p-4"
+      style={{ background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)' }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          width: 520,
+          background: 'rgba(13,10,22,0.92)',
+          borderRadius: 18,
+          border: '1px solid rgba(109,62,255,0.25)',
+          boxShadow: '0 0 80px rgba(109,62,255,0.25), 0 0 0 1px rgba(255,255,255,0.04)',
+          padding: 24,
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start gap-5">
+          <div
+            style={{ width: 110, height: 110, borderRadius: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, overflow: 'hidden', background: 'transparent' }}
+          >
+            <img src="/armoraa.png" alt="Armoraa" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+          </div>
+          <div className="flex-1" style={{ paddingTop: 4 }}>
+            <h3 style={{ fontSize: 40, fontWeight: 700, color: '#fff', letterSpacing: '-0.02em', lineHeight: 1.1, margin: 0 }}>
+              BRANCH ACCESS
+            </h3>
+            <p style={{ fontSize: 16, fontWeight: 400, color: '#9CA3AF', margin: '6px 0 0 0' }}>
+              Enter password for <strong style={{ color: '#D1D5DB' }}>{branch?.branch_name}</strong>
+            </p>
+          </div>
+        </div>
+
+        <div style={{ marginTop: 20, position: 'relative' }}>
+          <input
+            ref={inputRef}
+            type={showPassword ? 'text' : 'password'}
+            autoFocus
+            disabled={checking}
+            value={value}
+            onChange={(e) => { setValue(e.target.value); setError(false); }}
+            onKeyDown={(e) => e.key === 'Enter' && !checking && handleVerify()}
+            placeholder="Enter branch password"
+            className={error ? 'shake' : ''}
+            style={{
+              width: '100%',
+              height: 56,
+              borderRadius: 12,
+              border: error ? '1px solid rgba(239,68,68,0.6)' : '1px solid rgba(109,62,255,0.35)',
+              background: 'rgba(0,0,0,0.5)',
+              padding: '0 48px 0 16px',
+              fontSize: 15,
+              fontWeight: 600,
+              color: '#fff',
+              outline: 'none',
+              letterSpacing: showPassword ? '0' : value ? '0.15em' : '0',
+              boxShadow: error ? '0 0 0 4px rgba(239,68,68,0.12)' : 'none',
+              boxSizing: 'border-box',
+            }}
+          />
+          <button
+            type="button"
+            onMouseDown={handleMouseDown}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseLeave}
+            onTouchStart={handleMouseDown}
+            onTouchEnd={handleMouseUp}
+            onTouchCancel={handleMouseLeave}
+            tabIndex={-1}
+            style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', padding: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6B7280', transition: 'color 0.2s', outline: 'none' }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = '#D1D5DB'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = '#6B7280'; }}
+            title="Hold to show password"
+          >
+            {showPassword ? (
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                <line x1="1" y1="1" x2="23" y2="23"/>
+              </svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+            )}
+          </button>
+          {error && (
+            <p style={{ margin: '8px 0 0 0', textAlign: 'center', fontSize: 13, fontWeight: 600, color: '#F87171' }}>
+              Invalid password for selected branch
+            </p>
+          )}
+        </div>
+
+        <div style={{ display: 'flex', gap: 12, marginTop: 20 }}>
+          <button
+            onClick={onClose}
+            style={{ flex: 1, height: 50, borderRadius: 12, border: '1px solid rgba(109,62,255,0.2)', background: 'rgba(0,0,0,0.5)', color: '#D1D5DB', fontSize: 15, fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(109,62,255,0.1)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(0,0,0,0.5)'; }}
+          >
+            Back
+          </button>
+          <button
+            onClick={handleVerify}
+            disabled={checking}
+            style={{ flex: 1, height: 50, borderRadius: 12, border: 'none', background: 'linear-gradient(135deg, #8A2BE2, #6C63FF)', color: '#fff', fontSize: 15, fontWeight: 700, cursor: checking ? 'not-allowed' : 'pointer', opacity: checking ? 0.5 : 1, transition: 'all 0.2s', boxShadow: '0 4px 16px rgba(108,99,255,0.3)' }}
+            onMouseEnter={(e) => { if (!checking) e.currentTarget.style.transform = 'scale(1.02)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
+          >
+            {checking ? 'Verifying…' : 'Continue'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const Welcome = ({ onBranchSelect, onMisLogin }) => {
   const [branches, setBranches] = useState([]);
   const [selectedBranch, setSelectedBranch] = useState('');
   const [loading, setLoading] = useState(true);
   const [misOpen, setMisOpen] = useState(false);
   const [openDropdown, setOpenDropdown] = useState(false);
+  const [pendingBranch, setPendingBranch] = useState(null);
 
   useEffect(() => { fetchBranches(); }, []);
 
@@ -215,9 +434,14 @@ const Welcome = ({ onBranchSelect, onMisLogin }) => {
   const handleContinue = () => {
     if (selectedBranch) {
       const branch = branches.find(b => String(b.id) === String(selectedBranch));
-      const numericId = Number(selectedBranch);
-      onBranchSelect(numericId, branch?.branch_name);
+      if (branch) setPendingBranch(branch);
     }
+  };
+
+  const handleBranchSuccess = () => {
+    const branch = pendingBranch;
+    setPendingBranch(null);
+    if (branch) onBranchSelect(Number(branch.id), branch.branch_name);
   };
 
   const stars = useMemo(() =>
@@ -342,6 +566,14 @@ const Welcome = ({ onBranchSelect, onMisLogin }) => {
             const first = branches[0];
             onMisLogin(first ? Number(first.id) : null, first?.branch_name || 'MIS');
           }}
+        />
+      )}
+
+      {pendingBranch && (
+        <BranchPasswordModal
+          branch={pendingBranch}
+          onClose={() => setPendingBranch(null)}
+          onSuccess={handleBranchSuccess}
         />
       )}
     </div>

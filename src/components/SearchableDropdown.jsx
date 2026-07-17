@@ -7,7 +7,7 @@ const SearchableDropdown = ({ options = [], value, onChange, placeholder = "Sear
   const dropdownRef = useRef(null);
   const inputRef = useRef(null);
 
-  const selectedOption = options.find(opt => opt[valueKey] === value);
+  const selectedOption = options.find(opt => String(opt[valueKey]) === String(value));
 
   useEffect(() => {
     const handleClickOutside = (event) => {

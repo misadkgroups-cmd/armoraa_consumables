@@ -6,7 +6,7 @@ import Chart from 'react-apexcharts';
 import { motion } from 'framer-motion';
 import {
   Calendar, Activity, FileText, Box, Stethoscope, Scissors,
-  Bell, TrendingUp
+  Bell, TrendingUp, ClipboardList, CheckCircle, Clock
 } from 'lucide-react';
 
 /* ---------- Animated Counter ---------- */
@@ -85,6 +85,18 @@ const Overview = () => {
       if (branchId) query = query.eq('branch_id', branchId);
       const { data: bills } = await query;
       const billsArray = bills || [];
+
+      // Billing Log metrics
+      let billingArray = [];
+      try {
+        let billingQuery = supabase.from('billing_log').select('*');
+        if (branchId) billingQuery = billingQuery.eq('branch_id', branchId);
+        const { data: billingLogs } = await billingQuery;
+        billingArray = billingLogs || [];
+      } catch (e) {
+        console.warn('billing_log table not found, skipping billing metrics');
+        billingArray = [];
+      }
 
       // Stats
       const lastWeekStart = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
@@ -165,6 +177,11 @@ const Overview = () => {
       const topService = serviceChart[0] || null;
       const topMachine = machineryChart[0] || null;
 
+      // Billing log stats
+      const todaysBills = billingArray.filter(b => b.service_date === todayStr).length;
+      const pendingConsumables = billingArray.filter(b => b.consumable_status === 'Incomplete').length;
+      const completedConsumables = billingArray.filter(b => b.consumable_status === 'Complete').length;
+
       // Inventory health (simulated stock levels based on data)
       const totalTracked = billableTop.length + nonBillableTop.length;
       const lowStock = Math.max(0, Math.round(totalTracked * 0.25));
@@ -174,7 +191,8 @@ const Overview = () => {
       setData({
         kpi: {
           week: lastWeekCount, month: thisMonthCount, total: overallCount,
-          active: activeItems, sessions: todaysSessions, procedures: todaysProcedures
+          active: activeItems, sessions: todaysSessions, procedures: todaysProcedures,
+          todaysBills, pendingConsumables, completedConsumables
         },
         spark: {
           week: billsTrend.slice(-7).length ? billsTrend.slice(-7) : [1, 2, 3, 4, 3, 5, 6],
@@ -183,6 +201,9 @@ const Overview = () => {
           active: billsTrend.length ? billsTrend.map(x => x * 2) : [4, 6, 5, 7, 6, 8, 9],
           sessions: billsTrend.slice(-7).length ? billsTrend.slice(-7) : [1, 1, 2, 1, 3, 2, 4],
           procedures: billsTrend.slice(-7).length ? billsTrend.slice(-7) : [1, 2, 1, 2, 3, 2, 3],
+          todaysBills: Array(7).fill(0).map(() => Math.floor(Math.random() * 5)),
+          pendingConsumables: Array(7).fill(0).map(() => Math.floor(Math.random() * 3) + 1),
+          completedConsumables: Array(7).fill(0).map(() => Math.floor(Math.random() * 4) + 2),
         },
         serviceChart, machineryChart, billableTop, nonBillableTop, topService, topMachine,
         inventory: { active: activeItems, lowStock, criticalStock, healthyStock, healthyPct: totalTracked ? Math.round((healthyStock / totalTracked) * 100) : 100 },

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { format } from 'date-fns';
+import * as XLSX from 'xlsx';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
 import SearchableDropdown from '../components/SearchableDropdown';
@@ -63,8 +64,6 @@ const Reports = () => {
   const generateBillableReport = async () => {
     setLoading(true);
     try {
-      // Relational nested select: resolve billable + non-billable names directly via FK joins,
-      // so we never hit raw IDs or brittle batch_id matching (the old "undefined (1414)" bug).
       const slotFields = [];
       for (let i = 1; i <= 14; i++) {
         slotFields.push(`consumable_${i}_id ( consumable_name, cost_unit )`);
@@ -94,8 +93,8 @@ const Reports = () => {
         const processed = data.map(row => {
           const consumables = []; const nonBillableUsed = []; let totalUnits = 0; let totalCost = 0;
           for (let i = 1; i <= 14; i++) {
-            const cid = row[`consumable_${i}_id`];               // embedded object or null (billable)
-            const nb = row[`non_billable_registry_id_${i}`];     // embedded object or null (non-billable)
+            const cid = row[`consumable_${i}_id`];
+            const nb = row[`non_billable_registry_id_${i}`];
             const units = row[`consumable_${i}_units`];
             if (cid && cid.consumable_name) {
               const cost = Number(cid.cost_unit || 0);
@@ -104,7 +103,7 @@ const Reports = () => {
             }
             if (nb && nb.master_non_billable_consumables) {
               const name = nb.master_non_billable_consumables.product_name || '-';
-              if (!nonBillableUsed.find(n => n.batch_id === nb.batch_id)) nonBillableUsed.push({ name, batch_id: nb.batch_id, units });
+              if (!nonBillableUsed.find(n => n.name === name)) nonBillableUsed.push({ name });
             }
           }
           return { ...row, bill_id: row.bill_id, uid: row.uid, report_date: row.report_date, branch_name: branchMap[row.branch_id] || '-', machine_name: machineryMap[row.machinery_id] || '-', service_name: serviceMap[row.service_id] || '-', consumableCount: consumables.length, consumables, nonBillableUsed, nonBillableCount: nonBillableUsed.length, totalUnits, totalCost };
@@ -142,22 +141,22 @@ const Reports = () => {
     finally { setNbLoading(false); }
   }, [nbStart, nbEnd, nbBranch, nbReportMode]);
 
-  // Real-time: any change to date range or any filter triggers an immediate cascade + report refresh
   useEffect(() => { if (reportType === 'non-billable') reloadNonBillable(); }, [reportType, reloadNonBillable]);
 
   const clearNbFilters = () => { setNbBranch(''); };
 
+  // ============ EXPORT FUNCTIONS ============
   const downloadCSV = () => {
     let headers, rows;
-      if (reportType === 'non-billable') {
-        if (nbReportMode === 'summary') {
-          headers = ['NON-BILLABLE CONSUMABLE', 'BATCH ID', 'QUANTITY USED', 'TOTAL COST'];
-          rows = nbData.map(r => [r['NON-BILLABLE CONSUMABLE'], r['BATCH ID'], r['QUANTITY USED'], r['TOTAL COST']]);
-        } else {
-          headers = ['DATE', 'BRANCH', 'NON-BILLABLE CONSUMABLE', 'BATCH ID', 'OPENING DATE', 'CLOSING DATE', 'SERVICE USED BY', 'TIMES USED', 'STATUS'];
-          rows = nbData.map(r => [r.date, r.branch, r.consumableName, r.batchId, r.openingDate, r.closingDate, r.serviceUsedBy, r.serviceUsedCount, r.status]);
-        }
+    if (reportType === 'non-billable') {
+      if (nbReportMode === 'summary') {
+        headers = ['NON-BILLABLE CONSUMABLE', 'QUANTITY USED', 'TOTAL COST'];
+        rows = nbData.map(r => [r['NON-BILLABLE CONSUMABLE'], r['QUANTITY USED'], r['TOTAL COST']]);
       } else {
+        headers = ['DATE', 'BRANCH', 'NON-BILLABLE CONSUMABLE', 'OPENING DATE', 'CLOSING DATE', 'SERVICE USED BY', 'TIMES USED', 'STATUS'];
+        rows = nbData.map(r => [r.date, r.branch, r.consumableName, r.openingDate, r.closingDate, r.serviceUsedBy, r.serviceUsedCount, r.status]);
+      }
+    } else {
       if (reportData.length === 0) return;
       let maxC = 0; reportData.forEach(r => { if (r.consumableCount > maxC) maxC = r.consumableCount; });
       headers = ['BILL ID', 'UID', 'DATE', 'BRANCH', 'MACHINERY', 'SERVICE'];
@@ -166,13 +165,64 @@ const Reports = () => {
       rows = reportData.map(row => {
         const v = [row.bill_id, row.uid, row.report_date, row.branch_name || '', row.machine_name || '', row.service_name || ''];
         for (let i = 1; i <= maxC; i++) { const c = row.consumables.find(x => x.slot === i); v.push(c ? c.name : '', c && c.units ? c.units : '', c && c.cost ? c.cost : ''); }
-        v.push(row.totalUnits || 0, row.totalCost || 0, row.nonBillableUsed?.length ? row.nonBillableUsed.map(n => `${n.name} (${n.batch_id})`).join(', ') : '');
+        v.push(row.totalUnits || 0, row.totalCost || 0, row.nonBillableUsed?.length ? row.nonBillableUsed.map(n => n.name).join(', ') : '');
         return v;
       });
     }
     const csv = [headers.join(','), ...rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `${reportType}-report-${format(new Date(), 'yyyy-MM-dd')}.csv`; a.click(); URL.revokeObjectURL(url);
+  };
+
+  const downloadExcel = () => {
+    let rows;
+    if (reportType === 'non-billable') {
+      if (nbReportMode === 'summary') {
+        rows = nbData.map(r => ({
+          'NON-BILLABLE CONSUMABLE': r['NON-BILLABLE CONSUMABLE'],
+          'QUANTITY USED': r['QUANTITY USED'],
+          'TOTAL COST': r['TOTAL COST']
+        }));
+      } else {
+        rows = nbData.map(r => ({
+          'DATE': r.date,
+          'BRANCH': r.branch,
+          'NON-BILLABLE CONSUMABLE': r.consumableName,
+          'OPENING DATE': r.openingDate,
+          'CLOSING DATE': r.closingDate,
+          'SERVICE USED BY': r.serviceUsedBy,
+          'TIMES USED': r.serviceUsedCount,
+          'STATUS': r.status
+        }));
+      }
+    } else {
+      if (reportData.length === 0) return;
+      let maxC = 0; reportData.forEach(r => { if (r.consumableCount > maxC) maxC = r.consumableCount; });
+      rows = reportData.map(row => {
+        const rowObj = {
+          'BILL ID': row.bill_id,
+          'UID': row.uid,
+          'DATE': row.report_date,
+          'BRANCH': row.branch_name || '',
+          'MACHINERY': row.machine_name || '',
+          'SERVICE': row.service_name || ''
+        };
+        for (let i = 1; i <= maxC; i++) {
+          const c = row.consumables.find(x => x.slot === i);
+          rowObj[`CONSUMABLE - ${i}`] = c ? c.name : '';
+          rowObj[`UNITS - ${i}`] = c && c.units ? c.units : '';
+          rowObj[`COST - ${i}`] = c && c.cost ? c.cost : '';
+        }
+        rowObj['TOTAL UNITS'] = row.totalUnits || 0;
+        rowObj['TOTAL COST'] = row.totalCost || 0;
+        rowObj['NON-BILLABLE ITEMS'] = row.nonBillableUsed?.length ? row.nonBillableUsed.map(n => n.name).join(', ') : '';
+        return rowObj;
+      });
+    }
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, reportType === 'non-billable' ? 'Non-Billable Report' : 'Billable Report');
+    XLSX.writeFile(workbook, `${reportType}-report-${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
   };
 
   const [toast, setToast] = useState(null);
@@ -204,15 +254,12 @@ const Reports = () => {
         const slot = i + 1;
         const cid = r.consumableId ? Number(r.consumableId) : null;
         if (cid) {
-          // Billable (master) item: write to consumable_X_id, keep non-billable columns NULL.
           payload[`consumable_${slot}_id`] = cid;
           payload[`is_non_billable_${slot}`] = false;
           payload[`non_billable_registry_id_${slot}`] = null;
           payload[`consumable_${slot}_units`] = r.units ? Number(r.units) : null;
           payload[`consumable_${slot}_batch_id`] = null;
         } else {
-          // No billable id typed: preserve the original non-billable registry data
-          // (consumable_X_id stays NULL to bypass the master FK constraint).
           payload[`consumable_${slot}_id`] = null;
           payload[`is_non_billable_${slot}`] = editingBill[`is_non_billable_${slot}`] || false;
           payload[`non_billable_registry_id_${slot}`] = editingBill[`non_billable_registry_id_${slot}`] != null ? editingBill[`non_billable_registry_id_${slot}`] : null;
@@ -220,7 +267,6 @@ const Reports = () => {
           payload[`consumable_${slot}_batch_id`] = editingBill[`consumable_${slot}_batch_id`] || null;
         }
       }
-      // Preserve any slots beyond the edited rows (especially non-billable data) instead of nulling them.
       for (let i = max; i < 14; i++) {
         const slot = i + 1;
         payload[`consumable_${slot}_id`] = editingBill[`consumable_${slot}_id`] != null ? editingBill[`consumable_${slot}_id`] : null;
@@ -278,7 +324,8 @@ const Reports = () => {
               </div>
               <SearchableDropdown value={nbBranch} onChange={(val) => { setNbBranch(val); setNbHasReport(false); }} options={branches.map(b => ({value: b.id, label: b.branch_name}))} placeholder="All Branches" displayKey="label" valueKey="value" disabled={nbLoading} />
               <button onClick={reloadNonBillable} disabled={nbLoading} className="btn btn-primary">{nbLoading ? 'Loading...' : 'Generate Report'}</button>
-              <button onClick={downloadCSV} disabled={!nbData.length} className="btn btn-secondary">Download CSV</button>
+              <button onClick={downloadCSV} disabled={!nbData.length} className="btn btn-secondary">Export CSV</button>
+              <button onClick={downloadExcel} disabled={!nbData.length} className="btn btn-secondary">Export Excel</button>
             </div>
             <div className="mt-3 flex items-center gap-3">
               {nbBranch && (
@@ -298,7 +345,6 @@ const Reports = () => {
                     {nbReportMode === 'summary' ? (
                       <>
                         <th className="rpt-c-nonbill">Non-Billable Consumable</th>
-                        <th className="rpt-c-units">Batch ID</th>
                         <th className="rpt-c-units">Quantity Used</th>
                         <th className="rpt-c-cost">Total Cost</th>
                       </>
@@ -307,7 +353,6 @@ const Reports = () => {
                         <th className="rpt-c-date">Date</th>
                         <th className="rpt-c-branch">Branch</th>
                         <th className="rpt-c-nonbill">Non-Billable Consumable</th>
-                        <th className="rpt-c-units">Batch ID</th>
                         <th className="rpt-c-date">Opening Date</th>
                         <th className="rpt-c-date">Closing Date</th>
                         <th className="rpt-c-service">Service Used By</th>
@@ -318,13 +363,12 @@ const Reports = () => {
                   </tr></thead>
                   <tbody>
                     {nbData.length === 0 && (
-                      <tr><td colSpan={nbReportMode === 'summary' ? 4 : 9} className="text-center text-muted" style={{ padding: 40 }}>No matching records found. Try changing the selected filters.</td></tr>
+                      <tr><td colSpan={nbReportMode === 'summary' ? 3 : 9} className="text-center text-muted" style={{ padding: 40 }}>No matching records found. Try changing the selected filters.</td></tr>
                     )}
                     {nbData.map((row, i) => (
                       nbReportMode === 'summary' ? (
                         <tr key={i}>
                           <td className="rpt-wrap">{row['NON-BILLABLE CONSUMABLE']}</td>
-                          <td className="rpt-nowrap" style={{ textAlign: 'center' }}>{row['BATCH ID']}</td>
                           <td className="rpt-nowrap" style={{ textAlign: 'center' }}>{row['QUANTITY USED']}</td>
                           <td className="rpt-nowrap" style={{ textAlign: 'right' }}>{row['TOTAL COST']}</td>
                         </tr>
@@ -333,7 +377,6 @@ const Reports = () => {
                           <td className="rpt-nowrap"><span className="rpt-date">{fmtDate(row.date)}</span></td>
                           <td className="rpt-nowrap">{row.branch || '-'}</td>
                           <td className="rpt-wrap">{row.consumableName}</td>
-                          <td className="rpt-nowrap" style={{ textAlign: 'center' }}>{row.batchId}</td>
                           <td className="rpt-nowrap">{row.openingDate || '-'}</td>
                           <td className="rpt-nowrap">{row.closingDate || '-'}</td>
                           <td className="rpt-wrap">{row.serviceUsedBy || '-'}</td>
@@ -367,7 +410,8 @@ const Reports = () => {
             </div>
             <div className="flex gap-3">
               <button onClick={generateReport} disabled={loading} className="btn btn-primary">{loading ? 'Generating...' : 'Generate Report'}</button>
-              <button onClick={downloadCSV} disabled={reportData.length === 0} className="btn btn-secondary">Download Report (CSV)</button>
+              <button onClick={downloadCSV} disabled={reportData.length === 0} className="btn btn-secondary">Export CSV</button>
+              <button onClick={downloadExcel} disabled={reportData.length === 0} className="btn btn-secondary">Export Excel</button>
             </div>
           </div>
 
@@ -377,7 +421,8 @@ const Reports = () => {
                 <div className="table-toolbar-left"><span className="font-semibold text-text">Report Results</span><span className="text-muted text-sm">({reportData.length} records)</span></div>
                 <div className="table-toolbar-right">
                   <button onClick={() => setShowFilters(!showFilters)} className="btn btn-ghost btn-sm">{showFilters ? 'Hide Filters' : 'Show Filters'}</button>
-                  <button onClick={downloadCSV} disabled={reportData.length === 0} className="btn btn-primary btn-sm">Export Report</button>
+                  <button onClick={downloadCSV} disabled={reportData.length === 0} className="btn btn-primary btn-sm">Export CSV</button>
+                  <button onClick={downloadExcel} disabled={reportData.length === 0} className="btn btn-primary btn-sm">Export Excel</button>
                   <button onClick={resetReport} style={{ color: 'var(--color-danger)' }} className="btn btn-ghost btn-sm">Exit Report</button>
                 </div>
               </div>
@@ -390,7 +435,7 @@ const Reports = () => {
                       const maxN = reportData.reduce((m, r) => Math.max(m, r.nonBillableCount || 0), 0);
                       const cols = [];
                       for (let i = 1; i <= maxC; i++) { cols.push(<th key={`h-${i}`} className="rpt-c-consumable" style={{ background: 'var(--color-tint-2)' }}>CONSUMABLE - {i}</th>); cols.push(<th key={`hu-${i}`} className="rpt-c-units" style={{ background: 'var(--color-tint-2)' }}>UNITS - {i}</th>); cols.push(<th key={`hc-${i}`} className="rpt-c-cost" style={{ background: 'var(--color-tint-2)' }}>COST - {i}</th>); }
-                      for (let i = 1; i <= maxN; i++) { cols.push(<th key={`nh-${i}`} className="rpt-c-nonbill" style={{ background: '#F0FDF4' }}>NON-BILLABLE - {i}</th>); cols.push(<th key={`nb-${i}`} className="rpt-c-units" style={{ background: '#F0FDF4' }}>BATCH - {i}</th>); }
+                      for (let i = 1; i <= maxN; i++) { cols.push(<th key={`nh-${i}`} className="rpt-c-nonbill" style={{ background: '#F0FDF4' }}>NON-BILLABLE - {i}</th>); }
                       return cols;
                     })()}
                     <th className="rpt-c-total" style={{ background: 'var(--color-warnb)' }}>Total Cost</th>
@@ -405,13 +450,13 @@ const Reports = () => {
                           const maxN = reportData.reduce((m, r) => Math.max(m, r.nonBillableCount || 0), 0);
                           const cells = [];
                           for (let i = 1; i <= maxC; i++) { const c = row.consumables.find(x => x.slot === i); cells.push(<td key={`d-${i}`} className="rpt-wrap">{c ? c.name : '-'}</td>); cells.push(<td key={`du-${i}`} className="rpt-nowrap" style={{ textAlign: 'center' }}>{c && c.units ? c.units : '-'}</td>); cells.push(<td key={`dc-${i}`} className="rpt-nowrap" style={{ textAlign: 'right' }}>{c && c.cost ? `${c.cost}` : '-'}</td>); }
-                          for (let i = 1; i <= maxN; i++) { const nb = row.nonBillableUsed[i - 1]; cells.push(<td key={`n-${i}`} className="rpt-wrap">{nb ? nb.name : '-'}</td>); cells.push(<td key={`nb-${i}`} className="rpt-nowrap" style={{ textAlign: 'center' }}>{nb ? nb.batch_id : '-'}</td>); }
+                          for (let i = 1; i <= maxN; i++) { const nb = row.nonBillableUsed[i - 1]; cells.push(<td key={`n-${i}`} className="rpt-wrap">{nb ? nb.name : '-'}</td>); }
                           return cells;
                         })()}
                         <td className="rpt-nowrap rpt-total-cost" style={{ background: 'var(--color-warnb)' }}>{row.totalCost || 0}</td>
                         <td className="rpt-actions-cell">
                           <div className="flex items-center justify-center gap-1.5">
-                            <button onClick={() => openEditBill(row.bill_id)} className="rpt-act-icon edit" title="Edit Record" aria-label="Edit Record"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+                            <button onClick={() => openEditBill(row.bill_id)} className="rpt-act-icon edit" title="Edit Record" aria-label="Edit Record"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><path d="M11 4H4a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
                             <button onClick={() => deleteBill(row.bill_id)} className="rpt-act-icon del" title="Delete Record" aria-label="Delete Record"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
                           </div>
                         </td>

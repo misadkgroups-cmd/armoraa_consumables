@@ -106,6 +106,34 @@ const NonBillableConsumables = () => {
   };
 
   const deleteItem = async (id) => {
+    // Check if this batch is used in any billable_report records
+    const { data: usageCheck, error: checkError } = await supabase
+      .from('billable_report')
+      .select('id')
+      .or([
+        `consumable_1_batch_id.eq.${registry.find(r => r.id === id)?.batch_id || ''}`,
+        `consumable_2_batch_id.eq.${registry.find(r => r.id === id)?.batch_id || ''}`,
+        `consumable_3_batch_id.eq.${registry.find(r => r.id === id)?.batch_id || ''}`,
+        `consumable_4_batch_id.eq.${registry.find(r => r.id === id)?.batch_id || ''}`,
+        `consumable_5_batch_id.eq.${registry.find(r => r.id === id)?.batch_id || ''}`,
+        `consumable_6_batch_id.eq.${registry.find(r => r.id === id)?.batch_id || ''}`,
+        `consumable_7_batch_id.eq.${registry.find(r => r.id === id)?.batch_id || ''}`,
+        `consumable_8_batch_id.eq.${registry.find(r => r.id === id)?.batch_id || ''}`,
+        `consumable_9_batch_id.eq.${registry.find(r => r.id === id)?.batch_id || ''}`,
+        `consumable_10_batch_id.eq.${registry.find(r => r.id === id)?.batch_id || ''}`,
+        `consumable_11_batch_id.eq.${registry.find(r => r.id === id)?.batch_id || ''}`,
+        `consumable_12_batch_id.eq.${registry.find(r => r.id === id)?.batch_id || ''}`,
+        `consumable_13_batch_id.eq.${registry.find(r => r.id === id)?.batch_id || ''}`,
+        `consumable_14_batch_id.eq.${registry.find(r => r.id === id)?.batch_id || ''}`
+      ].join(','));
+    
+    if (checkError) return console.error(checkError);
+    
+    if (usageCheck && usageCheck.length > 0) {
+      alert('Cannot delete this batch. It is already linked to service records. You can mark it as Completed instead.');
+      return;
+    }
+    
     if (!window.confirm('Delete this batch record?')) return;
     try { const { error } = await supabase.from('non_billable_consumable_registry').delete().eq('id', id); if (!error) fetchRegistry(); }
     catch (e) { console.error(e); }

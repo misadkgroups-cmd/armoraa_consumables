@@ -34,7 +34,7 @@ export const MAX_SLOTS = 14;
 export function prepareSavePayload({ rows = [], allConsumables = [], getRegistryId, base = {} }) {
   const payload = {
     branch_id: base.branchId,
-    bill_id: base.billId,
+    bill_id: base.billId, // This stores the bill_no from billing_log as a VARCHAR
     uid: base.uid,
     service_id: base.serviceId || null,
     machinery_id: base.machineryId || null,

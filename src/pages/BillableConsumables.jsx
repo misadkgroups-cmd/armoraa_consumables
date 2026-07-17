@@ -4,6 +4,49 @@ import { useBranch } from '../context/BranchContext';
 import SearchableDropdown from '../components/SearchableDropdown';
 import { prepareSavePayload } from '../utils/billableReportPayload';
 
+// Read URL query params for Billing Log → Billable Consumables flow
+const useQueryParams = () => {
+  const [params, setParams] = useState(() => {
+    if (typeof window === 'undefined') return {};
+    const search = new URLSearchParams(window.location.search);
+    return {
+      bill_no: search.get('bill_no') || '',
+      uid: search.get('uid') || '',
+      service_id: search.get('service_id') || '',
+      service_name: search.get('service_name') || '',
+      service_date: search.get('service_date') || '',
+      billing_log_id: search.get('billing_log_id') || '',
+    };
+  });
+
+  useEffect(() => {
+    const updateParams = () => {
+      const search = new URLSearchParams(window.location.search);
+      setParams({
+        bill_no: search.get('bill_no') || '',
+        uid: search.get('uid') || '',
+        service_id: search.get('service_id') || '',
+        service_name: search.get('service_name') || '',
+        service_date: search.get('service_date') || '',
+        billing_log_id: search.get('billing_log_id') || '',
+      });
+    };
+
+    const onPop = () => updateParams();
+    
+    // Listen for both popstate and pushstate (via custom event)
+    window.addEventListener('popstate', onPop);
+    window.addEventListener('pushstate', updateParams);
+    
+    return () => {
+      window.removeEventListener('popstate', onPop);
+      window.removeEventListener('pushstate', updateParams);
+    };
+  }, []);
+
+  return params;
+};
+
 const FIELD_LABEL = {
   fontSize: '11px',
   fontWeight: 600,
@@ -19,14 +62,16 @@ const CARD_STYLE = {
   boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
 };
 
-export default function BillableConsumables() {
+export default function BillableConsumables({ onNavigate }) {
   const { branchId } = useBranch();
-  const [billId, setBillId] = useState('');
-  const [uid, setUid] = useState('');
-  const [service, setService] = useState('');
+  const query = useQueryParams();
+  const [billId, setBillId] = useState(query.bill_no || '');
+  const [uid, setUid] = useState(query.uid || '');
+  const [service, setService] = useState(query.service_id || '');
   const [machinery, setMachinery] = useState('');
   const [services, setServices] = useState([]);
   const [machines, setMachines] = useState([]);
+  const [billingLogId, setBillingLogId] = useState(query.billing_log_id || '');
   // Active (non-completed) batch registry rows
   const [registry, setRegistry] = useState([]);
   // Combined dropdown options
@@ -38,6 +83,35 @@ export default function BillableConsumables() {
   const [noMachineryMapping, setNoMachineryMapping] = useState(false);
   const billIdRef = useRef(null);
 
+  // Sync state with URL params reactively
+  useEffect(() => {
+    if (query.bill_no) setBillId(query.bill_no);
+  }, [query.bill_no]);
+
+  useEffect(() => {
+    if (query.uid) setUid(query.uid);
+  }, [query.uid]);
+
+  useEffect(() => {
+    if (query.service_id) setService(query.service_id);
+  }, [query.service_id]);
+
+  useEffect(() => {
+    if (query.service_date) setReportDate(query.service_date);
+  }, [query.service_date]);
+
+  useEffect(() => {
+    if (query.billing_log_id) setBillingLogId(query.billing_log_id);
+  }, [query.billing_log_id]);
+
+  // If opened from Billing Log, prefill service and lock machinery after fetch
+  useEffect(() => {
+    if (!query.service_id) return;
+    const sid = String(query.service_id);
+    setService(sid);
+    fetchServicesAndMachinery(sid);
+  }, [branchId, query.service_id]);
+
   useEffect(() => {
     if (branchId) {
       fetchServices();
@@ -46,6 +120,83 @@ export default function BillableConsumables() {
     }
     setTimeout(() => billIdRef.current?.focus(), 100);
   }, [branchId]);
+
+  // If opened from Edit (Complete status), load existing consumable rows
+  // Must run AFTER fetchAllConsumables has populated allConsumables
+  useEffect(() => {
+    if (!branchId || !query.billing_log_id || allConsumables.length === 0) return;
+    loadExistingConsumables();
+  }, [branchId, query.billing_log_id, allConsumables]);
+
+  const loadExistingConsumables = async () => {
+    try {
+      const { data: reports, error } = await supabase
+        .from('billable_report')
+        .select('*')
+        .eq('billing_log_id', query.billing_log_id)
+        .eq('branch_id', branchId)
+        .single();
+
+      if (error || !reports) return;
+
+      // For non-billable items, fetch registry data to map registry_id -> product_id
+      const regIds = [];
+      for (let i = 1; i <= 14; i++) {
+        const isNb = reports[`is_non_billable_${i}`];
+        const regId = reports[`non_billable_registry_id_${i}`];
+        if (isNb && regId) regIds.push(regId);
+      }
+
+      let registryProductMap = {};
+      if (regIds.length > 0) {
+        const { data: regRows } = await supabase
+          .from('non_billable_consumable_registry')
+          .select('id, product_id')
+          .in('id', regIds);
+        if (regRows) {
+          regRows.forEach(r => { registryProductMap[r.id] = r.product_id; });
+        }
+      }
+
+      const loadedRows = [];
+      for (let i = 1; i <= 14; i++) {
+        const rawId = reports[`consumable_${i}_id`];
+        const cUnits = reports[`consumable_${i}_units`];
+        const cBatch = reports[`consumable_${i}_batch_id`];
+        const isNb = reports[`is_non_billable_${i}`];
+        const regId = reports[`non_billable_registry_id_${i}`];
+        
+        if (isNb && regId) {
+          const productId = registryProductMap[regId];
+          if (productId) {
+            loadedRows.push({
+              id: Date.now() + i,
+              consumableId: `nbproduct-${productId}`,
+              consumableType: 'nonbillable',
+              units: 'USED',
+              batchId: cBatch || '',
+              registryId: regId || null,
+            });
+          }
+        } else if (rawId && !isNb) {
+          const compositeId = `billable-${rawId}`;
+          loadedRows.push({
+            id: Date.now() + i,
+            consumableId: compositeId,
+            consumableType: 'billable',
+            units: String(cUnits || ''),
+            batchId: cBatch || '',
+            registryId: null,
+          });
+        }
+      }
+      if (loadedRows.length > 0) {
+        setRows(loadedRows);
+      }
+    } catch (error) {
+      console.error('Error loading existing consumables:', error);
+    }
+  };
 
   useEffect(() => {
     const onFocus = () => { if (branchId) { fetchAllConsumables(); } };
@@ -68,10 +219,23 @@ export default function BillableConsumables() {
 
   const fetchServices = async () => {
     try {
-      let { data, error } = await supabase.from('master_services').select('id, service_name').eq('branch_id', branchId).order('service_name');
-      if (!data || data.length === 0) { const res = await supabase.from('master_services').select('id, service_name').order('service_name'); data = res.data; }
+      const { data, error } = await supabase
+        .from('master_services')
+        .select('id, service_name')
+        .order('service_name');
+      
+      if (error) throw error;
       if (data) setServices(data || []);
-    } catch (error) { console.error('Error fetching services:', error); }
+    } catch (error) {
+      console.error('Error fetching services:', error);
+    }
+  };
+
+  const fetchServicesAndMachinery = async (serviceId) => {
+    await fetchServices();
+    setTimeout(() => {
+      fetchMachinesForService(serviceId);
+    }, 300);
   };
 
   const fetchMachines = async () => {
@@ -243,6 +407,17 @@ export default function BillableConsumables() {
     if (rows.length === 0) { showToast('error', 'Please add at least one consumable'); return; }
 
     try {
+      // Validate that billing_log_id exists in billing_log table before inserting
+      let validBillingLogId = null;
+      if (billingLogId) {
+        const { data: logExists } = await supabase
+          .from('billing_log')
+          .select('id')
+          .eq('id', billingLogId)
+          .single();
+        validBillingLogId = logExists ? billingLogId : null;
+      }
+
       const reportPayload = prepareSavePayload({
         rows,
         allConsumables,
@@ -256,16 +431,42 @@ export default function BillableConsumables() {
           reportDate,
         },
       });
-      const { error } = await supabase.from('billable_report').insert(reportPayload);
-      if (!error) { showToast('success', 'Record saved successfully'); }
+      
+      // Add validated billing_log_id to establish the foreign key relationship
+      const payloadWithRelationship = {
+        ...reportPayload,
+        billing_log_id: validBillingLogId,
+      };
+      
+      const { error } = await supabase.from('billable_report').insert(payloadWithRelationship);
+      if (!error) {
+        showToast('success', 'Record saved successfully');
+        // Update billing_log status to Complete via foreign key relationship
+        if (validBillingLogId) {
+          const { error: updErr } = await supabase
+            .from('billing_log')
+            .update({ 
+              consumable_status: 'Complete', 
+              consumable_completed_at: new Date() 
+            })
+            .eq('id', validBillingLogId);
+          if (updErr) console.error('Failed to update billing_log status', updErr);
+        }
+      }
       else { console.error('Save error:', error); showToast('error', error.message || 'Failed to save record'); }
     } catch (e) { console.error('Save exception:', e); showToast('error', 'Failed to save record'); }
   };
-
   const handleClear = () => {
-    if (billId || uid || rows.length > 0) { if (!window.confirm('Clear all entered data?')) return; }
-    setBillId(''); setUid(''); setService(''); setMachinery(''); setMachines([]); setMachineryLocked(false); setNoMachineryMapping(false); setRows([]);
-    setReportDate(new Date().toISOString().split('T')[0]); showToast('success', 'Form cleared');
+    // Clear all form state
+    setBillId(''); setUid(''); setService(''); setMachinery(''); setMachines([]); 
+    setMachineryLocked(false); setNoMachineryMapping(false); setRows([]);
+    setReportDate(new Date().toISOString().split('T')[0]);
+    // Also clear URL params so they don't re-populate the form
+    if (window.location.search) {
+      const clean = window.location.pathname;
+      window.history.replaceState({}, '', clean);
+    }
+    showToast('success', 'Form cleared');
   };
 
   const handleUnitsChange = (id, value) => { setRows((prev) => prev.map((r) => (r.id === id ? { ...r, units: value } : r))); };
@@ -282,6 +483,28 @@ export default function BillableConsumables() {
 
   const showToast = (type, message) => { setToast({ type, message }); setTimeout(() => setToast(null), 3000); };
 
+  const handleExit = () => {
+    // Clean query params first
+    if (window.location.search) {
+      const clean = window.location.pathname;
+      window.history.replaceState({}, '', clean);
+    }
+    // Navigate to Detailed Log page
+    if (onNavigate) {
+      onNavigate('all-bills');
+    } else {
+      window.location.href = '/billing-log/all-bills';
+    }
+  };
+
+  const handleClose = () => {
+    // Best-effort cleanup: remove query params so returning to this page is clean
+    if (window.location.search) {
+      const clean = window.location.pathname;
+      window.history.replaceState({}, '', clean);
+    }
+  };
+
   return (
     <div className="page-wrapper animate-fade-in">
       <div className="page-header">
@@ -291,10 +514,17 @@ export default function BillableConsumables() {
         </div>
         <div className="page-header-actions">
           <button onClick={handleSave} className="btn btn-primary" disabled={noMachineryMapping}>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><polyline points="20 6 9 17 4 12"/></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
             Save Record
           </button>
-          <button onClick={handleClear} className="btn btn-secondary">Close</button>
+          <button onClick={handleClear} className="btn btn-secondary">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+            Clear
+          </button>
+          <button onClick={handleExit} className="btn btn-ghost" title="Exit to Detailed Log">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            Exit
+          </button>
         </div>
       </div>
 

@@ -69,7 +69,47 @@ const Customization = () => {
     } catch (e) { showToast('error', e.message || 'Failed to save'); }
     setLoading(false);
   };
-  const deleteB = async (id) => { if (!window.confirm('Delete this consumable permanently?')) return; setLoading(true); try { const { error } = await supabase.from('master_consumables').delete().eq('id', id); if (error) throw error; showToast('success', 'Successfully deleted'); await fetchBillable(); } catch (e) { showToast('error', e.message || 'Failed to delete'); } setLoading(false); };
+  const deleteB = async (id) => {
+    if (!window.confirm('Delete this consumable permanently?')) return;
+    setLoading(true);
+    try {
+      // First check if this consumable is used in billable_report records
+      const { data: billableReports, error: checkError } = await supabase
+        .from('billable_report')
+        .select('id')
+        .or([
+          `consumable_1_id.eq.${id}`,
+          `consumable_2_id.eq.${id}`,
+          `consumable_3_id.eq.${id}`,
+          `consumable_4_id.eq.${id}`,
+          `consumable_5_id.eq.${id}`,
+          `consumable_6_id.eq.${id}`,
+          `consumable_7_id.eq.${id}`,
+          `consumable_8_id.eq.${id}`,
+          `consumable_9_id.eq.${id}`,
+          `consumable_10_id.eq.${id}`,
+          `consumable_11_id.eq.${id}`,
+          `consumable_12_id.eq.${id}`,
+          `consumable_13_id.eq.${id}`,
+          `consumable_14_id.eq.${id}`
+        ].join(','));
+      
+      if (checkError) throw checkError;
+      
+      if (billableReports && billableReports.length > 0) {
+        showToast('error', 'Cannot delete this consumable. This item is already used in inventory records. Please remove dependent records first.');
+        setLoading(false);
+        return;
+      }
+      
+      // No dependent records - can safely delete permanently
+      const { error } = await supabase.from('master_consumables').delete().eq('id', id);
+      if (error) throw error;
+      showToast('success', 'Successfully deleted');
+      await fetchBillable();
+    } catch (e) { showToast('error', e.message || 'Failed to delete'); }
+    setLoading(false);
+  };
   const filteredB = billable.filter(x => (x.consumable_name || '').toLowerCase().includes(bSearch.toLowerCase()));
 
   /* =================== NON-BILLABLE =================== */
@@ -92,8 +132,13 @@ const Customization = () => {
     try {
       const cost = Number(nbForm.cost || 0);
       if (nbModal.mode === 'add') {
-        const { data: existing } = await supabase.from('master_non_billable_consumables').select('id').ilike('product_name', nbForm.product_name.trim());
-        if (existing && existing.length) return showToast('warning', 'A consumable with this name already exists');
+        // Only check against Active products - allow reusing names from Inactive products
+        const { data: existing } = await supabase
+          .from('master_non_billable_consumables')
+          .select('id')
+          .ilike('product_name', nbForm.product_name.trim())
+          .eq('status', 'Active');
+        if (existing && existing.length) return showToast('warning', 'An active consumable with this name already exists');
         const { error } = await supabase.from('master_non_billable_consumables').insert({ product_name: nbForm.product_name.trim(), cost, status: nbForm.status || 'Active' });
         if (error) throw error;
         showToast('success', 'Consumable added');
@@ -120,14 +165,39 @@ const Customization = () => {
     setLoading(false);
   };
   const deleteNb = async (id) => {
-    if (!window.confirm('Delete this consumable permanently?')) return;
+    // First get the product name for better error message
+    const itemToDelete = nonBillable.find(p => p.id === id);
     setLoading(true);
     try {
-      const { error } = await supabase.from('master_non_billable_consumables').delete().eq('id', id);
+      // First check if this product is used in registry (inventory records)
+      const { data: registryRecords, error: checkError } = await supabase
+        .from('non_billable_consumable_registry')
+        .select('id')
+        .eq('product_id', id);
+      
+      if (checkError) throw checkError;
+      
+      if (registryRecords && registryRecords.length > 0) {
+        // Product is already used - block deletion completely
+        showToast('error', `Cannot delete "${itemToDelete?.product_name || 'this consumable'}". It has ${registryRecords.length} batch record(s) in inventory. Remove batches at: Non-Billable Consumables → Registry tab.`);
+        setLoading(false);
+        return;
+      }
+      
+      // No dependent records - can safely delete permanently
+      const confirmDelete = window.confirm('Delete Non-Billable Consumable?\n\nThis action permanently removes the consumable from the database.');
+      if (!confirmDelete) {
+        setLoading(false);
+        return;
+      }
+      const { error } = await supabase
+        .from('master_non_billable_consumables')
+        .delete()
+        .eq('id', id);
       if (error) throw error;
-      showToast('success', 'Deleted');
+      showToast('success', 'Consumable deleted successfully');
       await fetchNonBillable();
-    } catch (e) { showToast('error', e.message || 'Delete failed'); }
+    } catch (e) { showToast('error', e.message || 'Operation failed'); }
     setLoading(false);
   };
   const filteredNb = nonBillable.filter(x => (x.product_name || '').toLowerCase().includes(nbSearch.toLowerCase()));

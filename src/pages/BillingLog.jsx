@@ -4,6 +4,7 @@ import { useBranch } from '../context/BranchContext';
 import SearchableDropdown from '../components/SearchableDropdown';
 import { Eye, Pencil, FlaskConical } from 'lucide-react';
 import * as auditApi from '../services/auditApi';
+import AuditTimelineModal from '../components/AuditTimelineModal';
 
 const FIELD_LABEL = {
   fontSize: '11px',
@@ -54,6 +55,9 @@ export default function BillingLog({ onNavigate }) {
   // Multiple services array
   const [serviceRows, setServiceRows] = useState([]);
 
+  // Edit mode
+  const [editingBillId, setEditingBillId] = useState(null);
+
   // Filters
   const [filters, setFilters] = useState({
     bill_no: '',
@@ -62,6 +66,9 @@ export default function BillingLog({ onNavigate }) {
     service_date: '',
     status: 'All',
   });
+
+  // History modal state
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
 
   useEffect(() => {
     setFormData(prev => ({ ...prev, service_date: new Date().toISOString().split('T')[0] }));
@@ -78,6 +85,13 @@ export default function BillingLog({ onNavigate }) {
       setStaff([]);
     }
   }, [branchId]);
+
+  // Initialize with one service row
+  useEffect(() => {
+    if (serviceRows.length === 0) {
+      setServiceRows([{ id: Date.now(), service_id: '', service_name: '' }]);
+    }
+  }, [serviceRows]);
 
   const fetchDoctors = useCallback(async () => {
     if (!branchId) return;
@@ -239,8 +253,8 @@ export default function BillingLog({ onNavigate }) {
       return false;
     }
 
-    // Check duplicate bill number
-    const duplicate = bills.find(b => b.bill_no === formData.bill_no.trim());
+    // Check duplicate bill number (skip if editing same bill)
+    const duplicate = bills.find(b => b.bill_no === formData.bill_no.trim() && (!editingBillId || b.id !== editingBillId));
     if (duplicate) {
       setFormErrors({ bill_no: 'Bill Number already exists' });
       showToast('error', 'Bill Number already exists');
@@ -272,45 +286,116 @@ export default function BillingLog({ onNavigate }) {
     if (!validateForm()) return;
 
     try {
-      // Create main bill record
-      const billPayload = {
-        bill_no: formData.bill_no.trim(),
-        uid: formData.uid.trim() || null,
-        patient_name: formData.patient_name.trim(),
-        doctor_id: formData.rendering_doctor_id ? parseInt(formData.rendering_doctor_id) : null,
-        staff_id: formData.staff_id ? parseInt(formData.staff_id) : null,
-        service_date: formData.service_date,
-        branch_id: branchId,
-        bill_status: 'Incomplete',
-      };
-
-      // Create all bill_services records
-      const { data: billData, error: billError } = await supabase.from('billing_log').insert(billPayload).select().single();
-      if (billError) throw billError;
-
-      // Create bill_services for each selected service
-      const billServicesPayload = serviceRows.map(row => ({
-        bill_id: billData.id,
-        service_id: parseInt(row.service_id),
-        service_name: row.service_name,
-        service_status: 'Pending',
-        consumable_completed: false,
-      }));
-
-      const { error: servicesError } = await supabase.from('bill_services').insert(billServicesPayload);
-      if (servicesError) {
-        console.warn('Warning: Could not create bill_services:', servicesError);
-      }
-
-      showToast('success', 'Bill created successfully');
-      resetForm();
-      fetchBills();
+      const isEdit = !!editingBillId;
       
-      // Scroll to Show All Bills button after saving
-      setTimeout(() => {
-        const btn = document.querySelector('.btn-outline');
-        if (btn) btn.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }, 100);
+      if (isEdit) {
+        // Update existing bill
+        const billPayload = {
+          bill_no: formData.bill_no.trim(),
+          uid: formData.uid.trim() || null,
+          patient_name: formData.patient_name.trim(),
+          doctor_id: formData.rendering_doctor_id ? parseInt(formData.rendering_doctor_id) : null,
+          staff_id: formData.staff_id ? parseInt(formData.staff_id) : null,
+          service_date: formData.service_date,
+          branch_id: branchId,
+        };
+
+        const { error: updateError } = await supabase
+          .from('billing_log')
+          .update(billPayload)
+          .eq('id', editingBillId);
+        if (updateError) throw updateError;
+
+        // Delete existing bill_services and recreate
+        const { error: deleteError } = await supabase
+          .from('bill_services')
+          .delete()
+          .eq('bill_id', editingBillId);
+        if (deleteError) console.warn('Warning deleting old services:', deleteError);
+
+        // Create new bill_services
+        const billServicesPayload = serviceRows.map(row => ({
+          bill_id: editingBillId,
+          service_id: parseInt(row.service_id),
+          service_name: row.service_name,
+          service_status: 'Pending',
+          consumable_completed: false,
+        }));
+
+        const { error: servicesError } = await supabase.from('bill_services').insert(billServicesPayload);
+        if (servicesError) {
+          console.warn('Warning: Could not create bill_services:', servicesError);
+        }
+
+        // Log activity for bill update
+        await auditApi.logActivity({
+          moduleName: 'billing_log',
+          recordId: editingBillId,
+          activityType: 'edited',
+          activityDescription: `Updated Bill #${formData.bill_no}`,
+          userId: null,
+          userName: 'manager_an',
+          userRole: 'Branch Manager',
+          branchId: branchId
+        });
+
+        showToast('success', 'Bill updated successfully');
+        setEditingBillId(null);
+        resetForm();
+        fetchBills();
+      } else {
+        // Create new bill
+        const billPayload = {
+          bill_no: formData.bill_no.trim(),
+          uid: formData.uid.trim() || null,
+          patient_name: formData.patient_name.trim(),
+          doctor_id: formData.rendering_doctor_id ? parseInt(formData.rendering_doctor_id) : null,
+          staff_id: formData.staff_id ? parseInt(formData.staff_id) : null,
+          service_date: formData.service_date,
+          branch_id: branchId,
+          bill_status: 'Incomplete',
+        };
+
+        // Create all bill_services records
+        const { data: billData, error: billError } = await supabase.from('billing_log').insert(billPayload).select().single();
+        if (billError) throw billError;
+
+        // Create bill_services for each selected service
+        const billServicesPayload = serviceRows.map(row => ({
+          bill_id: billData.id,
+          service_id: parseInt(row.service_id),
+          service_name: row.service_name,
+          service_status: 'Pending',
+          consumable_completed: false,
+        }));
+
+        const { error: servicesError } = await supabase.from('bill_services').insert(billServicesPayload);
+        if (servicesError) {
+          console.warn('Warning: Could not create bill_services:', servicesError);
+        }
+
+        // Log activity for bill creation
+        await auditApi.logActivity({
+          moduleName: 'billing_log',
+          recordId: billData.id,
+          activityType: 'created',
+          activityDescription: `Created Bill #${formData.bill_no}`,
+          userId: null,
+          userName: 'manager_an',
+          userRole: 'Branch Manager',
+          branchId: branchId
+        });
+
+        showToast('success', 'Bill created successfully');
+        resetForm();
+        fetchBills();
+        
+        // Scroll to Show All Bills button after saving
+        setTimeout(() => {
+          const btn = document.querySelector('.btn-outline');
+          if (btn) btn.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 100);
+      }
     } catch (error) {
       console.error('Error saving bill:', error);
       if (error.message && error.message.includes("billing_log")) {
@@ -442,22 +527,105 @@ export default function BillingLog({ onNavigate }) {
     }
   };
 
-  // Edit bill - navigate to edit mode
+  // Edit bill - load bill data into form for editing
   const handleEditBill = (bill) => {
-    if (onNavigate) {
-      onNavigate('edit-bill', bill);
+    setEditingBillId(bill.id);
+    setFormData({
+      bill_no: bill.bill_no,
+      uid: bill.uid || '',
+      patient_name: bill.patient_name,
+      rendering_doctor_id: bill.doctor_id || '',
+      staff_id: bill.staff_id || '',
+      service_date: bill.service_date,
+    });
+    // Load existing services
+    if (bill.bill_services && bill.bill_services.length > 0) {
+      const rows = bill.bill_services.map((bs, idx) => ({
+        id: bs.id || Date.now() + idx,
+        service_id: String(bs.service_id),
+        service_name: bs.service_name,
+      }));
+      setServiceRows(rows);
     } else {
-      // Fallback: reload with edit parameter
-      const url = `/billing-log?edit=${encodeURIComponent(bill.bill_no)}`;
-      window.history.pushState({}, '', url);
-      window.location.reload();
+      setServiceRows([{ id: Date.now(), service_id: '', service_name: '' }]);
     }
+    setFormErrors({});
+    showToast('info', 'Edit mode enabled. Make changes and click Save Bill.');
+  };
+
+  const cancelEdit = () => {
+    setEditingBillId(null);
+    resetForm();
   };
 
   // View history for a bill
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [showHistoryModal, setShowHistoryModal] = useState(false);
-  const [historyData, setHistoryData] = useState({ audit: [], activity: [] });
+  const handleViewHistory = (bill) => {
+    setViewData({ bill, viewMode: 'history' });
+    setShowHistoryModal(true);
+  };
+
+  // Delete bill with explicit cascading deletes
+  const handleDeleteBill = async (bill) => {
+    if (!window.confirm(`Delete bill #${bill.bill_no} for ${bill.patient_name}? This action cannot be undone.`)) return;
+    
+    try {
+      // Step 1: Delete activity and audit logs first (no FK constraints)
+      const { error: alError } = await supabase.from('activity_logs').delete().eq('record_id', bill.id).eq('module', 'billing');
+      if (alError) console.warn('Warning deleting activity logs:', alError);
+
+      const { error: auditError } = await supabase.from('audit_logs').delete().eq('record_id', bill.id).eq('table_name', 'billing_log');
+      if (auditError) console.warn('Warning deleting audit logs:', auditError);
+
+      // Step 2: Get all bill_services IDs for this bill
+      const { data: billServices, error: bsError } = await supabase
+        .from('bill_services')
+        .select('id')
+        .eq('bill_id', bill.id);
+      
+      if (bsError) console.warn('Warning fetching bill_services:', bsError);
+
+      // Step 3: Delete bill_service_consumables first (child of bill_services)
+      if (billServices && billServices.length > 0) {
+        const bscIds = billServices.map(bs => bs.id);
+        const { error: bscError } = await supabase
+          .from('bill_service_consumables')
+          .delete()
+          .in('bill_service_id', bscIds);
+        if (bscError) console.warn('Warning deleting bill_service_consumables:', bscError);
+      }
+
+      // Step 4: Delete bill_services
+      const { error: deleteBsError } = await supabase
+        .from('bill_services')
+        .delete()
+        .eq('bill_id', bill.id);
+      if (deleteBsError) console.warn('Warning deleting bill_services:', deleteBsError);
+
+      // Step 5: Delete billable_report entries linked to this billing_log
+      const { error: brError } = await supabase
+        .from('billable_report')
+        .delete()
+        .eq('billing_log_id', bill.id);
+      if (brError) console.warn('Warning deleting billable_report:', brError);
+
+      // Step 6: Delete bill_history entries
+      const { error: bhError } = await supabase
+        .from('bill_history')
+        .delete()
+        .eq('bill_id', bill.id);
+      if (bhError) console.warn('Warning deleting bill_history:', bhError);
+
+      // Step 7: Finally delete the main billing_log record
+      const { error: billError } = await supabase.from('billing_log').delete().eq('id', bill.id);
+      if (billError) throw billError;
+
+      showToast('success', `Bill #${bill.bill_no} deleted successfully`);
+      fetchBills();
+    } catch (error) {
+      console.error('Error deleting bill:', error);
+      showToast('error', `Failed to delete bill: ${error.message}`);
+    }
+  };
 
   const getStatusBadge = (status) => {
     const style = STATUS_BADGE[status] || STATUS_BADGE.Incomplete;
@@ -480,27 +648,20 @@ export default function BillingLog({ onNavigate }) {
     );
   };
 
-  const handleViewHistory = async (bill) => {
-    setHistoryLoading(true);
-    try {
-      const auditHistory = await auditApi.getAuditHistory('billing_log', bill.id);
-      const activityHistory = await auditApi.getActivityLogs('BillingLog');
-      setHistoryData({ audit: auditHistory, activity: activityHistory });
-      setShowHistoryModal(true);
-    } catch (error) {
-      console.error('Error fetching history:', error);
-      showToast('error', 'Failed to fetch history');
-    } finally {
-      setHistoryLoading(false);
-    }
-  };
-
-  // Initialize with one service row
+  // Check URL for edit parameter AFTER handleEditBill is defined
   useEffect(() => {
-    if (serviceRows.length === 0) {
-      setServiceRows([{ id: Date.now(), service_id: '', service_name: '' }]);
+    const params = new URLSearchParams(window.location.search);
+    const editBillNo = params.get('edit');
+    if (editBillNo && bills.length > 0) {
+      const billToEdit = bills.find(b => b.bill_no === editBillNo);
+      if (billToEdit) {
+        console.log('Found bill to edit:', billToEdit.bill_no);
+        handleEditBill(billToEdit);
+        // Clean URL
+        window.history.replaceState({}, '', window.location.pathname);
+      }
     }
-  }, [serviceRows]);
+  }, [bills]);
 
   return (
     <div className="page-wrapper animate-fade-in">
@@ -512,17 +673,24 @@ export default function BillingLog({ onNavigate }) {
         </div>
       </div>
 
-      {/* New Bill Inline Form */}
+      {/* Bill Form - New or Edit Mode */}
       <div className="card" style={{ ...CARD_STYLE, marginBottom: 20 }}>
         <div className="card-header" style={{ marginBottom: 16, paddingBottom: 12, borderBottom: '1px solid var(--color-line-2)' }}>
           <div>
-            <div className="card-title">New Bill</div>
-            <div className="card-subtitle">Create a new bill record</div>
+            <div className="card-title">{editingBillId ? 'Edit Bill' : 'New Bill'}</div>
+            <div className="card-subtitle">{editingBillId ? 'Update bill details below' : 'Create a new bill record'}</div>
           </div>
-          <button onClick={handleSaveBill} className="btn btn-primary">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><polyline points="20 6 9 17 4 12"/></svg>
-            Save Bill
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {editingBillId && (
+              <button onClick={cancelEdit} className="btn btn-secondary btn-sm">
+                Cancel
+              </button>
+            )}
+            <button onClick={handleSaveBill} className="btn btn-primary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><polyline points="20 6 9 17 4 12"/></svg>
+              {editingBillId ? 'Update Bill' : 'Save Bill'}
+            </button>
+          </div>
         </div>
         {/* Row 1 */}
         <div className="grid grid-cols-6 gap-4" style={{ marginBottom: 12 }}>
@@ -591,14 +759,28 @@ export default function BillingLog({ onNavigate }) {
             {serviceRows.map((row, index) => (
               <div key={row.id} className="grid grid-cols-6 gap-4 items-center">
                 <div style={{ gridColumn: 'span 4' }}>
-                  <SearchableDropdown
-                    value={row.service_id}
-                    onChange={(val) => handleServiceChange(row.id, val)}
-                    options={services.map(s => ({ value: s.id, label: s.service_name }))}
-                    placeholder="Select Service"
-                    displayKey="label"
-                    valueKey="value"
-                  />
+                  {editingBillId ? (
+                    <input
+                      type="text"
+                      value={row.service_name}
+                      onChange={(e) => {
+                        const newRows = [...serviceRows];
+                        newRows[index].service_name = e.target.value;
+                        setServiceRows(newRows);
+                      }}
+                      placeholder="Enter service name"
+                      className="form-input"
+                    />
+                  ) : (
+                    <SearchableDropdown
+                      value={row.service_id}
+                      onChange={(val) => handleServiceChange(row.id, val)}
+                      options={services.map(s => ({ value: s.id, label: s.service_name }))}
+                      placeholder="Select Service"
+                      displayKey="label"
+                      valueKey="value"
+                    />
+                  )}
                 </div>
                 <div style={{ gridColumn: 'span 1' }}>
                   <span className="text-xs text-muted">{index + 1}.</span>
@@ -651,7 +833,7 @@ export default function BillingLog({ onNavigate }) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--color-ink)' }}>Recently Added Bills</div>
           <button onClick={() => onNavigate && onNavigate('all-bills')} className="btn btn-outline btn-sm">
-            View All
+            View All Bills in Detailed Log
           </button>
         </div>
         <div className="table-container">
@@ -660,8 +842,9 @@ export default function BillingLog({ onNavigate }) {
               <tr>
                 <th style={{ width: 80 }}>Bill No</th>
                 <th style={{ width: 120 }}>Patient</th>
+                <th style={{ width: 100 }}>UID</th>
                 <th style={{ width: 100 }}>Date</th>
-                <th style={{ width: 180 }}>Services</th>
+                <th style={{ width: 80, textAlign: 'center' }}>Services</th>
                 <th style={{ width: 80, textAlign: 'center' }}>Completed</th>
                 <th style={{ width: 80, textAlign: 'center' }}>Pending</th>
                 <th style={{ width: 100, textAlign: 'center' }}>Status</th>
@@ -671,87 +854,73 @@ export default function BillingLog({ onNavigate }) {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan="8" style={{ textAlign: 'center', padding: '20px', color: 'var(--color-muted)' }}>Loading...</td>
+                  <td colSpan="9" style={{ textAlign: 'center', padding: '20px', color: 'var(--color-muted)' }}>Loading...</td>
                 </tr>
-              ) : bills.slice(0, 3).length === 0 ? (
+              ) : bills.length === 0 ? (
                 <tr>
-                  <td colSpan="8" style={{ textAlign: 'center', padding: '20px', color: 'var(--color-muted)' }}>No bills yet. Create your first bill above.</td>
+                  <td colSpan="9" style={{ textAlign: 'center', padding: '20px', color: 'var(--color-muted)' }}>No bills yet. Create your first bill above.</td>
                 </tr>
               ) : (
                 bills.slice(0, 3).map((bill) => {
                   const counts = bill.serviceCounts || { total: 0, completed: 0, pending: 0 };
                   const status = bill.calculatedStatus;
-                  const pendingServices = (bill.bill_services || []).filter(s => !s.consumable_completed);
                   
-                  return (
-                    <tr key={bill.id}>
-                      <td style={{ fontWeight: 600, color: 'var(--color-primary)', whiteSpace: 'nowrap', verticalAlign: 'middle', cursor: 'pointer' }} onClick={() => handleViewBill(bill)}>
-                        {bill.bill_no}
-                      </td>
-                      <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle' }}>{bill.patient_name || '-'}</td>
-                      <td style={{ fontSize: 13 }}>{bill.service_date || '-'}</td>
-                      <td style={{ fontSize: 13 }}>{bill.bill_services ? bill.bill_services.map(s => s.service_name).join(', ') : '-'}</td>
-                      <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', textAlign: 'center' }}>
-                        <span style={{ color: '#065F46', fontWeight: 600 }}>{counts.completed}</span>
-                      </td>
-                      <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', textAlign: 'center' }}>
-                        <span style={{ color: '#991B1B', fontWeight: 600 }}>{counts.pending}</span>
-                      </td>
-                      <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>{getStatusBadge(status)}</td>
-                       <td style={{ textAlign: 'center', verticalAlign: 'middle', whiteSpace: 'nowrap' }}>
-                         <div style={{ display: 'flex', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
-                           {/* View Button */}
-                           <button 
-                             onClick={() => handleViewBill(bill)}
-                             className="btn btn-ghost btn-sm"
-                             title="View Bill Details"
-                             style={{ padding: '6px 8px' }}
-                           >
-                             <Eye size={16} />
-                           </button>
-                           
-                           {/* Edit Bill Button */}
-                           <button 
-                             onClick={() => handleEditBill(bill)}
-                             className="btn btn-ghost btn-sm"
-                             title="Edit Bill"
-                             style={{ padding: '6px 8px', color: 'var(--color-primary)' }}
-                           >
-                             <Pencil size={16} />
-                           </button>
-                           
-                           {/* Add Consumables Button - only for Incomplete bills */}
-                           {status === 'Incomplete' && pendingServices.length > 0 && (
-                             <button 
-                               onClick={() => {
-                                 const firstPending = pendingServices[0];
-                                 handleAddConsumables(bill, firstPending.id, firstPending.service_id, firstPending.service_name);
-                               }}
-                               className="btn btn-primary btn-sm"
-                               title="Add Consumables"
-                               style={{ padding: '6px 10px', fontSize: 12 }}
-                             >
-                               <FlaskConical size={14} style={{ marginRight: 4 }} />
-                               Add Consumables
-                             </button>
-                           )}
-                           
-                           {/* History Button */}
-                           <button 
-                             onClick={() => handleViewHistory(bill)} 
-                             className="btn btn-ghost btn-sm" 
-                             style={{ padding: '6px 8px' }}
-                             title="View History"
-                           >
-                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                               <circle cx="12" cy="12" r="10"/>
-                               <polyline points="12 6 12 12 16 12"/>
-                             </svg>
-                           </button>
-                         </div>
+                   return (
+                     <tr key={bill.id} style={{ cursor: 'pointer' }} onClick={() => handleViewBill(bill)}>
+                       <td style={{ fontWeight: 600, color: 'var(--color-primary)', whiteSpace: 'nowrap', verticalAlign: 'middle' }}>
+                         {bill.bill_no}
                        </td>
-                    </tr>
-                  );
+                       <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle' }}>{bill.patient_name || '-'}</td>
+                       <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', fontSize: 13 }}>{bill.uid || '-'}</td>
+                       <td style={{ fontSize: 13 }}>{bill.service_date || '-'}</td>
+                       <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', textAlign: 'center', fontSize: 13, fontWeight: 600 }}>
+                         {counts.total || 0}
+                       </td>
+                       <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', textAlign: 'center' }}>
+                         <span style={{ color: '#065F46', fontWeight: 600 }}>{counts.completed}</span>
+                       </td>
+                       <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', textAlign: 'center' }}>
+                         <span style={{ color: '#991B1B', fontWeight: 600 }}>{counts.pending}</span>
+                       </td>
+                       <td style={{ textAlign: 'center', verticalAlign: 'middle' }}>{getStatusBadge(status)}</td>
+                        <td style={{ textAlign: 'center', verticalAlign: 'middle', whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
+                          <div style={{ display: 'flex', justifyContent: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            {/* View Button */}
+                            <button 
+                              onClick={() => handleViewBill(bill)}
+                              className="btn btn-ghost btn-sm"
+                              title="View Bill Details"
+                              style={{ padding: '6px 8px' }}
+                            >
+                              <Eye size={16} />
+                            </button>
+                            
+                            {/* Edit Bill Button */}
+                            <button 
+                              onClick={() => handleEditBill(bill)}
+                              className="btn btn-ghost btn-sm"
+                              title="Edit Bill"
+                              style={{ padding: '6px 8px', color: 'var(--color-primary)' }}
+                            >
+                              <Pencil size={16} />
+                            </button>
+                            
+                            {/* History Button */}
+                            <button 
+                              onClick={() => handleViewHistory(bill)} 
+                              className="btn btn-ghost btn-sm" 
+                              style={{ padding: '6px 8px' }}
+                              title="View History"
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <circle cx="12" cy="12" r="10"/>
+                                <polyline points="12 6 12 12 16 12"/>
+                              </svg>
+                            </button>
+                          </div>
+                        </td>
+                     </tr>
+                   );
                 })
               )}
             </tbody>
@@ -760,7 +929,7 @@ export default function BillingLog({ onNavigate }) {
       </div>
 
       {/* View Bill Details Modal */}
-      {viewData && (
+      {viewData && viewData.viewMode === 'details' && (
         <div className="modal-overlay" onClick={() => setViewData(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px', width: '95%' }}>
             <div className="modal-header">
@@ -797,44 +966,45 @@ export default function BillingLog({ onNavigate }) {
                 </div>
               </div>
 
-              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: 'var(--color-ink)' }}>Services & Consumable Status</div>
-              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
-                  <tr>
-                    <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--color-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--color-line)', background: 'var(--color-tint-2)' }}>Service</th>
-                    <th style={{ padding: '8px 12px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: 'var(--color-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--color-line)', background: 'var(--color-tint-2)' }}>Consumable Status</th>
-                    <th style={{ padding: '8px 12px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: 'var(--color-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--color-line)', background: 'var(--color-tint-2)' }}>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {billServices.map((bs) => (
-                    <tr key={bs.id}>
-                      <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-line-2)', fontSize: 13 }}>{bs.service_name}</td>
-                      <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-line-2)', textAlign: 'center' }}>
-                        {bs.consumable_completed ? getStatusBadge('Complete') : getStatusBadge('Pending')}
-                      </td>
-                      <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-line-2)', textAlign: 'center' }}>
-                        {bs.consumable_completed ? (
-                          <button 
-                            onClick={() => handleEditConsumables(viewData.bill, bs.id, bs.service_id, bs.service_name)} 
-                            className="btn btn-outline btn-sm"
-                            style={{ border: '1px solid var(--color-primary)', color: 'var(--color-primary)' }}
-                          >
-                            Edit
-                          </button>
-                        ) : (
-                          <button 
-                            onClick={() => handleAddConsumables(viewData.bill, bs.id, bs.service_id, bs.service_name)} 
-                            className="btn btn-primary btn-sm"
-                          >
-                            Add Consumables
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: 'var(--color-ink)' }}>Services & Consumable Status</div>
+               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                 <thead>
+                   <tr>
+                     <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--color-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--color-line)', background: 'var(--color-tint-2)' }}>Service</th>
+                     <th style={{ padding: '8px 12px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: 'var(--color-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--color-line)', background: 'var(--color-tint-2)' }}>Status</th>
+                     <th style={{ padding: '8px 12px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: 'var(--color-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--color-line)', background: 'var(--color-tint-2)' }}>Consumables</th>
+                   </tr>
+                 </thead>
+                 <tbody>
+                   {billServices.map((bs) => (
+                     <tr key={bs.id}>
+                       <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-line-2)', fontSize: 13 }}>{bs.service_name}</td>
+                       <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-line-2)', textAlign: 'center' }}>
+                         {bs.consumable_completed ? getStatusBadge('Complete') : getStatusBadge('Pending')}
+                       </td>
+                       <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-line-2)', textAlign: 'center', fontSize: 12, color: 'var(--color-muted)' }}>
+                         {bs.consumable_completed ? (
+                           <span style={{ color: 'var(--color-primary)', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
+                             onClick={() => handleEditConsumables(viewData.bill, bs.id, bs.service_id, bs.service_name)}
+                             title="Click to view/edit consumables"
+                           >
+                             View Details
+                           </span>
+                         ) : (
+                           <button
+                             onClick={() => handleAddConsumables(viewData.bill, bs.id, bs.service_id, bs.service_name)}
+                             className="btn btn-sm"
+                             style={{ background: '#D1FAE5', color: '#065F46', border: '1px solid #A7F3D0' }}
+                             title="Add consumables for this service"
+                           >
+                             + Add Consumables
+                           </button>
+                         )}
+                       </td>
+                     </tr>
+                   ))}
+                 </tbody>
+               </table>
             </div>
             <div className="modal-footer">
               <button onClick={() => setViewData(null)} className="btn btn-secondary">Close</button>
@@ -843,84 +1013,17 @@ export default function BillingLog({ onNavigate }) {
         </div>
       )}
 
-      {/* History Modal */}
-      {showHistoryModal && (
-        <div className="modal-overlay" onClick={() => setShowHistoryModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '700px' }}>
-            <div className="modal-header">
-              <h3>Change History</h3>
-              <button onClick={() => setShowHistoryModal(false)} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--color-muted)' }}>×</button>
-            </div>
-            <div className="modal-body">
-              {historyLoading ? (
-                <div style={{ textAlign: 'center', padding: '40px' }}>Loading history...</div>
-              ) : (
-                <>
-                  {/* Audit History */}
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--color-ink)' }}>Audit Trail (Record Changes)</div>
-                    {historyData.audit.length === 0 ? (
-                      <div style={{ fontSize: 12, color: 'var(--color-muted)', padding: 12 }}>No record changes found</div>
-                    ) : (
-                      <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
-                        <thead>
-                          <tr style={{ background: 'var(--color-tint-2)' }}>
-                            <th style={{ padding: '6px 8px', textAlign: 'left' }}>Date</th>
-                            <th style={{ padding: '6px 8px', textAlign: 'left' }}>User</th>
-                            <th style={{ padding: '6px 8px', textAlign: 'left' }}>Action</th>
-                            <th style={{ padding: '6px 8px', textAlign: 'left' }}>Module</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {historyData.audit.map((h, i) => (
-                            <tr key={i} style={{ borderBottom: '1px solid var(--color-line-2)' }}>
-                              <td style={{ padding: '6px 8px' }}>{h.created_at ? new Date(h.created_at).toLocaleString('en-GB') : '-'}</td>
-                              <td style={{ padding: '6px 8px' }}>{h.username || '-'}</td>
-                              <td style={{ padding: '6px 8px' }}>{h.action_type}</td>
-                              <td style={{ padding: '6px 8px' }}>{h.module_name || '-'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-
-                  {/* Activity History */}
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--color-ink)' }}>Activity Log (Page Actions)</div>
-                    {historyData.activity.length === 0 ? (
-                      <div style={{ fontSize: 12, color: 'var(--color-muted)', padding: 12 }}>No activity found</div>
-                    ) : (
-                      <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
-                        <thead>
-                          <tr style={{ background: 'var(--color-tint-2)' }}>
-                            <th style={{ padding: '6px 8px', textAlign: 'left' }}>Date</th>
-                            <th style={{ padding: '6px 8px', textAlign: 'left' }}>User</th>
-                            <th style={{ padding: '6px 8px', textAlign: 'left' }}>Action</th>
-                            <th style={{ padding: '6px 8px', textAlign: 'left' }}>Remarks</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {historyData.activity.map((h, i) => (
-                            <tr key={i} style={{ borderBottom: '1px solid var(--color-line-2)' }}>
-                              <td style={{ padding: '6px 8px' }}>{h.created_at ? new Date(h.created_at).toLocaleString('en-GB') : '-'}</td>
-                              <td style={{ padding: '6px 8px' }}>{h.username || '-'}</td>
-                              <td style={{ padding: '6px 8px' }}>{h.action}</td>
-                              <td style={{ padding: '6px 8px' }}>{h.remarks || '-'}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-            <div className="modal-footer">
-              <button onClick={() => setShowHistoryModal(false)} className="btn btn-secondary">Close</button>
-            </div>
-          </div>
-        </div>
+      {/* Audit Timeline Modal */}
+      {showHistoryModal && viewData && (
+        <AuditTimelineModal
+          isOpen={showHistoryModal}
+          onClose={() => {
+            setShowHistoryModal(false);
+            setViewData(null);
+          }}
+          recordId={viewData.bill.id}
+          tableName="billing_log"
+        />
       )}
 
       {/* Toast */}

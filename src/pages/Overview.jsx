@@ -6,7 +6,7 @@ import Chart from 'react-apexcharts';
 import { motion } from 'framer-motion';
 import {
   Calendar, Activity, FileText, Box, Stethoscope, Scissors,
-  Bell, TrendingUp, ClipboardList, CheckCircle, Clock
+  Bell, TrendingUp, ClipboardList, CheckCircle, Clock, ChevronDown
 } from 'lucide-react';
 
 /* ---------- Animated Counter ---------- */
@@ -59,6 +59,7 @@ const Overview = () => {
   const [dateRange, setDateRange] = useState('last7');
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -72,6 +73,15 @@ const Overview = () => {
     else if (dateRange === 'custom' && customStart && customEnd) { start = new Date(customStart); end = new Date(customEnd); }
     return { start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0] };
   }, [dateRange, customStart, customEnd]);
+
+  const dateRangeLabel = useMemo(() => {
+    const { start, end } = getDateRange;
+    if (dateRange === 'last7') return 'Last 7 Days';
+    if (dateRange === 'last30') return 'Last 30 Days';
+    if (dateRange === 'thisMonth') return 'This Month';
+    if (dateRange === 'custom') return `${new Date(start).toLocaleDateString('en-GB')} - ${new Date(end).toLocaleDateString('en-GB')}`;
+    return 'Select Range';
+  }, [dateRange, getDateRange]);
 
   useEffect(() => {
     if (branchId) fetchDashboard();
@@ -317,6 +327,93 @@ const Overview = () => {
           <p className="dash-header-sub"><span className="live-dot" /> Real-time clinic operations</p>
         </div>
         <div className="dash-header-actions">
+          {/* Date Range Picker */}
+          <div className="relative">
+            <button
+              onClick={() => setShowDatePicker(!showDatePicker)}
+              className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 hover:border-gray-300 transition-all shadow-sm"
+            >
+              <Calendar size={16} className="text-gray-500" />
+              <span className="font-medium">{dateRangeLabel}</span>
+              <ChevronDown size={14} className={`text-gray-400 transition-transform ${showDatePicker ? 'rotate-180' : ''}`} />
+            </button>
+
+            {showDatePicker && (
+              <div className="absolute right-0 top-full mt-2 bg-white border border-gray-200 rounded-xl shadow-xl z-50 p-4 min-w-[320px]">
+                {/* Preset Buttons */}
+                <div className="grid grid-cols-2 gap-2 mb-3">
+                  {[
+                    { key: 'last7', label: 'Last 7 Days' },
+                    { key: 'last30', label: 'Last 30 Days' },
+                    { key: 'thisMonth', label: 'This Month' },
+                    { key: 'custom', label: 'Custom Range' },
+                  ].map(preset => (
+                    <button
+                      key={preset.key}
+                      onClick={() => {
+                        setDateRange(preset.key);
+                        if (preset.key !== 'custom') setShowDatePicker(false);
+                      }}
+                      className={`px-3 py-2 text-sm font-medium rounded-lg transition-all ${
+                        dateRange === preset.key
+                          ? 'bg-[var(--color-primary)] text-white shadow-md'
+                          : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                      }`}
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Custom Date Inputs */}
+                {dateRange === 'custom' && (
+                  <div className="space-y-3 pt-3 border-t border-gray-100">
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1">
+                        <label className="text-xs font-semibold text-gray-500 block mb-1">From</label>
+                        <input
+                          type="date"
+                          value={customStart}
+                          onChange={(e) => setCustomStart(e.target.value)}
+                          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20 focus:border-[var(--color-primary)]"
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <label className="text-xs font-semibold text-gray-500 block mb-1">To</label>
+                        <input
+                          type="date"
+                          value={customEnd}
+                          onChange={(e) => setCustomEnd(e.target.value)}
+                          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20 focus:border-[var(--color-primary)]"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <button
+                        onClick={() => setShowDatePicker(false)}
+                        className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (customStart && customEnd) {
+                            setDateRange('custom');
+                            setShowDatePicker(false);
+                          }
+                        }}
+                        disabled={!customStart || !customEnd}
+                        className="px-4 py-2 text-sm font-medium text-white bg-[var(--color-primary)] rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Apply
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <BranchSwitcher />
           <button className="icon-btn" title="Notifications">
             <Bell size={17} />

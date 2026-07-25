@@ -8,6 +8,7 @@ import {
   getDetailedNonBillableReport,
   getSummaryNonBillableReport,
 } from '../services/nonBillableReports';
+import { Search, Download, FileText, FileSpreadsheet, Trash2, RotateCcw } from 'lucide-react';
 
 const Reports = () => {
   const { branchId: ctxBranch } = useBranch();
@@ -601,408 +602,467 @@ const Reports = () => {
   };
 
   return (
-    <div className="page-wrapper animate-fade-in">
+    <div className="p-6 w-full" style={{ maxWidth: 'none' }}>
       {toast && (
-        <div className={`toast toast-${toast.type} fixed top-4 right-4 z-50 p-4 rounded shadow-lg text-white ${toast.type === 'success' ? 'bg-green-600' : 'bg-red-600'}`}>
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg text-white text-sm font-medium ${toast.type === 'success' ? 'bg-green-600' : 'bg-red-600'}`}>
           {toast.message}
         </div>
       )}
 
-      {/* Header */}
-      <div className="page-header mb-6">
-        <div className="page-header-left">
-          <h1 className="text-2xl font-bold">Reports</h1>
-          <p className="text-sm text-gray-500">Generate, analyze, and export consumable usage reports</p>
-        </div>
+      {/* Header Row: Title + Description */}
+      <div style={{ marginBottom: '8px' }}>
+        <h1 className="text-[32px] font-bold text-gray-900 leading-tight">Reports</h1>
+        <p className="text-sm mt-2" style={{ color: '#6B7280' }}>Generate, analyze, and export consumable usage reports</p>
       </div>
 
-      {/* Primary Report Type Switcher */}
-      <div className="flex gap-3 mb-6">
-        <button
-          onClick={() => {
-            setReportType('billable');
-            setRawReportData([]);
-            setReportData([]);
-            setHasReport(false);
-          }}
-          className={`btn ${reportType === 'billable' ? 'btn-primary bg-blue-600 text-white px-4 py-2 rounded' : 'btn-ghost bg-gray-200 px-4 py-2 rounded'}`}
-        >
-          Billable Report
-        </button>
-        <button
-          onClick={() => {
-            setReportType('non-billable');
-            setNbHasReport(false);
-            setNbData([]);
-          }}
-          className={`btn ${reportType === 'non-billable' ? 'btn-primary bg-blue-600 text-white px-4 py-2 rounded' : 'btn-ghost bg-gray-200 px-4 py-2 rounded'}`}
-        >
-          Non-Billable Report
-        </button>
+      {/* Tab Navigation — 20px gap after subtitle, 24px gap before content */}
+      <div style={{ borderBottom: '1px solid #E5E7EB', marginBottom: '24px' }}>
+        <div style={{ display: 'flex', gap: '0', marginBottom: '-1px' }}>
+          <button
+            onClick={() => {
+              setReportType('billable');
+              setRawReportData([]);
+              setReportData([]);
+              setHasReport(false);
+            }}
+            style={{
+              padding: '12px 24px',
+              fontSize: '14px',
+              fontWeight: reportType === 'billable' ? 600 : 500,
+              color: reportType === 'billable' ? '#7C5CFC' : '#6B7280',
+              background: 'transparent',
+              border: 'none',
+              borderBottom: reportType === 'billable' ? '2px solid #7C5CFC' : '2px solid transparent',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              marginBottom: '0',
+            }}
+            onMouseEnter={(e) => { if (reportType !== 'billable') e.target.style.color = '#374151'; }}
+            onMouseLeave={(e) => { if (reportType !== 'billable') e.target.style.color = '#6B7280'; }}
+          >
+            Billable Report
+          </button>
+          <button
+            onClick={() => {
+              setReportType('non-billable');
+              setNbHasReport(false);
+              setNbData([]);
+            }}
+            style={{
+              padding: '12px 24px',
+              fontSize: '14px',
+              fontWeight: reportType === 'non-billable' ? 600 : 500,
+              color: reportType === 'non-billable' ? '#7C5CFC' : '#6B7280',
+              background: 'transparent',
+              border: 'none',
+              borderBottom: reportType === 'non-billable' ? '2px solid #7C5CFC' : '2px solid transparent',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              marginBottom: '0',
+            }}
+            onMouseEnter={(e) => { if (reportType !== 'non-billable') e.target.style.color = '#374151'; }}
+            onMouseLeave={(e) => { if (reportType !== 'non-billable') e.target.style.color = '#6B7280'; }}
+          >
+            Non-Billable Report
+          </button>
+        </div>
       </div>
 
       {/* ================= BILLABLE VIEW ================= */}
       {reportType === 'billable' ? (
         <>
-          <div className="card p-4 mb-6 bg-white shadow rounded-lg">
-            <div className="flex items-center gap-3 mb-4 border-b pb-3">
-              <span className="text-sm font-semibold text-gray-700">View Mode:</span>
-              <button
-                onClick={() => setBillableReportView('bill-wise')}
-                className={`px-3 py-1 text-xs font-medium rounded ${
-                  billableReportView === 'bill-wise'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Bill Wise (Grouped)
-              </button>
-              <button
-                onClick={() => setBillableReportView('service-wise')}
-                className={`px-3 py-1 text-xs font-medium rounded ${
-                  billableReportView === 'service-wise'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Service Wise (Detailed)
-              </button>
+          {/* Main Filter Card — 20px margin-top */}
+          <div style={{ background: '#FFFFFF', border: '1px solid #E5E7EB', borderRadius: '12px', padding: '24px', width: '100%' }}>
+            {/* Card Header: Flexbox — title left, toggle right */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+              <h2 style={{ fontSize: '14px', fontWeight: 700, color: '#1F2937', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Billable Report</h2>
+              <div style={{ display: 'inline-flex', padding: '4px', backgroundColor: '#F3F4F6', borderRadius: '8px' }}>
+                <button
+                  onClick={() => setBillableReportView('bill-wise')}
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '12px',
+                    fontWeight: billableReportView === 'bill-wise' ? 600 : 500,
+                    borderRadius: '6px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                    background: billableReportView === 'bill-wise' ? '#7C5CFC' : 'transparent',
+                    color: billableReportView === 'bill-wise' ? '#FFFFFF' : '#4B5563',
+                  }}
+                >
+                  Bill Wise
+                </button>
+                <button
+                  onClick={() => setBillableReportView('service-wise')}
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '12px',
+                    fontWeight: billableReportView === 'service-wise' ? 600 : 500,
+                    borderRadius: '6px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                    background: billableReportView === 'service-wise' ? '#7C5CFC' : 'transparent',
+                    color: billableReportView === 'service-wise' ? '#FFFFFF' : '#4B5563',
+                  }}
+                >
+                  Service Wise
+                </button>
+              </div>
             </div>
 
-            <div className="flex items-center gap-4 flex-wrap">
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-semibold text-gray-600">Start Date</label>
+            {/* Filters: CSS Grid — 5 equal columns + auto for button */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr auto', gap: '16px', alignItems: 'end' }}>
+              {/* Start Date */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Start Date</label>
                 <input
                   type="date"
                   value={dateRange.start}
                   onChange={(e) => setDateRange((prev) => ({ ...prev, start: e.target.value }))}
-                  className="form-input border rounded p-2"
-                  style={{ width: 150 }}
+                  style={{ width: '100%', height: '42px', padding: '0 12px', fontSize: '14px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#1F2937', outline: 'none', boxSizing: 'border-box' }}
+                  onFocus={(e) => { e.target.style.borderColor = '#7C5CFC'; e.target.style.boxShadow = '0 0 0 2px rgba(124,92,252,0.15)'; }}
+                  onBlur={(e) => { e.target.style.borderColor = '#D1D5DB'; e.target.style.boxShadow = 'none'; }}
                 />
               </div>
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-semibold text-gray-600">End Date</label>
+              {/* End Date */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>End Date</label>
                 <input
                   type="date"
                   value={dateRange.end}
                   onChange={(e) => setDateRange((prev) => ({ ...prev, end: e.target.value }))}
-                  className="form-input border rounded p-2"
-                  style={{ width: 150 }}
+                  style={{ width: '100%', height: '42px', padding: '0 12px', fontSize: '14px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#1F2937', outline: 'none', boxSizing: 'border-box' }}
+                  onFocus={(e) => { e.target.style.borderColor = '#7C5CFC'; e.target.style.boxShadow = '0 0 0 2px rgba(124,92,252,0.15)'; }}
+                  onBlur={(e) => { e.target.style.borderColor = '#D1D5DB'; e.target.style.boxShadow = 'none'; }}
                 />
               </div>
+              {/* Branch */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Branch</label>
+                <SearchableDropdown
+                  value={filterBranch}
+                  onChange={(val) => setFilterBranch(val)}
+                  options={branches.map((b) => ({ value: b.id, label: b.branch_name }))}
+                  placeholder="All Branches"
+                  displayKey="label"
+                  valueKey="value"
+                  disabled={loading}
+                />
+              </div>
+              {/* Service */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Service</label>
+                <SearchableDropdown
+                  value={filterService}
+                  onChange={(val) => {
+                    setFilterService(val);
+                    setFilterMachinery('');
+                    fetchMachines(val);
+                  }}
+                  options={services.map((s) => ({ value: s.id, label: s.service_name }))}
+                  placeholder="All Services"
+                  displayKey="label"
+                  valueKey="value"
+                  disabled={loading}
+                />
+              </div>
+              {/* Machinery */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Machinery</label>
+                <SearchableDropdown
+                  value={filterMachinery}
+                  onChange={(val) => setFilterMachinery(val)}
+                  options={machines.map((m) => ({ value: m.id, label: m.machine_name }))}
+                  placeholder="All Machinery"
+                  displayKey="label"
+                  valueKey="value"
+                  disabled={loading}
+                />
+              </div>
+              {/* Generate Report Button — fixed 160px width */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px', visibility: 'hidden' }}>Action</div>
+                <button onClick={generateBillableReport} disabled={loading} style={{ width: '160px', height: '42px', padding: '0 16px', background: '#7C5CFC', color: '#FFFFFF', fontSize: '13px', fontWeight: 600, border: 'none', borderRadius: '8px', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.5 : 1, whiteSpace: 'nowrap', transition: 'background 0.15s ease' }} onMouseEnter={(e) => { if (!loading) e.target.style.background = '#6D28D9'; }} onMouseLeave={(e) => { if (!loading) e.target.style.background = '#7C5CFC'; }}>
+                  {loading ? 'Generating...' : 'Generate Report'}
+                </button>
+              </div>
+            </div>
 
-              <SearchableDropdown
-                value={filterBranch}
-                onChange={(val) => setFilterBranch(val)}
-                options={branches.map((b) => ({ value: b.id, label: b.branch_name }))}
-                placeholder="All Branches"
-                displayKey="label"
-                valueKey="value"
-                disabled={loading}
-              />
-
-              <SearchableDropdown
-                value={filterService}
-                onChange={(val) => {
-                  setFilterService(val);
-                  setFilterMachinery('');
-                  fetchMachines(val);
-                }}
-                options={services.map((s) => ({ value: s.id, label: s.service_name }))}
-                placeholder="All Services"
-                displayKey="label"
-                valueKey="value"
-                disabled={loading}
-              />
-
-              <SearchableDropdown
-                value={filterMachinery}
-                onChange={(val) => setFilterMachinery(val)}
-                options={machines.map((m) => ({ value: m.id, label: m.machine_name }))}
-                placeholder="All Machinery"
-                displayKey="label"
-                valueKey="value"
-                disabled={loading}
-              />
-
-              <button onClick={generateBillableReport} disabled={loading} className="btn btn-primary bg-blue-600 text-white px-4 py-2 rounded">
-                {loading ? 'Generating...' : 'Generate Report'}
-              </button>
-              <button onClick={clearBillableFilters} className="btn btn-ghost bg-gray-200 px-3 py-2 rounded">
-                Clear Filters
-              </button>
-              <button onClick={downloadCSV} disabled={!reportData.length} className="btn btn-secondary border px-3 py-2 rounded">
+            {/* Action Links — 16px gap from filters */}
+            <div style={{ display: 'flex', gap: '16px', marginTop: '18px' }}>
+              <button onClick={downloadCSV} disabled={!reportData.length} style={{ padding: '7px 16px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#374151', fontSize: '13px', fontWeight: 500, cursor: !reportData.length ? 'not-allowed' : 'pointer', opacity: !reportData.length ? 0.4 : 1, transition: 'background 0.15s ease' }} onMouseEnter={(e) => { if (reportData.length) e.target.style.background = '#F9FAFB'; }} onMouseLeave={(e) => { if (reportData.length) e.target.style.background = '#FFFFFF'; }}>
                 Export CSV
               </button>
-              <button onClick={downloadExcel} disabled={!reportData.length} className="btn btn-secondary border px-3 py-2 rounded">
+              <button onClick={downloadExcel} disabled={!reportData.length} style={{ padding: '7px 16px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#374151', fontSize: '13px', fontWeight: 500, cursor: !reportData.length ? 'not-allowed' : 'pointer', opacity: !reportData.length ? 0.4 : 1, transition: 'background 0.15s ease' }} onMouseEnter={(e) => { if (reportData.length) e.target.style.background = '#F9FAFB'; }} onMouseLeave={(e) => { if (reportData.length) e.target.style.background = '#FFFFFF'; }}>
                 Export Excel
               </button>
+              {(filterBranch || filterService || filterMachinery) && (
+                <button onClick={clearBillableFilters} style={{ padding: '7px 0', border: 'none', background: 'transparent', color: '#7C5CFC', fontSize: '13px', fontWeight: 600, cursor: 'pointer', marginLeft: 'auto' }}>
+                  Clear Filters
+                </button>
+              )}
             </div>
           </div>
 
           {/* Table Output */}
           {hasReport && (
-            <div className="table-container bg-white shadow rounded-lg overflow-hidden">
-              <div className="table-toolbar p-4 border-b flex justify-between items-center">
-                <div>
-                  <span className="font-semibold">
-                    Billable Report Results ({billableReportView === 'bill-wise' ? 'Bill Wise Grouped' : 'Service Wise Detailed'})
-                  </span>
-                  <span className="text-gray-500 text-sm ml-2">({reportData.length} records)</span>
-                </div>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="rpt-table w-full text-left border-collapse">
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden" style={{ marginTop: '16px' }}>
+              <div className="overflow-x-auto w-full">
+                <table className="w-full text-left border-collapse" style={{ minWidth: 1200 }}>
                   <thead>
-                    <tr className="bg-gray-50 text-xs font-semibold text-gray-600 border-b">
-                      <th className="p-3">BILL NO / ID</th>
-                      <th className="p-3">PATIENT NAME</th>
-                      <th className="p-3">UID</th>
-                      <th className="p-3">DATE</th>
-                      <th className="p-3">BRANCH</th>
-
-                      {/* Dynamic Service Columns */}
-                      {Array.from({ length: maxServices }).map((_, idx) => (
-                        <th key={`svc-hdr-${idx}`} className="p-3 whitespace-nowrap">
-                          SERVICE {idx + 1}
+                    <tr className="bg-gray-50 border-b border-gray-200">
+                      {(() => {
+                        const headers = [
+                          { label: 'BILL NO / ID', align: 'left', minW: '110px' },
+                          { label: 'PATIENT NAME', align: 'left', minW: '160px' },
+                          { label: 'UID', align: 'left', minW: '100px' },
+                          { label: 'DATE', align: 'left', minW: '120px' },
+                          { label: 'BRANCH', align: 'left', minW: '130px' },
+                        ];
+                        for (let s = 1; s <= maxServices; s++) headers.push({ label: `SERVICE ${s}`, align: 'left', minW: '180px' });
+                        headers.push({ label: 'MACHINERY', align: 'left', minW: '180px' });
+                        for (let i = 1; i <= maxConsumables; i++) {
+                          headers.push({ label: `CONSUMABLE ${i}`, align: 'left', minW: '180px' });
+                          headers.push({ label: `UNITS ${i}`, align: 'center', minW: '80px' });
+                          headers.push({ label: `COST ${i}`, align: 'right', minW: '100px' });
+                        }
+                        headers.push({ label: 'TOTAL UNITS', align: 'right', minW: '120px' });
+                        headers.push({ label: 'TOTAL COST', align: 'right', minW: '120px' });
+                        headers.push({ label: 'ACTIONS', align: 'center', minW: '80px' });
+                        return headers;
+                      })().map((h, i) => (
+                        <th key={i} className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ textAlign: h.align, minWidth: h.minW }}>
+                          {h.label}
                         </th>
                       ))}
-
-                      <th className="p-3">MACHINERY</th>
-
-                      {/* Dynamic Consumable Columns */}
-                      {Array.from({ length: maxConsumables }).map((_, idx) => (
-                        <React.Fragment key={`csm-hdr-${idx}`}>
-                          <th className="p-3 whitespace-nowrap">CONSUMABLE {idx + 1}</th>
-                          <th className="p-3 text-right whitespace-nowrap">UNITS {idx + 1}</th>
-                          <th className="p-3 text-right whitespace-nowrap">COST {idx + 1}</th>
-                        </React.Fragment>
-                      ))}
-
-                      <th className="p-3 text-right whitespace-nowrap">TOTAL UNITS</th>
-                      <th className="p-3 text-right whitespace-nowrap">TOTAL COST</th>
-                      <th className="p-3 text-center">ACTIONS</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y text-sm">
+                  <tbody className="divide-y divide-gray-100">
                     {reportData.length === 0 ? (
                       <tr>
-                        <td colSpan={7 + maxServices + maxConsumables * 3} className="text-center text-gray-500 p-8">
+                        <td colSpan={5 + maxServices + 1 + maxConsumables * 3 + 2} className="px-4 py-10 text-center text-sm text-gray-400">
                           No billable records found for the selected criteria.
                         </td>
                       </tr>
                     ) : (
-                      reportData.map((row) => (
-                        <tr key={row.id} className="hover:bg-gray-50">
-                          <td className="p-3 font-medium">{row.bill_no || row.bill_id || '-'}</td>
-                          <td className="p-3">{row.patient_name || '-'}</td>
-                          <td className="p-3">{row.uid || '-'}</td>
-                          <td className="p-3">{fmtDate(row.report_date)}</td>
-                          <td className="p-3">{row.branch_name || '-'}</td>
-
-                          {/* Separate Service Columns */}
-                          {Array.from({ length: maxServices }).map((_, idx) => (
-                            <td key={`svc-${row.id}-${idx}`} className="p-3 whitespace-nowrap">
-                              {row.servicesList && row.servicesList[idx] ? row.servicesList[idx] : '-'}
-                            </td>
-                          ))}
-
-                          <td className="p-3">{row.machine_name || '-'}</td>
-
-                          {/* Separate Consumable Columns */}
-                          {Array.from({ length: maxConsumables }).map((_, idx) => {
-                            const c = row.consumables ? row.consumables[idx] : null;
-                            return (
-                              <React.Fragment key={`csm-${row.id}-${idx}`}>
-                                <td className="p-3 whitespace-nowrap">{c ? c.name : '-'}</td>
-                                <td className="p-3 text-right">{c ? c.units : 0}</td>
-                                <td className="p-3 text-right">{c && c.cost ? `$${c.cost.toFixed(2)}` : '$0.00'}</td>
-                              </React.Fragment>
-                            );
-                          })}
-
-                          <td className="p-3 text-right font-medium">{row.totalUnits || 0}</td>
-                          <td className="p-3 text-right font-medium">{row.totalCost ? `$${row.totalCost.toFixed(2)}` : '$0.00'}</td>
-                          <td className="p-3 text-center">
-                            <button onClick={() => deleteBill(row.id)} className="text-red-600 hover:underline text-xs">
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      ))
+                      reportData.map((row) => {
+                        const totalCols = 5 + maxServices + 1 + maxConsumables * 3 + 2;
+                        return (
+                          <tr key={row.id} className="hover:bg-gray-50 transition-colors">
+                            {(() => {
+                              const cells = [];
+                              cells.push(<td key="bill_no" className="px-4 py-3 text-sm font-semibold text-gray-900 whitespace-nowrap" style={{ minWidth: '110px' }}>{row.bill_no || row.bill_id || '-'}</td>);
+                              cells.push(<td key="patient" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '160px' }}>{row.patient_name || '-'}</td>);
+                              cells.push(<td key="uid" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '100px' }}>{row.uid || '-'}</td>);
+                              cells.push(<td key="date" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '120px' }}>{fmtDate(row.report_date)}</td>);
+                              cells.push(<td key="branch" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '130px' }}>{row.branch_name || '-'}</td>);
+                              
+                              for (let s = 0; s < maxServices; s++) {
+                                cells.push(<td key={`svc-${s}`} className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '180px', maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.servicesList && row.servicesList[s] ? row.servicesList[s] : '-'}</td>);
+                              }
+                              
+                              cells.push(<td key="machine" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '180px', maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.machine_name || '-'}</td>);
+                              
+                              for (let i = 0; i < maxConsumables; i++) {
+                                const c = row.consumables ? row.consumables[i] : null;
+                                cells.push(<td key={`csm-${i}`} className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '180px', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c ? c.name : '-'}</td>);
+                                cells.push(<td key={`units-${i}`} className="px-4 py-3 text-sm text-gray-700 text-center whitespace-nowrap" style={{ minWidth: '80px' }}>{c ? c.units : 0}</td>);
+                                cells.push(<td key={`cost-${i}`} className="px-4 py-3 text-sm font-semibold text-gray-700 text-right whitespace-nowrap" style={{ minWidth: '100px' }}>{c && c.cost ? `$${c.cost.toFixed(2)}` : '$0.00'}</td>);
+                              }
+                              
+                              cells.push(<td key="totalUnits" className="px-4 py-3 text-sm font-semibold text-gray-700 text-right whitespace-nowrap" style={{ minWidth: '120px' }}>{row.totalUnits || 0}</td>);
+                              cells.push(<td key="totalCost" className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap" style={{ minWidth: '120px' }}>{row.totalCost ? `$${row.totalCost.toFixed(2)}` : '$0.00'}</td>);
+                              cells.push(<td key="actions" className="px-4 py-3 text-center whitespace-nowrap" style={{ minWidth: '80px' }}>
+                                <button onClick={() => deleteBill(row.id)} className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-gray-200 bg-white hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-all text-gray-400" title="Delete">
+                                  <Trash2 size={14} />
+                                </button>
+                              </td>);
+                              return cells;
+                            })()}
+                          </tr>
+                        );
+                      })
                     )}
-                  </tbody>
-                </table>
-              </div>
+                </tbody>
+              </table>
             </div>
-          )}
-        </>
+          </div>
+        )}
+      </>
       ) : (
         /* ================= NON-BILLABLE VIEW ================= */
         <>
-          <div className="card p-4 mb-6 bg-white shadow rounded-lg">
-            <div className="flex items-center gap-3 flex-wrap mb-4">
-              <span className="font-bold text-[15px] text-gray-800">
-                NON-BILLABLE REPORTS
-              </span>
-              <div className="flex gap-2">
+          {/* Non-Billable Filter Card — matching billable card styling */}
+          <div style={{ background: '#FFFFFF', border: '1px solid #E5E7EB', borderRadius: '12px', padding: '24px', width: '100%' }}>
+            {/* Card Header: Flexbox — title left, toggle right */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+              <h2 style={{ fontSize: '14px', fontWeight: 700, color: '#1F2937', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Non-Billable Reports</h2>
+              <div style={{ display: 'inline-flex', padding: '4px', backgroundColor: '#F3F4F6', borderRadius: '8px' }}>
                 <button
-                  onClick={() => {
-                    setNbReportMode('detailed');
-                    setNbHasReport(false);
+                  onClick={() => { setNbReportMode('detailed'); setNbHasReport(false); }}
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '12px',
+                    fontWeight: nbReportMode === 'detailed' ? 600 : 500,
+                    borderRadius: '6px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                    background: nbReportMode === 'detailed' ? '#7C5CFC' : 'transparent',
+                    color: nbReportMode === 'detailed' ? '#FFFFFF' : '#4B5563',
                   }}
-                  className={`btn ${nbReportMode === 'detailed' ? 'btn-primary bg-blue-600 text-white px-3 py-1 rounded text-xs' : 'btn-ghost bg-gray-200 px-3 py-1 rounded text-xs'}`}
                 >
                   Detailed
                 </button>
                 <button
-                  onClick={() => {
-                    setNbReportMode('summary');
-                    setNbHasReport(false);
+                  onClick={() => { setNbReportMode('summary'); setNbHasReport(false); }}
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '12px',
+                    fontWeight: nbReportMode === 'summary' ? 600 : 500,
+                    borderRadius: '6px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                    background: nbReportMode === 'summary' ? '#7C5CFC' : 'transparent',
+                    color: nbReportMode === 'summary' ? '#FFFFFF' : '#4B5563',
                   }}
-                  className={`btn ${nbReportMode === 'summary' ? 'btn-primary bg-blue-600 text-white px-3 py-1 rounded text-xs' : 'btn-ghost bg-gray-200 px-3 py-1 rounded text-xs'}`}
                 >
                   Summary
                 </button>
               </div>
             </div>
 
-            <div className="flex items-center gap-4 flex-wrap">
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-semibold text-gray-600">Start</label>
+            {/* Filters: 4-column grid — Start Date, End Date, Branch, Generate */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 160px', gap: '16px', alignItems: 'end' }}>
+              {/* Start Date */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Start Date</label>
                 <input
                   type="date"
                   value={nbStart}
-                  onChange={(e) => {
-                    setNbStart(e.target.value);
-                    setNbHasReport(false);
-                  }}
-                  className="form-input border rounded p-2"
-                  style={{ width: 150 }}
+                  onChange={(e) => { setNbStart(e.target.value); setNbHasReport(false); }}
+                  style={{ width: '100%', height: '42px', padding: '0 12px', fontSize: '14px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#1F2937', outline: 'none', boxSizing: 'border-box' }}
+                  onFocus={(e) => { e.target.style.borderColor = '#7C5CFC'; e.target.style.boxShadow = '0 0 0 2px rgba(124,92,252,0.15)'; }}
+                  onBlur={(e) => { e.target.style.borderColor = '#D1D5DB'; e.target.style.boxShadow = 'none'; }}
                 />
               </div>
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-semibold text-gray-600">End</label>
+              {/* End Date */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>End Date</label>
                 <input
                   type="date"
                   value={nbEnd}
-                  onChange={(e) => {
-                    setNbEnd(e.target.value);
-                    setNbHasReport(false);
-                  }}
-                  className="form-input border rounded p-2"
-                  style={{ width: 150 }}
+                  onChange={(e) => { setNbEnd(e.target.value); setNbHasReport(false); }}
+                  style={{ width: '100%', height: '42px', padding: '0 12px', fontSize: '14px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#1F2937', outline: 'none', boxSizing: 'border-box' }}
+                  onFocus={(e) => { e.target.style.borderColor = '#7C5CFC'; e.target.style.boxShadow = '0 0 0 2px rgba(124,92,252,0.15)'; }}
+                  onBlur={(e) => { e.target.style.borderColor = '#D1D5DB'; e.target.style.boxShadow = 'none'; }}
                 />
               </div>
-
-              <SearchableDropdown
-                value={nbBranch}
-                onChange={(val) => {
-                  setNbBranch(val);
-                  setNbHasReport(false);
-                }}
-                options={branches.map((b) => ({ value: b.id, label: b.branch_name }))}
-                placeholder="All Branches"
-                displayKey="label"
-                valueKey="value"
-                disabled={nbLoading}
-              />
-
-              <button onClick={reloadNonBillable} disabled={nbLoading} className="btn btn-primary bg-blue-600 text-white px-4 py-2 rounded">
-                {nbLoading ? 'Loading...' : 'Generate Report'}
-              </button>
-              <button onClick={downloadCSV} disabled={!nbData.length} className="btn btn-secondary border px-3 py-2 rounded">
-                Export CSV
-              </button>
-              <button onClick={downloadExcel} disabled={!nbData.length} className="btn btn-secondary border px-3 py-2 rounded">
-                Export Excel
-              </button>
-            </div>
-
-            {nbBranch && (
-              <div className="mt-3 flex items-center gap-3">
-                <button onClick={clearNbFilters} className="btn btn-ghost text-xs text-gray-500 hover:underline">
-                  Clear Filters
+              {/* Branch */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Branch</label>
+                <SearchableDropdown
+                  value={nbBranch}
+                  onChange={(val) => { setNbBranch(val); setNbHasReport(false); }}
+                  options={branches.map((b) => ({ value: b.id, label: b.branch_name }))}
+                  placeholder="All Branches"
+                  displayKey="label"
+                  valueKey="value"
+                  disabled={nbLoading}
+                />
+              </div>
+              {/* Generate Report Button — same position as billable */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px', visibility: 'hidden' }}>Action</div>
+                <button onClick={reloadNonBillable} disabled={nbLoading} style={{ width: '160px', height: '42px', padding: '0 16px', background: '#7C5CFC', color: '#FFFFFF', fontSize: '13px', fontWeight: 600, border: 'none', borderRadius: '8px', cursor: nbLoading ? 'not-allowed' : 'pointer', opacity: nbLoading ? 0.5 : 1, whiteSpace: 'nowrap', transition: 'background 0.15s ease' }} onMouseEnter={(e) => { if (!nbLoading) e.target.style.background = '#6D28D9'; }} onMouseLeave={(e) => { if (!nbLoading) e.target.style.background = '#7C5CFC'; }}>
+                  {nbLoading ? 'Loading...' : 'Generate Report'}
                 </button>
               </div>
-            )}
+            </div>
+
+            {/* Action Links */}
+            <div style={{ display: 'flex', gap: '16px', marginTop: '18px' }}>
+              <button onClick={downloadCSV} disabled={!nbData.length} style={{ padding: '7px 16px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#374151', fontSize: '13px', fontWeight: 500, cursor: !nbData.length ? 'not-allowed' : 'pointer', opacity: !nbData.length ? 0.4 : 1, transition: 'background 0.15s ease' }} onMouseEnter={(e) => { if (nbData.length) e.target.style.background = '#F9FAFB'; }} onMouseLeave={(e) => { if (nbData.length) e.target.style.background = '#FFFFFF'; }}>
+                Export CSV
+              </button>
+              <button onClick={downloadExcel} disabled={!nbData.length} style={{ padding: '7px 16px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#374151', fontSize: '13px', fontWeight: 500, cursor: !nbData.length ? 'not-allowed' : 'pointer', opacity: !nbData.length ? 0.4 : 1, transition: 'background 0.15s ease' }} onMouseEnter={(e) => { if (nbData.length) e.target.style.background = '#F9FAFB'; }} onMouseLeave={(e) => { if (nbData.length) e.target.style.background = '#FFFFFF'; }}>
+                Export Excel
+              </button>
+              {nbBranch && (
+                <button onClick={clearNbFilters} style={{ padding: '7px 0', border: 'none', background: 'transparent', color: '#7C5CFC', fontSize: '13px', fontWeight: 600, cursor: 'pointer', marginLeft: 'auto' }}>
+                  Clear Filters
+                </button>
+              )}
+            </div>
           </div>
 
-          {/* Table Output */}
-          {nbHasReport && (
-            <div className="table-container bg-white shadow rounded-lg overflow-hidden">
-              <div className="table-toolbar p-4 border-b flex justify-between items-center">
-                <div className="table-toolbar-left">
-                  <span className="font-semibold">Report Results </span>
-                  <span className="text-gray-500 text-sm">({nbData.length} records)</span>
-                </div>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="rpt-table w-full text-left border-collapse">
+          {/* Table Output — only shown when there is actual data */}
+          {nbHasReport && nbData.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden" style={{ marginTop: '16px' }}>
+              <div className="overflow-x-auto w-full">
+                <table className="w-full text-left border-collapse" style={{ minWidth: nbReportMode === 'summary' ? 500 : 1000 }}>
                   <thead>
-                    <tr className="bg-gray-50 text-xs font-semibold text-gray-600 border-b">
+                    <tr className="bg-gray-50 border-b border-gray-200">
                       {nbReportMode === 'summary' ? (
                         <>
-                          <th className="p-3">Non-Billable Consumable</th>
-                          <th className="p-3 text-center">Quantity Used</th>
-                          <th className="p-3 text-right">Total Cost</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Non-Billable Consumable</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Quantity Used</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-right">Total Cost</th>
                         </>
                       ) : (
                         <>
-                          <th className="p-3">Date</th>
-                          <th className="p-3">Branch</th>
-                          <th className="p-3">Non-Billable Consumable</th>
-                          <th className="p-3">Opening Date</th>
-                          <th className="p-3">Closing Date</th>
-                          <th className="p-3">Service Used By</th>
-                          <th className="p-3 text-center">Times Used</th>
-                          <th className="p-3">Status</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ minWidth: 110 }}>Date</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ minWidth: 130 }}>Branch</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ minWidth: 200 }}>Consumable</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ minWidth: 130 }}>Opening Date</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ minWidth: 130 }}>Closing Date</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ minWidth: 180 }}>Service Used By</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center" style={{ minWidth: 100 }}>Times Used</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ minWidth: 100 }}>Status</th>
                         </>
                       )}
                     </tr>
                   </thead>
-                  <tbody className="divide-y text-sm">
+                  <tbody className="divide-y divide-gray-100">
                     {nbData.length === 0 ? (
                       <tr>
-                        <td
-                          colSpan={nbReportMode === 'summary' ? 3 : 8}
-                          className="text-center text-gray-500 p-8"
-                        >
+                        <td colSpan={nbReportMode === 'summary' ? 3 : 8} className="px-4 py-10 text-center text-sm text-gray-400">
                           No matching records found. Try changing the selected filters.
                         </td>
                       </tr>
                     ) : (
                       nbData.map((row, i) =>
                         nbReportMode === 'summary' ? (
-                          <tr key={i} className="hover:bg-gray-50">
-                            <td className="p-3">{row['NON-BILLABLE CONSUMABLE'] || '-'}</td>
-                            <td className="p-3 text-center">{row['QUANTITY USED'] || 0}</td>
-                            <td className="p-3 text-right">{row['TOTAL COST'] ? `$${row['TOTAL COST']}` : '$0.00'}</td>
+                          <tr key={i} className="hover:bg-gray-50 transition-colors">
+                            <td className="px-4 py-3 text-sm text-gray-700">{row['NON-BILLABLE CONSUMABLE'] || '-'}</td>
+                            <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['QUANTITY USED'] || 0}</td>
+                            <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row['TOTAL COST'] ? `$${row['TOTAL COST']}` : '$0.00'}</td>
                           </tr>
                         ) : (
-                          <tr key={i} className="hover:bg-gray-50">
-                            <td className="p-3">{fmtDate(row.date)}</td>
-                            <td className="p-3">{row.branch || '-'}</td>
-                            <td className="p-3">{row.consumableName || '-'}</td>
-                            <td className="p-3">{fmtDate(row.openingDate)}</td>
-                            <td className="p-3">{fmtDate(row.closingDate)}</td>
-                            <td className="p-3">{row.serviceUsedBy || '-'}</td>
-                            <td className="p-3 text-center">{row.serviceUsedCount || 0}</td>
-                            <td className="p-3">{row.status || '-'}</td>
+                          <tr key={i} className="hover:bg-gray-50 transition-colors">
+                            <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{fmtDate(row.date)}</td>
+                            <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{row.branch || '-'}</td>
+                            <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.consumableName || '-'}</td>
+                            <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{fmtDate(row.openingDate)}</td>
+                            <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{fmtDate(row.closingDate)}</td>
+                            <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.serviceUsedBy || '-'}</td>
+                            <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row.serviceUsedCount || 0}</td>
+                            <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{row.status || '-'}</td>
                           </tr>
                         )
                       )
                     )}
-                  </tbody>
-                </table>
-              </div>
+                </tbody>
+              </table>
             </div>
-          )}
-        </>
-      )}
-    </div>
+          </div>
+        )}
+      </>
+    )}
+  </div>
   );
 };
 

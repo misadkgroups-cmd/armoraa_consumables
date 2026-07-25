@@ -7,9 +7,10 @@ import * as XLSX from 'xlsx';
 import * as stockApi from '../services/stockApi';
 
 const StockManagement = () => {
-  const { branchId } = useBranch();
+  const { branchId, misMode } = useBranch();
   const [activeTab, setActiveTab] = useState('billable');
   const [stock, setStock] = useState([]);
+  const [corporateStock, setCorporateStock] = useState([]);
   const [history, setHistory] = useState([]);
   const [products, setProducts] = useState([]);
   const [branches, setBranches] = useState([]);
@@ -19,6 +20,11 @@ const StockManagement = () => {
   // Adjustment form
   const [adjustForm, setAdjustForm] = useState({ product_id: '', product_type: 'Billable', current_stock: 0, add_units: '', reduce_units: '', remarks: '' });
   const [showAdjustModal, setShowAdjustModal] = useState(false);
+  
+  // Corporate Stock form
+  const [corporateForm, setCorporateForm] = useState({ product_id: '', product_type: 'Billable', available_units: '', minimum_units: 10, remarks: '' });
+  const [showCorporateModal, setShowCorporateModal] = useState(false);
+  const [editingCorporateId, setEditingCorporateId] = useState(null);
   
   // Transfer form
   const [transferForm, setTransferForm] = useState({ 
@@ -41,8 +47,11 @@ const StockManagement = () => {
         .order('branch_name');
       
       if (!error && data) {
-        // Add Corporate as a virtual option
-        setBranches([{ id: 'corporate', branch_name: 'Corporate', is_corporate: true }, ...data]);
+        // Add Corporate Warehouse as virtual option, then all DB branches
+        setBranches([
+          { id: 'corporate', branch_name: 'Corporate Warehouse' },
+          ...data
+        ]);
       }
     } catch (e) {
       console.error('Error fetching branches:', e);
@@ -66,8 +75,25 @@ const StockManagement = () => {
       return;
     }
     try {
-      const data = await stockApi.getStock(transferForm.product_type, transferForm.product_id, transferForm.from_branch_id);
-      setSourceStock(data?.current_stock || 0);
+      if (transferForm.from_branch_id === 'corporate') {
+        // Fetch from corporate_stock table
+        const { data, error } = await supabase
+          .from('corporate_stock')
+          .select('available_units')
+          .eq('product_id', Number(transferForm.product_id))
+          .eq('stock_type', transferForm.product_type)
+          .single();
+        
+        if (!error && data) {
+          setSourceStock(data.available_units || 0);
+        } else {
+          setSourceStock(0);
+        }
+      } else {
+        // Fetch from stock_inventory table for regular branches
+        const data = await stockApi.getStock(transferForm.product_type, transferForm.product_id, transferForm.from_branch_id);
+        setSourceStock(data?.current_stock || 0);
+      }
     } catch (e) {
       console.error('Error fetching source stock:', e);
       setSourceStock(0);
@@ -77,6 +103,7 @@ const StockManagement = () => {
   useEffect(() => {
     if (branchId) {
       fetchStock();
+      fetchCorporateStock();
       fetchProducts();
     }
   }, [branchId, activeTab]);
@@ -93,6 +120,24 @@ const StockManagement = () => {
       setLoading(false);
     }
   }, [branchId]);
+
+  const fetchCorporateStock = async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('corporate_stock')
+        .select('*')
+        .order('product_name');
+      
+      if (!error && data) {
+        setCorporateStock(data);
+      }
+    } catch (e) {
+      console.error('Error fetching corporate stock:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const fetchProducts = async () => {
     try {
@@ -319,25 +364,165 @@ const StockManagement = () => {
 
     setLoading(true);
     try {
-      const result = await stockApi.transferStock({
+      const isCorporateSource = transferForm.from_branch_id === 'corporate';
+      console.log('Transfer details:', {
+        from: transferForm.from_branch_id,
+        to: transferForm.to_branch_id,
+        productId: transferForm.product_id,
         productType: transferForm.product_type,
-        consumableId: Number(transferForm.product_id),
-        fromBranchId: transferForm.from_branch_id === 'corporate' ? 'corporate' : Number(transferForm.from_branch_id),
-        toBranchId: transferForm.to_branch_id === 'corporate' ? 'corporate' : Number(transferForm.to_branch_id),
         quantity,
-        remarks: transferForm.remarks || 'Stock transfer',
-        createdBy: 'Admin'
+        isCorporateSource
       });
 
-      if (result.success) {
-        alert('Stock transferred successfully');
-        setShowTransferModal(false);
-        setTransferForm({ product_id: '', product_type: 'Billable', from_branch_id: '', to_branch_id: '', quantity: '', remarks: '' });
-        fetchStock();
+      if (isCorporateSource) {
+        // Corporate Warehouse -> Branch transfer
+        console.log('Starting corporate transfer...');
+        
+        // Fetch corporate stock
+        const { data: corporateData, error: corporateError } = await supabase
+          .from('corporate_stock')
+          .select('available_units, product_name')
+          .eq('product_id', Number(transferForm.product_id))
+          .eq('stock_type', transferForm.product_type)
+          .single();
+
+        console.log('Corporate stock data:', corporateData, 'Error:', corporateError);
+
+        if (corporateError || !corporateData) {
+          alert('Error: Corporate stock not found for this product');
+          return;
+        }
+
+        console.log('Available:', corporateData.available_units, 'Requested:', quantity);
+
+        if (corporateData.available_units < quantity) {
+          alert(`Insufficient corporate stock. Available: ${corporateData.available_units}, Required: ${quantity}`);
+          return;
+        }
+
+        // Update corporate stock
+        const newCorporateQty = corporateData.available_units - quantity;
+        console.log('Updating corporate stock to:', newCorporateQty);
+        
+        const { error: updateError } = await supabase
+          .from('corporate_stock')
+          .update({ available_units: newCorporateQty })
+          .eq('product_id', Number(transferForm.product_id))
+          .eq('stock_type', transferForm.product_type);
+
+        if (updateError) {
+          console.error('Error updating corporate stock:', updateError);
+          alert('Error updating corporate stock: ' + updateError.message);
+          return;
+        }
+
+        console.log('Corporate stock updated');
+
+        // Add to branch stock - check if exists first, then update or insert
+        const { data: existingStock, error: checkError } = await supabase
+          .from('stock_inventory')
+          .select('id, current_stock')
+          .eq('product_type', transferForm.product_type)
+          .eq('consumable_id', Number(transferForm.product_id))
+          .eq('branch_id', Number(transferForm.to_branch_id))
+          .maybeSingle();
+
+        let branchError;
+        if (existingStock) {
+          // Update existing stock
+          const newStock = (existingStock.current_stock || 0) + quantity;
+          const result = await supabase
+            .from('stock_inventory')
+            .update({ current_stock: newStock, updated_at: new Date().toISOString() })
+            .eq('id', existingStock.id);
+          branchError = result.error;
+        } else {
+          // Insert new stock
+          const result = await supabase
+            .from('stock_inventory')
+            .insert({
+              product_type: transferForm.product_type,
+              consumable_id: Number(transferForm.product_id),
+              branch_id: Number(transferForm.to_branch_id),
+              current_stock: quantity,
+              created_by: 'Admin',
+              updated_at: new Date().toISOString()
+            });
+          branchError = result.error;
+        }
+
+        if (branchError) {
+          console.error('Error adding to branch:', branchError);
+          alert('Error adding stock to branch: ' + branchError.message);
+          return;
+        }
+
+        console.log('Branch stock added');
+
+        // Log transactions
+        await supabase.from('corporate_stock_transactions').insert([{
+          product_id: Number(transferForm.product_id),
+          product_name: corporateData.product_name || '',
+          stock_type: transferForm.product_type,
+          transaction_type: 'Outward',
+          quantity: quantity,
+          balance_after: newCorporateQty,
+          remarks: `Transferred to ${branches.find(b => String(b.id) === String(transferForm.to_branch_id))?.branch_name || 'branch'}`,
+          created_by: 'Admin'
+        }]);
+
+        await supabase.from('stock_transactions').insert([{
+          transaction_type: 'Inward',
+          product_type: transferForm.product_type,
+          consumable_id: Number(transferForm.product_id),
+          branch_id: Number(transferForm.to_branch_id),
+          quantity: quantity,
+          remarks: `Received from Corporate Warehouse`,
+          created_by: 'Admin'
+        }]);
+
+        console.log('Transfer completed successfully');
+        alert('Stock transferred successfully from Corporate Warehouse');
+        
       } else {
-        alert(result.message || 'Failed to transfer stock');
+        // Branch to Branch transfer
+        console.log('Starting branch-to-branch transfer...');
+        const result = await stockApi.transferStock({
+          productType: transferForm.product_type,
+          consumableId: Number(transferForm.product_id),
+          fromBranchId: Number(transferForm.from_branch_id),
+          toBranchId: Number(transferForm.to_branch_id),
+          quantity,
+          remarks: transferForm.remarks || 'Stock transfer',
+          createdBy: 'Admin'
+        });
+
+        console.log('Branch transfer result:', result);
+
+        if (!result.success) {
+          alert('Transfer failed: ' + (result.message || 'Unknown error'));
+          return;
+        }
+
+        console.log('Branch transfer completed');
+        alert('Stock transferred successfully between branches');
       }
+
+      // Reset form and refresh data
+      setShowTransferModal(false);
+      setTransferForm({ 
+        product_id: '', 
+        product_type: 'Billable', 
+        from_branch_id: 'corporate', 
+        to_branch_id: branchId || '', 
+        quantity: '', 
+        remarks: '' 
+      });
+      fetchStock();
+      fetchCorporateStock();
+      
     } catch (e) {
+      console.error('Transfer error:', e);
       alert('Error transferring stock: ' + e.message);
     } finally {
       setLoading(false);
@@ -351,8 +536,8 @@ const StockManagement = () => {
           <h1>Stock Management</h1>
           <p>Track and manage consumable inventory</p>
         </div>
-        <div className="page-header-actions">
-          {activeTab !== 'history' && (
+      <div className="page-header-actions">
+          {activeTab !== 'history' && activeTab !== 'corporate' && (
             <>
               <button onClick={downloadCSV} disabled={filteredStock.length === 0} className="btn btn-secondary">
                 <FileText size={16} />
@@ -364,37 +549,50 @@ const StockManagement = () => {
               </button>
             </>
           )}
-          <button onClick={() => {
-            setAdjustForm({ product_id: '', product_type: activeTab === 'non-billable' ? 'Non-Billable' : 'Billable', current_stock: 0, add_units: '', reduce_units: '', remarks: '' });
-            setShowAdjustModal(true);
-          }} className="btn btn-primary">
-            <Plus size={16} /> Adjust Stock
-          </button>
-          <button onClick={() => {
-            setTransferForm({ product_id: '', product_type: activeTab === 'non-billable' ? 'Non-Billable' : 'Billable', from_branch_id: '', to_branch_id: '', quantity: '', remarks: '' });
-            setShowTransferModal(true);
-          }} className="btn btn-primary" style={{ backgroundColor: '#059669' }}>
-            <Send size={16} /> Transfer Stock
-          </button>
+          {misMode && activeTab === 'corporate' && (
+            <button onClick={() => {
+              setCorporateForm({ product_id: '', product_type: 'Billable', available_units: '', minimum_units: 10, remarks: '' });
+              setEditingCorporateId(null);
+              setShowCorporateModal(true);
+            }} className="btn btn-primary">
+              <Plus size={16} /> Add Corporate Stock
+            </button>
+          )}
+          {misMode && activeTab !== 'corporate' && (
+            <button onClick={() => {
+              setTransferForm({ product_id: '', product_type: activeTab === 'non-billable' ? 'Non-Billable' : 'Billable', from_branch_id: 'corporate', to_branch_id: branchId || '', quantity: '', remarks: '' });
+              setShowTransferModal(true);
+            }} className="btn btn-primary" style={{ backgroundColor: '#059669' }}>
+              <Send size={16} /> Transfer Stock
+            </button>
+          )}
         </div>
       </div>
 
       {/* Tabs */}
       <div className="flex border-b border-[var(--color-line)] mb-4">
         <button 
-          onClick={() => { setActiveTab('billable'); fetchStock(); }}
+          onClick={() => setActiveTab('billable')}
           className={`flex-1 px-6 py-3 text-sm font-medium transition-all relative ${activeTab === 'billable' ? 'text-[var(--color-primary)] border-b-2 border-[var(--color-primary)]' : 'text-muted hover:text-text'}`}
         >
           Billable Stock
         </button>
         <button 
-          onClick={() => { setActiveTab('non-billable'); fetchStock(); }}
+          onClick={() => setActiveTab('non-billable')}
           className={`flex-1 px-6 py-3 text-sm font-medium transition-all relative ${activeTab === 'non-billable' ? 'text-[var(--color-primary)] border-b-2 border-[var(--color-primary)]' : 'text-muted hover:text-text'}`}
         >
           Non-Billable Stock
         </button>
+        {misMode && (
+          <button 
+            onClick={() => { setActiveTab('corporate'); fetchCorporateStock(); }}
+            className={`flex-1 px-6 py-3 text-sm font-medium transition-all relative ${activeTab === 'corporate' ? 'text-[var(--color-primary)] border-b-2 border-[var(--color-primary)]' : 'text-muted hover:text-text'}`}
+          >
+            Corporate Stock
+          </button>
+        )}
         <button 
-          onClick={() => { setActiveTab('history'); }}
+          onClick={() => setActiveTab('history')}
           className={`flex-1 px-6 py-3 text-sm font-medium transition-all relative ${activeTab === 'history' ? 'text-[var(--color-primary)] border-b-2 border-[var(--color-primary)]' : 'text-muted hover:text-text'}`}
         >
           Transaction History
@@ -415,8 +613,87 @@ const StockManagement = () => {
         </div>
       </div>
 
+      {/* Corporate Stock Tab */}
+      {activeTab === 'corporate' && (
+        <div className="table-container">
+          <table className="rpt-table">
+            <thead>
+              <tr>
+                <th className="rpt-c-service">Product Name</th>
+                <th className="rpt-c-service">Type</th>
+                <th className="rpt-c-units">Available Units</th>
+                <th className="rpt-c-units">Minimum Units</th>
+                <th className="rpt-c-date">Last Updated</th>
+                <th className="rpt-c-actions sticky" style={{ background: 'var(--color-tint-2)' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {corporateStock.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="text-center text-muted" style={{ padding: 40 }}>
+                    {loading ? 'Loading...' : 'No corporate stock records found'}
+                  </td>
+                </tr>
+              )}
+              {corporateStock.map((item) => {
+                const product = products.find(p => p.id === item.product_id && p.type === item.stock_type);
+                return (
+                  <tr key={item.id}>
+                    <td className="rpt-wrap font-medium">{item.product_name || product?.product_name || `Product ${item.product_id}`}</td>
+                    <td className="rpt-nowrap">
+                      <span className={`sbadge ${item.stock_type === 'Billable' ? 'active' : 'inactive'}`}>
+                        <span className={`status-dot ${item.stock_type === 'Billable' ? 'green' : 'orange'}`} />
+                        {item.stock_type}
+                      </span>
+                    </td>
+                    <td className="rpt-nowrap" style={{ textAlign: 'center' }}>
+                      <span className="font-semibold text-green-600">{item.available_units}</span>
+                    </td>
+                    <td className="rpt-nowrap" style={{ textAlign: 'center' }}>
+                      <span className="font-medium">{item.minimum_units || 10}</span>
+                    </td>
+                    <td className="rpt-nowrap">
+                      <span className="rpt-date">{item.updated_at ? new Date(item.updated_at).toLocaleDateString('en-GB') : '-'}</span>
+                    </td>
+                    <td className="rpt-actions-cell">
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button 
+                          onClick={() => {
+                            setCorporateForm({
+                              product_id: item.product_id,
+                              product_type: item.stock_type,
+                              available_units: item.available_units,
+                              minimum_units: item.minimum_units,
+                              remarks: ''
+                            });
+                            setEditingCorporateId(item.id);
+                            setShowCorporateModal(true);
+                          }}
+                          className="rpt-act-icon edit"
+                          title="Edit Corporate Stock"
+                        >
+                          <Edit2 size={16} />
+                        </button>
+                        <button 
+                          onClick={() => handleViewHistory({ id: item.product_id, type: item.stock_type })}
+                          className="rpt-act-icon"
+                          title="View History"
+                          style={{ color: 'var(--color-primary)' }}
+                        >
+                          <History size={16} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {/* Current Stock Tab */}
-      {activeTab !== 'history' && (
+      {activeTab !== 'history' && activeTab !== 'corporate' && (
         <div className="table-container">
           <table className="rpt-table">
             <thead>
@@ -462,23 +739,25 @@ const StockManagement = () => {
                     </td>
                     <td className="rpt-actions-cell">
                       <div className="flex items-center justify-center gap-1.5">
-                        <button 
-                          onClick={() => {
-                            setAdjustForm({
-                              product_id: item.consumable_id,
-                              product_type: item.product_type,
-                              current_stock: item.current_stock,
-                              add_units: '',
-                              reduce_units: '',
-                              remarks: ''
-                            });
-                            setShowAdjustModal(true);
-                          }}
-                          className="rpt-act-icon edit"
-                          title="Adjust Stock"
-                        >
-                          <Edit2 size={16} />
-                        </button>
+                        {misMode && (
+                          <button 
+                            onClick={() => {
+                              setAdjustForm({
+                                product_id: item.consumable_id,
+                                product_type: item.product_type,
+                                current_stock: item.current_stock,
+                                add_units: '',
+                                reduce_units: '',
+                                remarks: ''
+                              });
+                              setShowAdjustModal(true);
+                            }}
+                            className="rpt-act-icon edit"
+                            title="Adjust Stock"
+                          >
+                            <Edit2 size={16} />
+                          </button>
+                        )}
                         <button 
                           onClick={() => handleViewHistory({ id: item.consumable_id, type: item.product_type })}
                           className="rpt-act-icon"
@@ -555,8 +834,8 @@ const StockManagement = () => {
         </div>
       )}
 
-      {/* Adjust Stock Modal */}
-      {showAdjustModal && (
+      {/* Adjust Stock Modal - MIS Only */}
+      {misMode && showAdjustModal && (
         <div className="modal-overlay">
           <div className="modal" style={{ maxWidth: 520 }}>
             <div className="modal-header">
@@ -666,6 +945,51 @@ const StockManagement = () => {
         </div>
       )}
 
+      {/* Corporate Stock Modal */}
+      {showCorporateModal && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ maxWidth: 520 }}>
+            <div className="modal-header">
+              <h3>{editingCorporateId ? 'Edit Corporate Stock' : 'Add Corporate Stock'}</h3>
+              <button onClick={() => { setShowCorporateModal(false); setEditingCorporateId(null); }} className="btn btn-ghost btn-icon">×</button>
+            </div>
+            <div className="modal-body space-y-4">
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-muted block">Stock Type</label>
+                <div className="flex gap-2">
+                  <button onClick={() => setCorporateForm({ ...corporateForm, product_type: 'Billable', product_id: '' })} className={`flex-1 px-4 py-2.5 text-sm font-medium rounded-lg transition-all ${corporateForm.product_type === 'Billable' ? 'bg-[var(--color-primary)] text-white shadow-md' : 'bg-[var(--color-tint-2)] text-muted hover:bg-[var(--color-line)]'}`}>Billable</button>
+                  <button onClick={() => setCorporateForm({ ...corporateForm, product_type: 'Non-Billable', product_id: '' })} className={`flex-1 px-4 py-2.5 text-sm font-medium rounded-lg transition-all ${corporateForm.product_type === 'Non-Billable' ? 'bg-[var(--color-primary)] text-white shadow-md' : 'bg-[var(--color-tint-2)] text-muted hover:bg-[var(--color-line)]'}`}>Non-Billable</button>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-muted block">Product <span style={{ color: '#EF4444' }}>*</span></label>
+                <SearchableDropdown value={corporateForm.product_id} onChange={(val) => { const product = products.find(p => String(p.id) === val); setCorporateForm({ ...corporateForm, product_id: val, product_name: product?.product_name || '' }); }} options={products.filter(p => p.type === corporateForm.product_type).map(p => ({ value: String(p.id), label: p.product_name }))} placeholder="Select product" displayKey="label" valueKey="value" />
+              </div>
+              {corporateForm.product_id && (
+                <>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-muted block">Available Units <span style={{ color: '#EF4444' }}>*</span></label>
+                    <input type="number" className="form-input" value={corporateForm.available_units} onChange={(e) => setCorporateForm({ ...corporateForm, available_units: e.target.value })} placeholder="Enter units" min="0" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-muted block">Minimum Units</label>
+                    <input type="number" className="form-input" value={corporateForm.minimum_units} onChange={(e) => setCorporateForm({ ...corporateForm, minimum_units: e.target.value })} placeholder="Minimum stock level" min="0" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-muted block">Remarks</label>
+                    <textarea className="form-input" value={corporateForm.remarks} onChange={(e) => setCorporateForm({ ...corporateForm, remarks: e.target.value })} placeholder="Reason for adjustment" rows="3" />
+                  </div>
+                </>
+              )}
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, paddingTop: 20, borderTop: '1px solid var(--color-line)' }}>
+                <button onClick={() => { setShowCorporateModal(false); setEditingCorporateId(null); }} className="btn btn-secondary">Cancel</button>
+                <button onClick={async () => { if (!corporateForm.product_id || !corporateForm.available_units) { alert('Please fill in all required fields'); return; } setLoading(true); try { const productIdInt = parseInt(corporateForm.product_id); const availableUnitsInt = parseInt(corporateForm.available_units); const minimumUnitsInt = parseInt(corporateForm.minimum_units) || 10; const productName = products.find(p => String(p.id) === corporateForm.product_id)?.product_name || ''; let error; if (editingCorporateId) { const result = await supabase.from('corporate_stock').update({ available_units: availableUnitsInt, minimum_units: minimumUnitsInt, updated_by: 'Admin' }).eq('id', editingCorporateId); error = result.error; } else { const result = await supabase.from('corporate_stock').upsert({ product_id: productIdInt, product_name: productName, stock_type: corporateForm.product_type, available_units: availableUnitsInt, minimum_units: minimumUnitsInt, updated_by: 'Admin' }, { onConflict: 'product_id,stock_type' }); error = result.error; } if (error) { console.error('Database error:', error); throw error; } await supabase.from('corporate_stock_transactions').insert([{ product_id: productIdInt, product_name: productName, stock_type: corporateForm.product_type, transaction_type: editingCorporateId ? 'Adjustment' : 'Inward', quantity: availableUnitsInt, balance_after: availableUnitsInt, remarks: corporateForm.remarks || (editingCorporateId ? 'Stock updated' : 'Initial stock'), created_by: 'Admin' }]); alert(editingCorporateId ? 'Corporate stock updated successfully' : 'Corporate stock added successfully'); setShowCorporateModal(false); setEditingCorporateId(null); setCorporateForm({ product_id: '', product_type: 'Billable', available_units: '', minimum_units: 10, remarks: '' }); fetchCorporateStock(); } catch (error) { console.error('Error saving corporate stock:', error); alert('Failed to save corporate stock: ' + error.message); } finally { setLoading(false); } }} disabled={loading} className="btn btn-primary">{loading ? 'Saving...' : editingCorporateId ? 'Update Stock' : 'Add Stock'}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Transfer Stock Modal */}
       {showTransferModal && (
         <div className="modal-overlay">
@@ -705,8 +1029,19 @@ const StockManagement = () => {
                 <label className="text-xs font-semibold text-muted block">Product <span style={{ color: '#EF4444' }}>*</span></label>
                 <SearchableDropdown
                   value={transferForm.product_id}
-                  onChange={(val) => setTransferForm({ ...transferForm, product_id: val })}
-                  options={products.filter(p => p.type === transferForm.product_type).map(p => ({ value: String(p.id), label: p.product_name }))}
+                  onChange={(val) => {
+                    setTransferForm({ ...transferForm, product_id: val });
+                    setSourceStock(0);
+                  }}
+                  options={
+                    transferForm.from_branch_id === 'corporate'
+                      ? corporateStock
+                          .filter(x => x.stock_type === transferForm.product_type)
+                          .map(x => ({ value: String(x.product_id), label: x.product_name }))
+                      : products
+                          .filter(p => p.type === transferForm.product_type)
+                          .map(p => ({ value: String(p.id), label: p.product_name }))
+                  }
                   placeholder="Select product"
                   displayKey="label"
                   valueKey="value"
@@ -715,37 +1050,54 @@ const StockManagement = () => {
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-muted block">From Branch <span style={{ color: '#EF4444' }}>*</span></label>
+                  <label className="text-xs font-semibold text-muted block">From <span style={{ color: '#EF4444' }}>*</span></label>
                   <SearchableDropdown
                     value={transferForm.from_branch_id}
                     onChange={async (val) => {
-                      setTransferForm({ ...transferForm, from_branch_id: val });
-                      // Reset and refetch source stock when branch changes
+                      const newFromBranchId = val;
+                      setTransferForm({ ...transferForm, from_branch_id: newFromBranchId });
                       setSourceStock(0);
-                      if (val && transferForm.product_id && transferForm.product_type) {
-                        // Small delay to let state update
-                        setTimeout(async () => {
-                          const data = await stockApi.getStock(transferForm.product_type, Number(transferForm.product_id), val);
-                          setSourceStock(data?.current_stock || 0);
-                        }, 100);
+                      
+                      // Fetch source stock immediately when branch is selected
+                      if (newFromBranchId && transferForm.product_id && transferForm.product_type) {
+                        try {
+                          if (newFromBranchId === 'corporate') {
+                            const { data, error } = await supabase
+                              .from('corporate_stock')
+                              .select('available_units')
+                              .eq('product_id', Number(transferForm.product_id))
+                              .eq('stock_type', transferForm.product_type)
+                              .single();
+                            if (!error && data) {
+                              setSourceStock(data.available_units || 0);
+                            }
+                          } else {
+                            const data = await stockApi.getStock(transferForm.product_type, Number(transferForm.product_id), newFromBranchId);
+                            setSourceStock(data?.current_stock || 0);
+                          }
+                        } catch (e) {
+                          console.error('Error fetching source stock:', e);
+                          setSourceStock(0);
+                        }
                       }
                     }}
-                    options={branches.map(b => ({ value: b.id, label: b.branch_name }))}
-                    placeholder="Source branch"
+                    options={branches.map(b => ({ value: String(b.id), label: b.branch_name }))}
+                    placeholder="Source"
                     displayKey="label"
                     valueKey="value"
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-semibold text-muted block">To Branch <span style={{ color: '#EF4444' }}>*</span></label>
+                  <label className="text-xs font-semibold text-muted block">To <span style={{ color: '#EF4444' }}>*</span></label>
                   <SearchableDropdown
                     value={transferForm.to_branch_id}
                     onChange={(val) => setTransferForm({ ...transferForm, to_branch_id: val })}
-                    options={branches.map(b => ({ value: b.id, label: b.branch_name }))}
-                    placeholder="Destination branch"
+                    options={branches
+                      .filter(b => String(b.id) !== String(transferForm.from_branch_id))
+                      .map(b => ({ value: String(b.id), label: b.branch_name }))}
+                    placeholder="Destination"
                     displayKey="label"
                     valueKey="value"
-                    disabled={transferForm.from_branch_id === 'corporate'}
                   />
                 </div>
               </div>
@@ -753,7 +1105,7 @@ const StockManagement = () => {
               {transferForm.product_id && transferForm.from_branch_id && (
                 <div className="p-4 rounded-lg" style={{ background: 'var(--color-tint-2)' }}>
                   <div style={{ fontSize: 11, color: 'var(--color-muted)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 6 }}>
-                    Available at {branches.find(b => b.id === transferForm.from_branch_id)?.branch_name}
+                    Available at {transferForm.from_branch_id === 'corporate' ? 'Corporate Warehouse' : branches.find(b => b.id === transferForm.from_branch_id)?.branch_name}
                   </div>
                   <div style={{ fontSize: 20, fontWeight: 700, color: 'var(--color-primary)' }}>
                     {sourceStock} {transferForm.product_type === 'Billable' ? 'units' : 'items'}

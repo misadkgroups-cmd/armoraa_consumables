@@ -1,156 +1,179 @@
 import { supabase } from '../config/supabase';
-import { withRetry } from '../utils/supabaseRetry';
 
-// Log audit trail for data changes
-export async function logAudit({
-  username,
-  branchName,
-  moduleName,
-  actionType, // CREATE, UPDATE, DELETE
+export const getAuditHistory = async (tableName, recordId) => {
+  try {
+    const { data, error } = await supabase
+      .from('audit_logs')
+      .select('*')
+      .eq('table_name', tableName)
+      .eq('record_id', recordId)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching audit history:', error);
+    return [];
+  }
+};
+
+export const getActivityLogs = async (moduleName, recordId) => {
+  try {
+    const { data, error } = await supabase
+      .from('activity_logs')
+      .select('*')
+      .eq('module_name', moduleName)
+      .eq('record_id', recordId)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching activity logs:', error);
+    return [];
+  }
+};
+
+export const logAudit = async ({
   tableName,
   recordId,
-  oldData = null,
-  newData = null
-}) {
+  actionType,
+  fieldName,
+  oldValue,
+  newValue,
+  performedBy,
+  performedByName,
+  performedByRole,
+  branchId
+}) => {
   try {
-    const { error } = await withRetry(() =>
-      supabase
-        .from('audit_logs')
-        .insert({
-          username: username || 'System',
-          branch_name: branchName || null,
-          module_name: moduleName,
-          action_type: actionType,
-          table_name: tableName,
-          record_id: recordId,
-          old_data: oldData,
-          new_data: newData
-        })
-    );
-    
-    if (error) {
-      console.error('Audit log error (503 retries exhausted):', error.message);
-    }
-    return { success: !error };
-  } catch (e) {
-    console.error('Error logging audit:', e);
-    return { success: false };
-  }
-}
+    const { error } = await supabase
+      .from('audit_logs')
+      .insert({
+        table_name: tableName,
+        record_id: recordId,
+        action_type: actionType,
+        field_name: fieldName,
+        old_value: oldValue,
+        new_value: newValue,
+        performed_by: performedBy,
+        performed_by_name: performedByName,
+        performed_by_role: performedByRole,
+        branch_id: branchId
+      });
 
-// Log activity
-export async function logActivity({
-  username,
-  branchName,
-  pageName,
-  action,
-  remarks = ''
-}) {
-  try {
-    const { error } = await withRetry(() =>
-      supabase
-        .from('activity_logs')
-        .insert({
-          username: username || 'System',
-          branch_name: branchName || null,
-          page_name: pageName,
-          action: action,
-          remarks: remarks
-        })
-    );
-    
-    if (error) {
-      console.error('Activity log error (503 retries exhausted):', error.message);
-    }
-    return { success: !error };
-  } catch (e) {
-    console.error('Error logging activity:', e);
-    return { success: false };
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error logging audit:', error);
+    return false;
   }
-}
+};
 
-// Get audit history for a record
-export async function getAuditHistory(tableName, recordId, limit = 50) {
+export const logActivity = async ({
+  moduleName,
+  recordId,
+  activityType,
+  activityDescription,
+  userId,
+  userName,
+  userRole,
+  branchId
+}) => {
   try {
-    const { data, error } = await withRetry(() => {
-      let query = supabase
-        .from('audit_logs')
-        .select('*')
-        .eq('table_name', tableName)
-        .eq('record_id', recordId)
-        .order('created_at', { ascending: false });
-      
-      if (limit) query = query.limit(limit);
-      
-      return query;
-    });
-    
-    if (error) {
-      console.warn('Get audit history error:', error.message);
-      return [];
-    }
-    return data || [];
-  } catch (e) {
-    console.error('Error fetching audit history:', e);
-    return [];
-  }
-}
+    const { error } = await supabase
+      .from('activity_logs')
+      .insert({
+        module_name: moduleName,
+        record_id: recordId,
+        activity_type: activityType,
+        activity_description: activityDescription,
+        user_id: userId,
+        user_name: userName,
+        user_role: userRole,
+        branch_id: branchId
+      });
 
-// Get activity logs (for page-level history)
-export async function getActivityLogs(pageName = null, limit = 50) {
-  try {
-    const { data, error } = await withRetry(() => {
-      let query = supabase
-        .from('activity_logs')
-        .select('*')
-        .order('created_at', { ascending: false });
-      
-      if (pageName) query = query.eq('page_name', pageName);
-      if (limit) query = query.limit(limit);
-      
-      return query;
-    });
-    
-    if (error) {
-      console.warn('Get activity logs error:', error.message);
-      return [];
-    }
-    return data || [];
-  } catch (e) {
-    console.error('Error fetching activity logs:', e);
-    return [];
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error logging activity:', error);
+    return false;
   }
-}
+};
 
-// Log bill history
-export async function logBillHistory({
-  billId,
-  username,
-  actionType, // CREATE, UPDATE, DELETE, STATUS_CHANGE
-  fieldName = null,
-  oldValue = null,
-  newValue = null
-}) {
+export const getDashboardKPIs = async (branchId, dateRange) => {
   try {
-    const { error } = await withRetry(() =>
-      supabase
-        .from('bill_history')
-        .insert({
-          bill_id: billId,
-          username: username || 'System',
-          action_type: actionType,
-          field_name: fieldName,
-          old_value: oldValue,
-          new_value: newValue
-        })
-    );
+    const today = new Date().toISOString().split('T')[0];
     
-    if (error) {
-      console.error('Bill history log error (503 retries exhausted):', error.message);
+    // Bills created today
+    let billsQuery = supabase
+      .from('activity_logs')
+      .select('id', { count: 'exact' })
+      .eq('module_name', 'billing_log')
+      .eq('activity_type', 'created')
+      .eq('created_at', today);
+
+    if (branchId) {
+      billsQuery = billsQuery.eq('branch_id', branchId);
     }
-    return { success: !error };
-  } catch (e) {
-    console.error('Error logging bill history:', e);
-    return { success: false };
+
+    const { count: billsCreated, error: billsError } = await billsQuery;
+    if (billsError) throw billsError;
+
+    // Bills edited today
+    let editedQuery = supabase
+      .from('activity_logs')
+      .select('id', { count: 'exact' })
+      .eq('module_name', 'billing_log')
+      .eq('activity_type', 'edited')
+      .eq('created_at', today);
+
+    if (branchId) {
+      editedQuery = editedQuery.eq('branch_id', branchId);
+    }
+
+    const { count: billsEdited, error: editedError } = await editedQuery;
+    if (editedError) throw editedError;
+
+    // Consumables completed today
+    let consumablesQuery = supabase
+      .from('activity_logs')
+      .select('id', { count: 'exact' })
+      .eq('module_name', 'billable_consumables')
+      .eq('activity_type', 'consumables_completed')
+      .eq('created_at', today);
+
+    if (branchId) {
+      consumablesQuery = consumablesQuery.eq('branch_id', branchId);
+    }
+
+    const { count: consumablesCompleted, error: consumablesError } = await consumablesQuery;
+    if (consumablesError) throw consumablesError;
+
+    // Most active user
+    const { data: userActivity, error: userError } = await supabase
+      .from('activity_logs')
+      .select('user_name, user_role')
+      .eq('created_at', today)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    const mostActiveUser = userActivity && userActivity.length > 0 ? userActivity[0] : null;
+
+    return {
+      billsCreated: billsCreated || 0,
+      billsEdited: billsEdited || 0,
+      consumablesCompleted: consumablesCompleted || 0,
+      mostActiveUser
+    };
+  } catch (error) {
+    console.error('Error fetching dashboard KPIs:', error);
+    return {
+      billsCreated: 0,
+      billsEdited: 0,
+      consumablesCompleted: 0,
+      mostActiveUser: null
+    };
   }
-}
+};

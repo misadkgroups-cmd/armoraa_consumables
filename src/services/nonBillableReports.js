@@ -172,10 +172,12 @@ export async function getSummaryNonBillableReport(filters = {}) {
     const { data: reports, error } = await withRetry(() => query);
     if (error) throw error;
 
-    // Group by registry_id (non-billable product)
+    // Group by registry_id (non-billable product) - count each batch only once
+    const countedRegistryIds = new Set();
     (reports || []).forEach((report) => {
       (report.billable_report_consumables || []).forEach((item) => {
-        if (item.is_non_billable && item.registry_id) {
+        if (item.is_non_billable && item.registry_id && !countedRegistryIds.has(item.registry_id)) {
+          countedRegistryIds.add(item.registry_id);
           usageByProduct[item.registry_id] = (usageByProduct[item.registry_id] || 0) + 1;
         }
       });
@@ -199,10 +201,12 @@ export async function getSummaryNonBillableReport(filters = {}) {
       const { data: reports } = await withRetry(() => query);
 
       if (reports) {
+        const countedRegistryIds = new Set();
         reports.forEach((report) => {
           for (let i = 1; i <= 14; i++) {
             const registryId = report[`non_billable_registry_id_${i}`];
-            if (registryId) {
+            if (registryId && !countedRegistryIds.has(registryId)) {
+              countedRegistryIds.add(registryId);
               usageByProduct[registryId] = (usageByProduct[registryId] || 0) + 1;
             }
           }

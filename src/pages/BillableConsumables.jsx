@@ -536,77 +536,82 @@ export default function BillableConsumables({ onNavigate }) {
     }
   };
 
-  // Auto-deduct inventory and create stock movement records after consumable save
-  // NOTE: Non-billable stock is already deducted when the batch is registered/opened
-  // in the Non-Billable Consumables page. Using it in a service here only records
-  // the usage — no further stock deduction needed.
-  const deductInventory = async (reportPayload, savedReportId) => {
+  // Adjust billable_stock by a delta (negative = reduce, positive = add back).
+  const adjustBillableStock = async (consumableId, delta) => {
+    const { data: currentStock } = await supabase
+      .from('billable_stock')
+      .select('available_stock')
+      .eq('consumable_id', consumableId)
+      .eq('branch_id', branchId)
+      .maybeSingle();
+
+    const newStock = Math.max(0, (currentStock?.available_stock || 0) + delta);
+
+    await supabase
+      .from('billable_stock')
+      .upsert(
+        {
+          consumable_id: consumableId,
+          branch_id: branchId,
+          available_stock: newStock,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'consumable_id,branch_id' }
+      );
+  };
+
+  // Log stock movement records and adjust stock on UPDATE.
+  // NOTE: On INSERT, billable stock is ALREADY deducted by the DB trigger
+  // (trg_deduct_billable_stock) when billable_report is inserted, so we do NOT
+  // adjust stock here for new records.
+  // On UPDATE, the trigger does NOT fire, so we must adjust stock by the
+  // difference between old and new units (and handle consumable changes).
+  const deductInventory = async (reportPayload, savedReportId, isUpdate = false, oldReport = null) => {
     try {
       const username = localStorage.getItem('username') || 'System';
       
       for (let i = 1; i <= 14; i++) {
-        const consumableId = reportPayload[`consumable_${i}_id`];
-        const unitsUsed = reportPayload[`consumable_${i}_units`];
+        const newId = reportPayload[`consumable_${i}_id`];
+        const newUnits = Number(reportPayload[`consumable_${i}_units`]) || 0;
         const isNonBillable = reportPayload[`is_non_billable_${i}`];
         
         // SKIP non-billable items: stock deduction already happened when
         // the batch was registered/opened in Non-Billable Consumables page.
         if (isNonBillable) continue;
         
-        // Billable items only: ensure consumableId and units are valid
-        if (!consumableId || !unitsUsed || unitsUsed <= 0) continue;
+        // On UPDATE, adjust stock by the difference between old and new values.
+        if (isUpdate && oldReport) {
+          const oldId = oldReport[`consumable_${i}_id`];
+          const oldUnits = Number(oldReport[`consumable_${i}_units`]) || 0;
+          
+          if (oldId && oldId !== newId) {
+            // Consumable changed: add back old units, reduce new units.
+            if (oldUnits > 0) await adjustBillableStock(oldId, oldUnits);
+            if (newId && newUnits > 0) await adjustBillableStock(newId, -newUnits);
+          } else if (oldId === newId && newId) {
+            // Same consumable: adjust by the difference (new - old).
+            const difference = newUnits - oldUnits;
+            if (difference !== 0) await adjustBillableStock(newId, -difference);
+          }
+        }
         
-        const productType = 'Billable';
-        const actualProductId = consumableId;
-        
-        // 1. Deduct from stock_inventory
-        const { data: existingStock } = await supabase
-          .from('stock_inventory')
-          .select('id, current_stock')
-          .eq('branch_id', branchId)
-          .eq('consumable_id', actualProductId)
-          .eq('product_type', productType)
-          .maybeSingle();
-        
-        const currentStock = existingStock?.current_stock || 0;
-        const newStock = Math.max(0, currentStock - Number(unitsUsed));
-        
-        if (existingStock) {
+        // Log stock movement record (history) for billable items with units.
+        if (newId && newUnits > 0) {
           await supabase
-            .from('stock_inventory')
-            .update({ 
-              current_stock: newStock,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', existingStock.id);
-        } else {
-          // Create initial stock record if it doesn't exist
-          await supabase
-            .from('stock_inventory')
+            .from('stock_transactions')
             .insert({
-              product_type: productType,
-              consumable_id: actualProductId,
+              transaction_type: 'Outward',
+              product_type: 'Billable',
+              consumable_id: newId,
               branch_id: branchId,
-              current_stock: newStock,
+              quantity: -newUnits, // Negative for outward
+              remarks: `Consumed for bill: ${billId || 'N/A'}`,
               created_by: username
             });
         }
-        
-        // 2. Create stock movement record (Outward/Consumption)
-        await supabase
-          .from('stock_transactions')
-          .insert({
-            transaction_type: 'Outward',
-            product_type: productType,
-            consumable_id: actualProductId,
-            branch_id: branchId,
-            quantity: -Number(unitsUsed), // Negative for outward
-            remarks: `Consumed for bill: ${billId || 'N/A'}`,
-            created_by: username
-          });
       }
     } catch (e) {
-      console.error('Failed to deduct inventory:', e);
+      console.error('Failed to log stock movement:', e);
     }
   };
 
@@ -658,10 +663,12 @@ export default function BillableConsumables({ onNavigate }) {
       let savedReport = null;
       
       // Check if report already exists for this billing_log_id + service_id to prevent duplicates
+      let isUpdate = false;
+      let oldReport = null;
       if (validBillingLogId && numericServiceId) {
         const { data: existingReport } = await supabase
           .from('billable_report')
-          .select('id')
+          .select('*')
           .eq('billing_log_id', validBillingLogId)
           .eq('service_id', numericServiceId)
           .maybeSingle();
@@ -670,6 +677,8 @@ export default function BillableConsumables({ onNavigate }) {
 
         if (existingReport) {
           // UPDATE existing report
+          isUpdate = true;
+          oldReport = existingReport;
           const { data: updated, error: updateError } = await supabase
             .from('billable_report')
             .update(payloadWithRelationship)
@@ -835,9 +844,10 @@ export default function BillableConsumables({ onNavigate }) {
         await updateBillStatus(validBillingLogId);
       }
       
-      // Auto-deduct inventory after successful save
+      // Auto-deduct inventory after successful save.
+      // On UPDATE, pass the old report so stock is adjusted by the difference.
       if (savedReport) {
-        await deductInventory(reportPayload, savedReport.id);
+        await deductInventory(reportPayload, savedReport.id, isUpdate, oldReport);
       }
 
       // Set refresh flag for parent page

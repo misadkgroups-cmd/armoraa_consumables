@@ -53,6 +53,14 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 #### Stock Management
 13. **stock_inventory** - Current stock levels, movements (Inward/Outward/Adjustment/Transfer)
+14. **billable_stock** - Source of truth for billable stock availability. Automatically deducted when billable_report is saved.
+15. **non_billable_stock** - Source of truth for non-billable stock availability. Automatically deducted by 1 when a registry record is created.
+
+**Stock Deduction Triggers** (defined in `supabase/migrations/20260801_create_stock_tables.sql`):
+- `trg_deduct_billable_stock` - After INSERT on `billable_report`: deducts `consumable_X_units` for billable items only (`is_non_billable = false`).
+- `trg_deduct_non_billable_stock` - After INSERT on `non_billable_consumable_registry`: deducts 1 unit (each registry record = 1 consumable unit issued).
+
+> **Note**: `stock_transactions` is NOT used as a stock source. `billable_stock` and `non_billable_stock` are the source of truth for available stock.
 
 ### Key Features
 - **Multi-branch support** - Each data record tied to `branch_id`

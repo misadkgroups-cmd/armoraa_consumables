@@ -105,36 +105,10 @@ const NonBillableConsumables = () => {
       const { error } = await supabase.from('non_billable_consumable_registry').insert({ branch_id: branchId, product_id: Number(form.product_id), batch_id: form.batch_id.trim(), opening_date: form.opening_date, status: 'active' });
       if (error) throw error;
       
-      // Deduct 1 from stock_inventory for this product (opening a batch = consuming 1 product count)
-      const { data: existingStock } = await supabase
-        .from('stock_inventory')
-        .select('id, current_stock')
-        .eq('branch_id', branchId)
-        .eq('consumable_id', Number(form.product_id))
-        .eq('product_type', 'Non-Billable')
-        .maybeSingle();
-      
-      const currentStock = existingStock?.current_stock || 0;
-      const newStock = Math.max(0, currentStock - 1);
-      
-      if (existingStock) {
-        await supabase
-          .from('stock_inventory')
-          .update({ current_stock: newStock, updated_at: new Date().toISOString() })
-          .eq('id', existingStock.id);
-      } else {
-        await supabase
-          .from('stock_inventory')
-          .insert({
-            product_type: 'Non-Billable',
-            consumable_id: Number(form.product_id),
-            branch_id: branchId,
-            current_stock: newStock,
-            created_by: localStorage.getItem('username') || 'System'
-          });
-      }
-      
-      // Log stock transaction
+      // NOTE: non_billable_stock is ALREADY deducted by the DB trigger
+      // (trg_deduct_non_billable_stock) when the registry record is created.
+      // We only log the stock_transactions history here — we do NOT modify
+      // stock levels (non_billable_stock is the source of truth).
       await supabase
         .from('stock_transactions')
         .insert({

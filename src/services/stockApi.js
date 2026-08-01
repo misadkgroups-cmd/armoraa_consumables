@@ -2,13 +2,15 @@ import { supabase } from '../config/supabase';
 import { withRetry } from '../utils/supabaseRetry';
 
 // Get current stock for a product
+// billable_stock / non_billable_stock are the SOURCE OF TRUTH.
+// stock_inventory is legacy and no longer read.
 export async function getStock(productType, consumableId, branchId) {
   try {
+    const table = productType === 'Non-Billable' ? 'non_billable_stock' : 'billable_stock';
     const { data, error } = await withRetry(() =>
       supabase
-        .from('stock_inventory')
+        .from(table)
         .select('*')
-        .eq('product_type', productType)
         .eq('consumable_id', consumableId)
         .eq('branch_id', branchId)
         .maybeSingle()
@@ -18,29 +20,58 @@ export async function getStock(productType, consumableId, branchId) {
       console.warn('getStock: DB error after retries:', error.message);
       return null;
     }
-    return data;
+    if (!data) return null;
+    // Normalize to the shape consumers expect (current_stock + product_type)
+    return {
+      ...data,
+      product_type: productType,
+      current_stock: data.available_stock,
+    };
   } catch (e) {
     console.error('Error fetching stock:', e);
     return null;
   }
 }
 
-// Get all stock for a branch
+// Get all stock for a branch (billable + non-billable, source-of-truth tables)
 export async function getBranchStock(branchId) {
   try {
-    const { data, error } = await withRetry(() =>
-      supabase
-        .from('stock_inventory')
-        .select('*')
-        .eq('branch_id', branchId)
-        .order('updated_at', { ascending: false })
-    );
-    
-    if (error) {
-      console.warn('getBranchStock: DB error after retries:', error.message);
-      return [];
+    const [billableResult, nonBillableResult] = await Promise.all([
+      withRetry(() =>
+        supabase
+          .from('billable_stock')
+          .select('*')
+          .eq('branch_id', branchId)
+          .order('updated_at', { ascending: false })
+      ),
+      withRetry(() =>
+        supabase
+          .from('non_billable_stock')
+          .select('*')
+          .eq('branch_id', branchId)
+          .order('updated_at', { ascending: false })
+      ),
+    ]);
+
+    if (billableResult.error) {
+      console.warn('getBranchStock: billable_stock DB error after retries:', billableResult.error.message);
     }
-    return data || [];
+    if (nonBillableResult.error) {
+      console.warn('getBranchStock: non_billable_stock DB error after retries:', nonBillableResult.error.message);
+    }
+
+    const billable = (billableResult.data || []).map(row => ({
+      ...row,
+      product_type: 'Billable',
+      current_stock: row.available_stock,
+    }));
+    const nonBillable = (nonBillableResult.data || []).map(row => ({
+      ...row,
+      product_type: 'Non-Billable',
+      current_stock: row.available_stock,
+    }));
+
+    return [...billable, ...nonBillable];
   } catch (e) {
     console.error('Error fetching branch stock:', e);
     return [];
@@ -48,6 +79,7 @@ export async function getBranchStock(branchId) {
 }
 
 // Update stock (Inward/Outward/Adjustment/Transfer)
+// Writes to billable_stock / non_billable_stock (source of truth).
 export async function updateStock({
   productType,
   consumableId,
@@ -58,45 +90,30 @@ export async function updateStock({
   createdBy = 'System'
 }) {
   try {
-    // Get current stock
+    const table = productType === 'Non-Billable' ? 'non_billable_stock' : 'billable_stock';
     const currentStock = await getStock(productType, consumableId, branchId);
-    let newStock;
+    const newStock = (currentStock?.current_stock || 0) + quantity;
     
-    if (currentStock) {
-      newStock = (currentStock.current_stock || 0) + quantity;
-      if (newStock < 0) {
-        return { success: false, message: 'Insufficient stock' };
-      }
-      
-      // Update existing stock record
-      const { error } = await withRetry(() =>
-        supabase
-          .from('stock_inventory')
-          .update({
-            current_stock: newStock,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', currentStock.id)
-      );
-      
-      if (error) throw error;
-    } else {
-      // Create new stock record
-      newStock = Math.max(0, quantity);
-      const { error } = await withRetry(() =>
-        supabase
-          .from('stock_inventory')
-          .insert({
-            product_type: productType,
+    if (newStock < 0) {
+      return { success: false, message: 'Insufficient stock' };
+    }
+    
+    // Upsert the stock row (unique on consumable_id + branch_id)
+    const { error } = await withRetry(() =>
+      supabase
+        .from(table)
+        .upsert(
+          {
             consumable_id: consumableId,
             branch_id: branchId,
-            current_stock: newStock,
-            created_by: createdBy
-          })
-      );
-      
-      if (error) throw error;
-    }
+            available_stock: newStock,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'consumable_id,branch_id' }
+        )
+    );
+    
+    if (error) throw error;
     
     // Create stock transaction record (history)
     const { error: txError } = await withRetry(() =>

@@ -90,7 +90,7 @@ const StockManagement = () => {
           setSourceStock(0);
         }
       } else {
-        // Fetch from stock_inventory table for regular branches
+        // Fetch from source-of-truth table (billable_stock / non_billable_stock)
         const data = await stockApi.getStock(transferForm.product_type, transferForm.product_id, transferForm.from_branch_id);
         setSourceStock(data?.current_stock || 0);
       }
@@ -418,38 +418,27 @@ const StockManagement = () => {
 
         console.log('Corporate stock updated');
 
-        // Add to branch stock - check if exists first, then update or insert
-        const { data: existingStock, error: checkError } = await supabase
-          .from('stock_inventory')
-          .select('id, current_stock')
-          .eq('product_type', transferForm.product_type)
+        // Add to branch stock - upsert into source-of-truth table (billable_stock / non_billable_stock)
+        const stockTable = transferForm.product_type === 'Non-Billable' ? 'non_billable_stock' : 'billable_stock';
+        const { data: existingStock } = await supabase
+          .from(stockTable)
+          .select('available_stock')
           .eq('consumable_id', Number(transferForm.product_id))
           .eq('branch_id', Number(transferForm.to_branch_id))
           .maybeSingle();
 
-        let branchError;
-        if (existingStock) {
-          // Update existing stock
-          const newStock = (existingStock.current_stock || 0) + quantity;
-          const result = await supabase
-            .from('stock_inventory')
-            .update({ current_stock: newStock, updated_at: new Date().toISOString() })
-            .eq('id', existingStock.id);
-          branchError = result.error;
-        } else {
-          // Insert new stock
-          const result = await supabase
-            .from('stock_inventory')
-            .insert({
-              product_type: transferForm.product_type,
+        const newBranchStock = (existingStock?.available_stock || 0) + quantity;
+        const { error: branchError } = await supabase
+          .from(stockTable)
+          .upsert(
+            {
               consumable_id: Number(transferForm.product_id),
               branch_id: Number(transferForm.to_branch_id),
-              current_stock: quantity,
-              created_by: 'Admin',
-              updated_at: new Date().toISOString()
-            });
-          branchError = result.error;
-        }
+              available_stock: newBranchStock,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'consumable_id,branch_id' }
+          );
 
         if (branchError) {
           console.error('Error adding to branch:', branchError);

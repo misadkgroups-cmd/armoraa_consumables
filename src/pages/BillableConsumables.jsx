@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
 import SearchableDropdown from '../components/SearchableDropdown';
@@ -79,6 +79,8 @@ export default function BillableConsumables({ onNavigate }) {
   const [registry, setRegistry] = useState([]);
   // Combined dropdown options
   const [allConsumables, setAllConsumables] = useState([]);
+  // Billable stock: consumable_id -> available_stock (only for stock > 0)
+  const [billableStockMap, setBillableStockMap] = useState({});
   const [rows, setRows] = useState([]);
   const [toast, setToast] = useState(null);
   const [reportDate, setReportDate] = useState(() => new Date().toISOString().split('T')[0]);
@@ -124,6 +126,7 @@ export default function BillableConsumables({ onNavigate }) {
       fetchServices();
       fetchMachines();
       fetchAllConsumables();
+      fetchBillableStock();
     }
     setTimeout(() => billIdRef.current?.focus(), 100);
   }, [branchId]);
@@ -284,7 +287,7 @@ export default function BillableConsumables({ onNavigate }) {
   };
 
   useEffect(() => {
-    const onFocus = () => { if (branchId) { fetchAllConsumables(); } };
+    const onFocus = () => { if (branchId) { fetchAllConsumables(); fetchBillableStock(); } };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, [branchId]);
@@ -403,6 +406,44 @@ export default function BillableConsumables({ onNavigate }) {
       ];
       setAllConsumables(combined);
     } catch (error) { console.error('Error fetching unified consumables:', error); }
+  };
+
+  // Fetch billable stock availability (only entries with available_stock > 0).
+  // Used to filter the "Select Consumable" dropdown so out-of-stock billable
+  // products are not shown.
+  const fetchBillableStock = async () => {
+    try {
+      const { data } = await supabase
+        .from('billable_stock')
+        .select('consumable_id, available_stock')
+        .eq('branch_id', branchId)
+        .gt('available_stock', 0);
+
+      const map = {};
+      (data || []).forEach((row) => {
+        const stock = Number(row.available_stock) || 0;
+        if (stock > 0) map[row.consumable_id] = stock;
+      });
+      setBillableStockMap(map);
+    } catch (error) { console.error('Error fetching billable stock:', error); }
+  };
+
+  // Dropdown options: non-billable items always show; billable items show only
+  // when they have available stock (available_stock > 0) OR are already selected
+  // in the current form (so existing edits remain visible even if stock ran out).
+  const availableConsumables = useMemo(() => {
+    const selectedIds = new Set(rows.map((r) => r.consumableId));
+    return (allConsumables || []).filter((c) => {
+      if (c.type === 'nonbillable') return true;
+      return (billableStockMap[c.rawId] ?? 0) > 0 || selectedIds.has(c.id);
+    });
+  }, [allConsumables, billableStockMap, rows]);
+
+  // Label helper: appends available stock for billable consumables.
+  const getConsumableLabel = (c) => {
+    if (c.type === 'nonbillable') return c.name;
+    const stock = billableStockMap[c.rawId] ?? 0;
+    return stock > 0 ? `${c.name} (Available: ${stock})` : c.name;
   };
 
 
@@ -1012,7 +1053,7 @@ export default function BillableConsumables({ onNavigate }) {
                   <SearchableDropdown
                     value={row.consumableId}
                     onChange={(val) => handleConsumableChange(row.id, val === '__clear__' ? '' : val)}
-                    options={(allConsumables || []).map(c => ({ value: c.id, label: c.name }))}
+                    options={availableConsumables.map(c => ({ value: c.id, label: getConsumableLabel(c) }))}
                     placeholder="Select consumable..."
                     displayKey="label" valueKey="value"
                   />
@@ -1061,7 +1102,7 @@ export default function BillableConsumables({ onNavigate }) {
               <SearchableDropdown
                 value=""
                 onChange={(val) => { if (val) addConsumableRow(val); }}
-                options={(allConsumables || []).map(c => ({ value: c.id, label: c.name }))}
+                options={availableConsumables.map(c => ({ value: c.id, label: getConsumableLabel(c) }))}
                 placeholder="+ Add consumable"
                 displayKey="label" valueKey="value"
               />

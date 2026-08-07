@@ -1,143 +1,217 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../config/supabase';
+import { useBranch } from '../context/BranchContext';
+import * as stockApi from '../services/stockApi';
 
 const NotificationBell = ({ userId, onConflictLogin }) => {
+  const { branchId } = useBranch();
+  const [branchName, setBranchName] = useState('');
+  const [branches, setBranches] = useState([]);
   const [notifications, setNotifications] = useState([]);
+  const [transferNots, setTransferNots] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [showDropdown, setShowDropdown] = useState(false);
-  const [hasUnread, setHasUnread] = useState(false);
+  const [closing, setClosing] = useState(false);
   const dropdownRef = useRef(null);
+  const bellRef = useRef(null);
 
-  // Check for session conflicts periodically
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const { data, error } = await supabase.from('branches').select('id, branch_name').order('branch_name');
+        if (!error && data) setBranches(data);
+        const nm = localStorage.getItem('branchName') || '';
+        setBranchName(nm);
+      } catch (e) { console.error('NotificationBell branches:', e); }
+    };
+    load();
+  }, []);
+
+  const branchNameById = (id) => {
+    if (id === null || id === undefined || id === '' || Number(id) === 0) return 'Corporate Warehouse';
+    const b = branches.find(x => String(x.id) === String(id));
+    return b ? b.branch_name : `Branch ${id}`;
+  };
+
   useEffect(() => {
     if (!userId) return;
-
     const checkSessionConflicts = async () => {
       const sessionToken = localStorage.getItem('sessionToken');
       if (!sessionToken) return;
-
-      // Check if our session is still active
       const { data: session, error } = await supabase
         .from('user_sessions')
         .select('is_active, logout_time')
         .eq('session_token', sessionToken)
         .single();
-
       if (session && !session.is_active) {
-        // Session was ended by another login - show notification
         setNotifications([{
           id: 'conflict',
           type: 'conflict',
           message: 'Your login credential was used on another device',
-          timestamp: new Date().toISOString()
+          timestamp: new Date().toISOString(),
         }]);
-        setHasUnread(true);
       }
     };
-
-    // Check every 30 seconds
     const interval = setInterval(checkSessionConflicts, 30000);
-    
-    // Also check on focus
     const handleFocus = () => checkSessionConflicts();
     window.addEventListener('focus', handleFocus);
-
-    return () => {
-      clearInterval(interval);
-      window.removeEventListener('focus', handleFocus);
-    };
+    checkSessionConflicts();
+    return () => { clearInterval(interval); window.removeEventListener('focus', handleFocus); };
   }, [userId]);
 
-  // Close dropdown when clicking outside
+  useEffect(() => {
+    if (!branchId) return;
+    const load = async () => {
+      const incoming = await stockApi.getIncomingTransfers(branchId);
+      setTransferNots(incoming || []);
+      setUnreadCount(await stockApi.getUnreadTransferNotificationCount(branchId));
+    };
+    load();
+    const interval = setInterval(load, 30000);
+    const handleFocus = () => load();
+    window.addEventListener('focus', handleFocus);
+    return () => { clearInterval(interval); window.removeEventListener('focus', handleFocus); };
+  }, [branchId]);
+
+  const hasTransferNot = unreadCount > 0 || transferNots.length > 0;
+
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setShowDropdown(false);
+        if (bellRef.current && bellRef.current.contains(event.target)) return;
+        closeDropdown();
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  const handleNotificationClick = async (notification) => {
-    if (notification.type === 'conflict' && onConflictLogin) {
-      await onConflictLogin();
+    if (showDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
     }
-    setNotifications([]);
-    setHasUnread(false);
-    setShowDropdown(false);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showDropdown]);
+
+  const closeDropdown = () => {
+    setClosing(true);
+    setTimeout(() => {
+      setShowDropdown(false);
+      setClosing(false);
+    }, 200);
   };
 
-  const clearAllNotifications = () => {
+  const handleConflictClick = async () => {
+    if (onConflictLogin) await onConflictLogin();
     setNotifications([]);
-    setHasUnread(false);
-    setShowDropdown(false);
+    closeDropdown();
   };
 
-  if (!hasUnread && notifications.length === 0) {
-    return null;
-  }
+  const handleConfirmReceive = async (transfer) => {
+    const result = await stockApi.receiveTransfer(transfer.id, branchName || 'Branch User');
+    if (result.success) {
+      const incoming = await stockApi.getIncomingTransfers(branchId);
+      setTransferNots(incoming || []);
+      setUnreadCount(await stockApi.getUnreadTransferNotificationCount(branchId));
+      alert('Transfer received successfully!');
+    } else {
+      alert(result.message || 'Failed to receive transfer');
+    }
+  };
+
+  const markAllRead = async () => {
+    await stockApi.markTransferNotificationsRead(branchId);
+    setUnreadCount(0);
+    setTransferNots(await stockApi.getIncomingTransfers(branchId));
+  };
+
+  const showBell = true; // Always show bell icon
+
+  const getPositionStyle = () => {
+    if (!bellRef.current) return { top: '60px', left: '12px' };
+    const rect = bellRef.current.getBoundingClientRect();
+    return {
+      top: `${rect.bottom + 8}px`,
+      left: `${rect.left}px`,
+    };
+  };
 
   return (
-    <div className="relative" ref={dropdownRef}>
-      <button
-        onClick={() => setShowDropdown(!showDropdown)}
-        className="relative p-2 rounded-lg bg-violet-500/20 text-violet-300 hover:bg-violet-500/30 transition-colors"
-        title="Notifications"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-          <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-        </svg>
-        {hasUnread && (
-          <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>
-        )}
-      </button>
+    <div className="sidebar-notification-area" ref={bellRef}>
+      <div className="notif-bell-wrapper" onClick={() => setShowDropdown(!showDropdown)}>
+        <button className="notif-bell-btn" title="Notifications">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+            <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+          </svg>
+          {hasTransferNot && (
+            <span className="notif-badge">
+              {unreadCount || notifications.length}
+            </span>
+          )}
+        </button>
+      </div>
 
       {showDropdown && (
-        <div className="absolute right-0 mt-2 w-80 bg-gray-900 border border-violet-500/30 rounded-lg shadow-lg z-50 max-h-96 overflow-y-auto">
-          <div className="p-3 border-b border-violet-500/20 flex justify-between items-center">
-            <h3 className="text-sm font-bold text-white">Notifications</h3>
-            {notifications.length > 0 && (
-              <button 
-                onClick={clearAllNotifications}
-                className="text-xs text-violet-300 hover:text-white"
-              >
-                Clear all
+        <div
+          ref={dropdownRef}
+          className={`notif-panel ${closing ? 'closing' : ''}`}
+          style={getPositionStyle()}
+        >
+          <div className="notif-panel-header">
+            <h3 className="notif-panel-title">Stock Transfer Notifications</h3>
+            {transferNots.length > 0 && (
+              <button onClick={markAllRead} className="notif-panel-mark-read">
+                Mark All Read
               </button>
             )}
           </div>
-          
-          {notifications.length === 0 ? (
-            <div className="p-4 text-center text-gray-400 text-sm">
-              No notifications
-            </div>
-          ) : (
-            <div>
-              {notifications.map((notification) => (
-                <div
-                  key={notification.id}
-                  className="p-4 border-b border-violet-500/10 hover:bg-violet-500/10 cursor-pointer transition-colors"
-                  onClick={() => handleNotificationClick(notification)}
-                >
-                  <div className="flex items-start gap-3">
-                    <div className="w-8 h-8 rounded-full bg-red-500/20 flex items-center justify-center flex-shrink-0">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-400">
-                        <circle cx="12" cy="12" r="10" />
-                        <line x1="12" y1="8" x2="12" y2="12" />
-                        <line x1="12" y1="16" x2="12.01" y2="16" />
-                      </svg>
+
+          <div className="notif-panel-body">
+            {transferNots.length > 0 ? (
+              transferNots.map((t) => (
+                <div key={t.id} className="notif-card">
+                  <div className="notif-card-title">Stock Transfer Request</div>
+                  <div className="notif-card-details">
+                    <div className="notif-card-row">
+                      <span className="notif-card-row-label">Product</span>
+                      <span className="notif-card-row-value">{t.product_name}</span>
                     </div>
-                    <div className="flex-1">
-                      <p className="text-sm text-white font-medium">{notification.message}</p>
-                      <p className="text-xs text-gray-400 mt-1">
-                        Click to login again
-                      </p>
+                    <div className="notif-card-row">
+                      <span className="notif-card-row-label">Qty</span>
+                      <span className="notif-card-row-value">{t.quantity} Units</span>
+                    </div>
+                    <div className="notif-card-row">
+                      <span className="notif-card-row-label">From</span>
+                      <span className="notif-card-row-value">{branchNameById(t.from_branch_id)}</span>
+                    </div>
+                    <div className="notif-card-row">
+                      <span className="notif-card-row-label">To</span>
+                      <span className="notif-card-row-value">{branchNameById(t.to_branch_id)}</span>
+                    </div>
+                    <div className="notif-card-row">
+                      <span className="notif-card-row-label">Status</span>
+                      <span className={`status-chip ${t.status === 'Received' ? 'received' : 'pending'}`}>
+                        {t.status || 'Pending'}
+                      </span>
                     </div>
                   </div>
+                  <button
+                    onClick={() => handleConfirmReceive(t)}
+                    className="notif-confirm-btn"
+                  >
+                    Confirm Receipt
+                  </button>
                 </div>
-              ))}
-            </div>
-          )}
+              ))
+            ) : (
+              <div className="notif-empty">
+                <div className="notif-empty-icon">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                    <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                  </svg>
+                </div>
+                <div className="notif-empty-title">No pending stock transfers</div>
+                <div className="notif-empty-sub">All transfer requests have been handled</div>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

@@ -415,9 +415,6 @@ const Overview = () => {
           </div>
 
           <BranchSwitcher />
-          <button className="icon-btn" title="Notifications">
-            <Bell size={17} />
-          </button>
         </div>
       </header>
 

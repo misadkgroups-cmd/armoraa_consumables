@@ -384,3 +384,775 @@ export async function adjustStock(productType, consumableId, branchId, newStockL
     return { success: false, message: e.message };
   }
 }
+// ---------------------------------------------------------------------------
+// Branch-level Inward stock (Add Product / Add Stock on Billable / Non-Billable)
+// Adds quantity to the source-of-truth table (billable_stock / non_billable_stock)
+// and records an Inward transaction in stock_transactions.
+// ---------------------------------------------------------------------------
+export async function addInwardStock(productType, consumableId, branchId, quantity, remarks = '', createdBy = 'System') {
+  try {
+    const qty = Number(quantity);
+    if (!qty || qty <= 0) {
+      return { success: false, message: 'Please enter a valid quantity' };
+    }
+
+    const currentStock = await getStock(productType, consumableId, branchId);
+    const newStock = (currentStock?.current_stock || 0) + qty;
+
+    const table = productType === 'Non-Billable' ? 'non_billable_stock' : 'billable_stock';
+
+    const { error: upsertError } = await withRetry(() =>
+      supabase.from(table).upsert(
+        {
+          consumable_id: consumableId,
+          branch_id: branchId,
+          available_stock: newStock,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'consumable_id,branch_id' }
+      )
+    );
+
+    if (upsertError) throw upsertError;
+
+    const { error: txError } = await withRetry(() =>
+      supabase.from('stock_transactions').insert({
+        transaction_type: 'Inward',
+        product_type: productType,
+        consumable_id: consumableId,
+        branch_id: branchId,
+        quantity: qty,
+        remarks: remarks || 'Inward stock added',
+        created_by: createdBy,
+      })
+    );
+
+    if (txError) {
+      console.error('addInwardStock: transaction log error:', txError.message);
+    }
+
+    return { success: true, newStock };
+  } catch (e) {
+    console.error('Error adding inward stock:', e);
+    return { success: false, message: e.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Corporate stock: add/inward stock (increment available_units)
+// Records an Inward transaction in corporate_stock_transactions.
+// ---------------------------------------------------------------------------
+export async function addCorporateInwardStock(productId, stockType, productName, quantity, remarks = '', createdBy = 'System') {
+  try {
+    const qty = Number(quantity);
+    if (!qty || qty <= 0) {
+      return { success: false, message: 'Please enter a valid quantity' };
+    }
+
+    const { data, error } = await withRetry(() =>
+      supabase
+        .from('corporate_stock')
+        .select('available_units, product_name')
+        .eq('product_id', Number(productId))
+        .eq('stock_type', stockType)
+        .single()
+    );
+
+    if (error) throw error;
+    if (!data) return { success: false, message: 'Corporate stock record not found for this product' };
+
+    const newQty = (data.available_units || 0) + qty;
+
+    const { error: updError } = await withRetry(() =>
+      supabase
+        .from('corporate_stock')
+        .update({ available_units: newQty, updated_at: new Date().toISOString(), updated_by: createdBy })
+        .eq('product_id', Number(productId))
+        .eq('stock_type', stockType)
+    );
+
+    if (updError) throw updError;
+
+    const { error: txError } = await withRetry(() =>
+      supabase.from('corporate_stock_transactions').insert({
+        product_id: Number(productId),
+        product_name: productName || data.product_name || '',
+        stock_type: stockType,
+        transaction_type: 'Inward',
+        quantity: qty,
+        balance_after: newQty,
+        remarks: remarks || 'Inward stock added',
+        from_location: 'Purchase / Incoming',
+        to_location: 'Corporate Warehouse',
+        created_by: createdBy,
+      })
+    );
+
+    if (txError) console.error('addCorporateInwardStock: transaction log error:', txError.message);
+
+    return { success: true, newQty };
+  } catch (e) {
+    console.error('Error adding corporate inward stock:', e);
+    return { success: false, message: e.message };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Corporate stock transactions history (Transaction History tab)
+// Returns all corporate movements including the new From / To location columns.
+// ---------------------------------------------------------------------------
+export async function getCorporateTransactions(limit = 500) {
+  try {
+    const { data, error } = await withRetry(() =>
+      supabase
+        .from('corporate_stock_transactions')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(limit)
+    );
+
+    if (error) {
+      console.warn('getCorporateTransactions: DB error after retries:', error.message);
+      return [];
+    }
+    return data || [];
+  } catch (e) {
+    console.error('Error fetching corporate transactions:', e);
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bulk transfer: Corporate Warehouse -> Branch for multiple products.
+// Each selected product is decremented from corporate_stock and added to the
+// branch source-of-truth table (billable_stock / non_billable_stock).
+// Every product is recorded in corporate_stock_transactions (Transfer) AND
+// stock_transactions (Inward at destination branch).
+//
+// transfers = [{ product_id, product_name, stock_type, quantity }]
+// Returns an array of per-product result objects.
+// ---------------------------------------------------------------------------
+export async function transferFromCorporateBulk(transfers, toBranchId, toBranchName, remarks = '', createdBy = 'System') {
+  const results = [];
+
+  if (!toBranchId) {
+    return [{ success: false, message: 'Destination branch is required' }];
+  }
+
+  for (const t of transfers) {
+    const qty = Number(t.quantity);
+    const productId = Number(t.product_id);
+
+    if (!qty || qty <= 0) {
+      results.push({ success: false, productId, product_name: t.product_name, message: `Quantity must be greater than 0 for ${t.product_name}` });
+      continue;
+    }
+
+    try {
+      const { data: corp, error: corpErr } = await withRetry(() =>
+        supabase
+          .from('corporate_stock')
+          .select('available_units, product_name')
+          .eq('product_id', productId)
+          .eq('stock_type', t.stock_type)
+          .single()
+      );
+
+      if (corpErr || !corp) {
+        results.push({ success: false, productId, product_name: t.product_name, message: `Corporate stock not found for ${t.product_name || productId}` });
+        continue;
+      }
+
+      // Validate sufficient stock (prevents transfer when insufficient)
+      if (corp.available_units < qty) {
+        results.push({
+          success: false,
+          productId,
+          product_name: t.product_name,
+          message: `Available stock is only ${corp.available_units} units.`,
+          available: corp.available_units,
+        });
+        continue;
+      }
+
+      const newCorpQty = Number(corp.available_units) - qty;
+
+      const { error: corpUpdError } = await withRetry(() =>
+        supabase
+          .from('corporate_stock')
+          .update({ available_units: newCorpQty, updated_at: new Date().toISOString(), updated_by: createdBy })
+          .eq('product_id', productId)
+          .eq('stock_type', t.stock_type)
+      );
+
+      if (corpUpdError) {
+        results.push({ success: false, productId, product_name: t.product_name, message: corpUpdError.message });
+        continue;
+      }
+
+      // Increment branch source-of-truth stock (billable_stock / non_billable_stock)
+      const table = t.stock_type === 'Non-Billable' ? 'non_billable_stock' : 'billable_stock';
+      const { data: existing } = await supabase
+        .from(table)
+        .select('available_stock')
+        .eq('consumable_id', productId)
+        .eq('branch_id', Number(toBranchId))
+        .maybeSingle();
+
+      const newBranchStock = (existing?.available_stock || 0) + qty;
+
+      const { error: branchErr } = await withRetry(() =>
+        supabase.from(table).upsert(
+          {
+            consumable_id: productId,
+            branch_id: Number(toBranchId),
+            available_stock: newBranchStock,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: 'consumable_id,branch_id' }
+        )
+      );
+
+      if (branchErr) {
+        results.push({ success: false, productId, product_name: t.product_name, message: branchErr.message });
+        continue;
+      }
+
+      // Record corporate-side Transfer transaction (with From / To)
+      await supabase.from('corporate_stock_transactions').insert({
+        product_id: productId,
+        product_name: t.product_name || corp.product_name || '',
+        stock_type: t.stock_type,
+        transaction_type: 'Transfer',
+        quantity: qty,
+        balance_after: newCorpQty,
+        remarks: remarks || `Transferred to ${toBranchName || 'branch'}`,
+        from_location: 'Corporate Warehouse',
+        to_location: toBranchName || `Branch ${toBranchId}`,
+        created_by: createdBy,
+      });
+
+      // Record destination-side Inward transaction
+      await supabase.from('stock_transactions').insert({
+        transaction_type: 'Inward',
+        product_type: t.stock_type,
+        consumable_id: productId,
+        branch_id: Number(toBranchId),
+        quantity: qty,
+        remarks: `Received from Corporate Warehouse${remarks ? ' - ' + remarks : ''}`,
+        created_by: createdBy,
+      });
+
+      results.push({ success: true, productId, product_name: t.product_name, message: 'Transferred', newCorporateQty: newCorpQty, newBranchStock });
+    } catch (e) {
+      results.push({ success: false, productId, product_name: t.product_name, message: e.message });
+    }
+  }
+
+  return results;
+}
+
+
+
+// ---------------------------------------------------------------------------
+// === Multi-Location Transfer Request -> Receipt workflow
+// ---------------------------------------------------------------------------
+
+// Creates PENDING transfer requests between any valid locations:
+// - Corporate → Branch
+// - Branch → Branch
+// - Branch → Corporate
+// Corporate → Corporate is NOT allowed.
+//
+// Source stock is reduced immediately; destination stock increases only
+// after the receiving branch confirms receipt (see receiveTransfer).
+// Each product is recorded in stock_transfers + stock_transfer_notifications.
+//
+// transfers = [{ product_id, product_name, stock_type, quantity }]
+// Returns an array of per-product result objects.
+export async function createMultiLocationTransferRequest(
+  transfers,
+  transferType,
+  fromBranchId,
+  toBranchId,
+  remarks = '',
+  createdBy = 'System'
+) {
+  const results = [];
+
+  if (!fromBranchId || !toBranchId) {
+    return [{ success: false, message: 'Both source and destination are required' }];
+  }
+  if (fromBranchId === toBranchId) {
+    return [{ success: false, message: 'Source and destination cannot be the same' }];
+  }
+  if (transferType === 'Corporate→Corporate' || (fromBranchId === 'corporate' && toBranchId === 'corporate')) {
+    return [{ success: false, message: 'Corporate to Corporate transfers are not allowed' }];
+  }
+
+  const isFromCorporate = fromBranchId === 'corporate';
+  const isToCorporate = toBranchId === 'corporate';
+
+  // Determine the source table based on transfer type
+  const getSourceStock = async (productId, stockType) => {
+    if (isFromCorporate) {
+      const { data, error } = await withRetry(() =>
+        supabase
+          .from('corporate_stock')
+          .select('available_units, product_name')
+          .eq('product_id', Number(productId))
+          .eq('stock_type', stockType)
+          .single()
+      );
+      if (error || !data) return null;
+      return { ...data, current_stock: data.available_units };
+    } else {
+      const table = stockType === 'Non-Billable' ? 'non_billable_stock' : 'billable_stock';
+      const { data, error } = await withRetry(() =>
+        supabase
+          .from(table)
+          .select('available_stock')
+          .eq('consumable_id', Number(productId))
+          .eq('branch_id', Number(fromBranchId))
+          .maybeSingle()
+      );
+      if (error) return null;
+      return { current_stock: data?.available_stock || 0 };
+    }
+  };
+
+  const deductSourceStock = async (productId, stockType, qty) => {
+    if (isFromCorporate) {
+      const { data: corp, error: corpErr } = await withRetry(() =>
+        supabase
+          .from('corporate_stock')
+          .select('available_units, product_name')
+          .eq('product_id', Number(productId))
+          .eq('stock_type', stockType)
+          .single()
+      );
+      if (corpErr || !corp) return { success: false, message: 'Corporate stock not found' };
+      if ((corp.available_units || 0) < qty) return { success: false, message: `Available stock is only ${corp.available_units} units.` };
+
+      const newQty = Number(corp.available_units) - qty;
+      const { error: updErr } = await withRetry(() =>
+        supabase
+          .from('corporate_stock')
+          .update({ available_units: newQty, updated_at: new Date().toISOString(), updated_by: createdBy })
+          .eq('product_id', Number(productId))
+          .eq('stock_type', stockType)
+      );
+      if (updErr) return { success: false, message: updErr.message };
+
+      await supabase.from('corporate_stock_transactions').insert({
+        product_id: Number(productId),
+        product_name: corp.product_name || '',
+        stock_type: stockType,
+        transaction_type: 'Transfer',
+        quantity: qty,
+        balance_after: newQty,
+        remarks: remarks || `Transferred to ${isToCorporate ? 'Corporate Warehouse' : 'branch'}`,
+        from_location: 'Corporate Warehouse',
+        to_location: isToCorporate ? 'Corporate Warehouse' : `Branch ${toBranchId}`,
+        created_by: createdBy,
+      });
+      return { success: true };
+    } else {
+      const table = stockType === 'Non-Billable' ? 'non_billable_stock' : 'billable_stock';
+      const { data: existing, error: fetchErr } = await withRetry(() =>
+        supabase
+          .from(table)
+          .select('available_stock')
+          .eq('consumable_id', Number(productId))
+          .eq('branch_id', Number(fromBranchId))
+          .maybeSingle()
+      );
+      if (fetchErr) return { success: false, message: fetchErr.message };
+      const currentStock = existing?.available_stock || 0;
+      if (currentStock < qty) return { success: false, message: `Available stock is only ${currentStock} units.` };
+
+      const newStock = currentStock - qty;
+      const { error: updErr } = await withRetry(() =>
+        supabase
+          .from(table)
+          .update({ available_stock: newStock, updated_at: new Date().toISOString() })
+          .eq('consumable_id', Number(productId))
+          .eq('branch_id', Number(fromBranchId))
+      );
+      if (updErr) return { success: false, message: updErr.message };
+
+      await supabase.from('stock_transactions').insert({
+        transaction_type: 'Transfer',
+        product_type: stockType,
+        consumable_id: Number(productId),
+        branch_id: Number(fromBranchId),
+        quantity: -qty,
+        remarks: `Transfer to ${isToCorporate ? 'Corporate Warehouse' : `Branch ${toBranchId}`}: ${remarks || ''}`,
+        created_by: createdBy,
+      });
+      return { success: true };
+    }
+  };
+
+  for (const t of transfers) {
+    const qty = Number(t.quantity);
+    const productId = Number(t.product_id);
+    if (!qty || qty <= 0) {
+      results.push({ success: false, productId, product_name: t.product_name, message: `Quantity must be greater than 0 for ${t.product_name}` });
+      continue;
+    }
+
+    try {
+      const sourceStock = await getSourceStock(productId, t.stock_type);
+      if (!sourceStock || (sourceStock.current_stock || 0) < qty) {
+        results.push({
+          success: false,
+          productId,
+          product_name: t.product_name,
+          message: `Insufficient stock. Available: ${sourceStock?.current_stock || 0}`,
+        });
+        continue;
+      }
+
+      const deductResult = await deductSourceStock(productId, t.stock_type, qty);
+      if (!deductResult.success) {
+        results.push({ success: false, productId, product_name: t.product_name, message: deductResult.message });
+        continue;
+      }
+
+      // Create Pending transfer record
+      const { data: stData, error: stErr } = await supabase
+        .from('stock_transfers')
+        .insert({
+          product_id: productId,
+          product_name: t.product_name || '',
+          stock_type: t.stock_type,
+          quantity: qty,
+          from_branch_id: isFromCorporate ? null : Number(fromBranchId),
+          to_branch_id: isToCorporate ? null : Number(toBranchId),
+          status: 'Pending',
+          transferred_by: createdBy,
+          transferred_at: new Date().toISOString(),
+        })
+        .select('id')
+        .single();
+
+      if (stErr) {
+        results.push({ success: false, productId, product_name: t.product_name, message: stErr.message });
+        continue;
+      }
+
+      // Create notification for destination
+      if (!isToCorporate) {
+        await supabase.from('stock_transfer_notifications').insert({
+          transfer_id: stData.id,
+          user_branch_id: Number(toBranchId),
+          is_read: false,
+        });
+      }
+
+      results.push({
+        success: true,
+        transferId: stData.id,
+        productId,
+        product_name: t.product_name,
+        message: 'Transfer request created (Pending Receipt)',
+      });
+    } catch (e) {
+      results.push({ success: false, productId, product_name: t.product_name, message: e.message });
+    }
+  }
+
+  return results;
+}
+
+// MIS Admin ships stock out of the Corporate Warehouse and creates a
+// PENDING transfer request. Branch stock is intentionally NOT updated here;
+// it is only updated when the destination branch confirms receipt
+// (see receiveTransfer). Every product the admin ships is recorded in
+// stock_transfers (status 'Pending') + stock_transfer_notifications (bell)
+// plus a corporate_stock_transactions audit row.
+//
+// transfers = [{ product_id, product_name, stock_type, quantity }]
+// Returns an array of per-product result objects.
+export async function createTransferRequest(transfers, toBranchId, toBranchName, createdBy = 'System') {
+  const results = [];
+  if (!toBranchId) {
+    return [{ success: false, message: 'Destination branch is required' }];
+  }
+
+  for (const t of transfers) {
+    const qty = Number(t.quantity);
+    const productId = Number(t.product_id);
+
+    if (!qty || qty <= 0) {
+      results.push({ success: false, productId, product_name: t.product_name, message: `Quantity must be greater than 0 for ${t.product_name}` });
+      continue;
+    }
+
+    try {
+      const { data: corp, error: corpErr } = await withRetry(() =>
+        supabase
+          .from('corporate_stock')
+          .select('available_units, product_name')
+          .eq('product_id', productId)
+          .eq('stock_type', t.stock_type)
+          .single()
+      );
+
+      if (corpErr || !corp) {
+        results.push({ success: false, productId, product_name: t.product_name, message: `Corporate stock not found for ${t.product_name}` });
+        continue;
+      }
+
+      // Pre-validate sufficient stock (prevents transfer when insufficient)
+      if (corp.available_units < qty) {
+        results.push({
+          success: false,
+          productId,
+          product_name: t.product_name,
+          message: `Available stock is only ${corp.available_units} units.`,
+          available: corp.available_units,
+        });
+        continue;
+      }
+
+      const newCorpQty = Number(corp.available_units) - qty;
+
+      // 1. Deduct from the Corporate Warehouse (the goods ship out now)
+      const { error: updErr } = await withRetry(() =>
+        supabase
+          .from('corporate_stock')
+          .update({ available_units: newCorpQty, updated_at: new Date().toISOString(), updated_by: createdBy })
+          .eq('product_id', productId)
+          .eq('stock_type', t.stock_type)
+      );
+      if (updErr) {
+        results.push({ success: false, productId, product_name: t.product_name, message: updErr.message });
+        continue;
+      }
+
+      // 2. Audit row in corporate_stock_transactions (Transfer)
+      await supabase.from('corporate_stock_transactions').insert({
+        product_id: productId,
+        product_name: t.product_name || corp.product_name || '',
+        stock_type: t.stock_type,
+        transaction_type: 'Transfer',
+        quantity: qty,
+        balance_after: newCorpQty,
+        remarks: `Shipped to ${toBranchName || 'branch'}`,
+        from_location: 'Corporate Warehouse',
+        to_location: toBranchName || '',
+        created_by: createdBy,
+      });
+
+      // 3. The transfer request itself (Pending). Branch stock is NOT touched here.
+      const { data: stData, error: stErr } = await supabase
+        .from('stock_transfers')
+        .insert({
+          product_id: productId,
+          product_name: t.product_name || corp.product_name || '',
+          stock_type: t.stock_type,
+          quantity: qty,
+          from_branch_id: null, // Corporate Warehouse origin
+          to_branch_id: Number(toBranchId),
+          status: 'Pending',
+          transferred_by: createdBy,
+          transferred_at: new Date().toISOString(),
+        })
+        .select('id')
+        .single();
+
+      if (stErr) {
+        results.push({ success: false, productId, product_name: t.product_name, message: stErr.message });
+        continue;
+      }
+
+      // 4. Notification for the destination branch (drives the bell)
+      await supabase.from('stock_transfer_notifications').insert({
+        transfer_id: stData.id,
+        user_branch_id: Number(toBranchId),
+        is_read: false,
+      });
+
+      results.push({
+        success: true,
+        transferId: stData.id,
+        productId,
+        product_name: t.product_name,
+        message: 'Transfer request created (Pending Receipt)',
+        newCorporateQty,
+      });
+    } catch (e) {
+      results.push({ success: false, productId, product_name: t.product_name, message: e.message });
+    }
+  }
+
+  return results;
+}
+
+// Fetch transfer requests for the current user.
+// MIS Admin -> ALL transfers. Branch user -> only their own (to/from).
+export async function getTransfers(userBranchId, isMis = false, limit = 500) {
+  try {
+    let q = supabase
+      .from('stock_transfers')
+      .select('*')
+      .order('transferred_at', { ascending: false })
+      .limit(limit);
+
+    if (!isMis && userBranchId) {
+      const bid = Number(userBranchId);
+      q = q.or(`to_branch_id.eq.${bid},from_branch_id.eq.${bid}`);
+    }
+
+    const { data, error } = await withRetry(() => q);
+    if (error) {
+      console.warn('getTransfers: DB error after retries:', error.message);
+      return [];
+    }
+    return data || [];
+  } catch (e) {
+    console.error('Error fetching transfers:', e);
+    return [];
+  }
+}
+
+// Incoming Pending transfers for a specific branch (for the bell popup)
+export async function getIncomingTransfers(branchId, limit = 50) {
+  try {
+    const { data, error } = await withRetry(() =>
+      supabase
+        .from('stock_transfers')
+        .select('*')
+        .eq('to_branch_id', Number(branchId))
+        .eq('status', 'Pending')
+        .order('transferred_at', { ascending: false })
+        .limit(limit)
+    );
+    if (error) {
+      console.warn('getIncomingTransfers:', error.message);
+      return [];
+    }
+    return data || [];
+  } catch (e) {
+    console.error('Error fetching incoming transfers:', e);
+    return [];
+  }
+}
+
+  // Branch user confirms receipt -> stock moves into the destination branch
+  export async function receiveTransfer(transferId, createdBy = 'System') {
+    try {
+      const { data: tr, error: trErr } = await withRetry(() =>
+        supabase
+          .from('stock_transfers')
+          .select('product_id, product_name, stock_type, quantity, to_branch_id, from_branch_id, status')
+          .eq('id', Number(transferId))
+          .single()
+      );
+      if (trErr || !tr) {
+        console.error('Transfer not found:', transferId, trErr);
+        return { success: false, message: 'Transfer not found or already processed' };
+      }
+      if (!tr.status || tr.status !== 'Pending') {
+        return { success: false, message: `Transfer is already ${tr.status || 'processed'}` };
+      }
+
+    const qty = Number(tr.quantity);
+    const productId = Number(tr.product_id);
+    const table = tr.stock_type === 'Non-Billable' ? 'non_billable_stock' : 'billable_stock';
+    const toBranchId = Number(tr.to_branch_id);
+
+    // Read the current destination-branch stock
+    const { data: existing } = await supabase
+      .from(table)
+      .select('available_stock')
+      .eq('consumable_id', productId)
+      .eq('branch_id', toBranchId)
+      .maybeSingle();
+
+    const newBranchStock = (existing?.available_stock || 0) + qty;
+
+    // Increment branch stock only on confirmed receipt
+    const { error: branchErr } = await withRetry(() =>
+      supabase.from(table).upsert(
+        {
+          consumable_id: productId,
+          branch_id: toBranchId,
+          available_stock: newBranchStock,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'consumable_id,branch_id' }
+      )
+    );
+    if (branchErr) return { success: false, message: branchErr.message, newBranchStock };
+
+    // Mark the transfer received
+    const { error: updErr } = await withRetry(() =>
+      supabase
+        .from('stock_transfers')
+        .update({ status: 'Received', received_by: createdBy, received_at: new Date().toISOString() })
+        .eq('id', Number(transferId))
+    );
+    if (updErr) return { success: false, message: updErr.message };
+
+    // Destination-side Inward log (branch history)
+    await supabase.from('stock_transactions').insert({
+      transaction_type: 'Inward',
+      product_type: tr.stock_type,
+      consumable_id: productId,
+      branch_id: toBranchId,
+      quantity: qty,
+      remarks: `Received from Corporate Warehouse (Transfer #${transferId})`,
+      created_by: createdBy,
+    });
+
+    // Mark related notifications read
+    await supabase.from('stock_transfer_notifications').update({ is_read: true }).eq('transfer_id', Number(transferId));
+
+    return { success: true, transferId, newBranchStock, message: 'Transfer received' };
+  } catch (e) {
+    console.error('receiveTransfer:', e);
+    return { success: false, message: e.message };
+  }
+}
+
+// Unread stock-transfer notification count for the bell badge
+export async function getUnreadTransferNotificationCount(branchId) {
+  try {
+    const { count, error } = await withRetry(() =>
+      supabase
+        .from('stock_transfer_notifications')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_branch_id', Number(branchId))
+        .eq('is_read', false)
+    );
+    if (error) {
+      console.warn('getUnreadTransferNotificationCount:', error.message);
+      return 0;
+    }
+    return count || 0;
+  } catch (e) {
+    console.error('getUnreadTransferNotificationCount:', e);
+    return 0;
+  }
+}
+
+// Mark all unread transfer notifications for a branch as read
+export async function markTransferNotificationsRead(branchId) {
+  try {
+    const { error } = await withRetry(() =>
+      supabase
+        .from('stock_transfer_notifications')
+        .update({ is_read: true })
+        .eq('user_branch_id', Number(branchId))
+        .eq('is_read', false)
+    );
+    if (error) console.warn('markTransferNotificationsRead:', error.message);
+    return !error;
+  } catch (e) {
+    console.error('markTransferNotificationsRead:', e);
+    return false;
+  }
+}

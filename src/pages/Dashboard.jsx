@@ -113,6 +113,10 @@ const Dashboard = ({ currentPage = 'overview', urlState, onNavigate, onLogout, o
             </svg>
           </button>
 
+          <div className="sidebar-notification-area">
+            <NotificationBell userId={userId} onConflictLogin={handleConflictLogin} />
+          </div>
+
           {navSections.map((section) => {
             const visibleItems = section.items.filter(item => misMode || !item.misOnly);
             if (visibleItems.length === 0) return null;
@@ -140,9 +144,10 @@ const Dashboard = ({ currentPage = 'overview', urlState, onNavigate, onLogout, o
           })}
         </nav>
 
+        <div className="sidebar-footer-spacer" />
+
         <div className="sidebar-footer">
           <div className="sidebar-footer-left">
-            <NotificationBell userId={userId} onConflictLogin={handleConflictLogin} />
             <div className="sidebar-footer-avatar">AD</div>
             {!sidebarCollapsed && (
               <div className="sidebar-footer-info">
@@ -169,6 +174,11 @@ const Dashboard = ({ currentPage = 'overview', urlState, onNavigate, onLogout, o
       </aside>
 
       <div className="main-container">
+        <header className="top-header">
+          <div className="top-header-left">
+            <h2 className="top-header-title">{currentPage.replace('-', ' ').replace(/\b\w/g, l => l.toUpperCase())}</h2>
+          </div>
+        </header>
         <div className="content-area" style={{ padding: 0 }}>
           {renderPage()}
         </div>

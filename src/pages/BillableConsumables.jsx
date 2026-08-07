@@ -771,48 +771,58 @@ export default function BillableConsumables({ onNavigate }) {
         }
       }
       
-      // Update bill_services with consumable_completed = true
-      // NOTE: billable_report_id column does NOT exist on bill_services in the actual DB
-      // Instead, the relationship is maintained via billing_log_id+service_id on billable_report
-      if (savedReport) {
-        // Convert billServiceId to number if it exists
-        const bsId = billServiceId ? Number(billServiceId) : null;
-        
-        // Update by bill_id + service_id if billServiceId is not available
-        let updateQuery = supabase
-          .from('bill_services')
-          .update({
-            consumable_completed: true,
-            service_status: 'Complete',
-          })
-          .eq('bill_id', Number(validBillingLogId))
-          .eq('service_id', Number(service));
-        
-        if (bsId) {
-          updateQuery = updateQuery.eq('id', bsId);
-        }
-        
-        const { data: updatedServices, error: updErr } = await updateQuery.select('id, consumable_completed');
-        
-        if (updErr) {
-          console.error('Failed to update bill_services status', updErr);
-        } else {
-          console.log('Successfully updated bill_services status:', updatedServices);
-        }
+        // Update bill_services with consumable_completed = true
+        // NOTE: billable_report_id column does NOT exist on bill_services in the actual DB
+        // Instead, the relationship is maintained via billing_log_id+service_id on billable_report
+        if (savedReport) {
+          // Convert billServiceId to number if it exists
+          const bsId = billServiceId ? Number(billServiceId) : null;
+          
+          // Only mark as complete if there are consumables to save
+          const hasConsumables = rows.some(row => row.consumableId && row.units && Number(row.units) > 0);
+          
+          if (!hasConsumables) {
+            console.warn('Cannot mark service as complete: No consumables with valid units found');
+            showToast('warning', 'Cannot mark service as complete without consumables');
+            return; // Don't mark as complete if no consumables
+          } else {
+            // Update by bill_id + service_id if billServiceId is not available
+            let updateQuery = supabase
+              .from('bill_services')
+              .update({
+                consumable_completed: true,
+                service_status: 'Complete',
+              })
+              .eq('bill_id', Number(validBillingLogId))
+              .eq('service_id', Number(service));
+            
+            if (bsId) {
+              updateQuery = updateQuery.eq('id', bsId);
+            }
+            
+            const { data: updatedServices, error: updErr } = await updateQuery.select('id, consumable_completed');
+            
+            if (updErr) {
+              console.error('Failed to update bill_services status', updErr);
+            } else {
+              console.log('Successfully updated bill_services status:', updatedServices);
+            }
+          }
         
         // ===== SYNC bill_service_consumables =====
         // Populate bill_service_consumables with the saved consumable rows
-        if (updatedServices && updatedServices.length > 0) {
-          // Determine which bill_service IDs were updated
-          const billServiceIds = updatedServices.map(s => s.id);
+        // ONLY for the specific bill_service being updated, NOT all services in the bill
+        if (updatedServices && updatedServices.length > 0 && bsId) {
+          // Only process the specific bill_service being updated
+          const targetBillServiceId = bsId;
           
-          // First, delete any existing bill_service_consumables for these bill_services
+          // Delete ONLY the consumables for this specific bill_service
           await supabase
             .from('bill_service_consumables')
             .delete()
-            .in('bill_service_id', billServiceIds);
+            .eq('bill_service_id', targetBillServiceId);
           
-          // Now insert the consumable records from the saved rows
+          // Now insert the consumable records for ONLY this bill_service
           const billServiceConsumableInserts = [];
           
           for (const row of rows) {
@@ -826,17 +836,15 @@ export default function BillableConsumables({ onNavigate }) {
             const actualConsumableId = opt.rawId;
             const productType = isNb ? 'Non-Billable' : 'Billable';
             
-            // For each updated bill_service, create a bill_service_consumables entry
-            for (const bs of updatedServices) {
-              billServiceConsumableInserts.push({
-                bill_service_id: bs.id,
-                product_type: productType,
-                consumable_id: actualConsumableId,
-                required_quantity: 1,
-                used_quantity: isNb ? 1 : Number(row.units) || 0,
-                status: 'Used',
-              });
-            }
+            // Create entry ONLY for the target bill_service
+            billServiceConsumableInserts.push({
+              bill_service_id: targetBillServiceId,
+              product_type: productType,
+              consumable_id: actualConsumableId,
+              required_quantity: 1,
+              used_quantity: isNb ? 1 : Number(row.units) || 0,
+              status: 'Used',
+            });
           }
           
           if (billServiceConsumableInserts.length > 0) {
@@ -847,8 +855,10 @@ export default function BillableConsumables({ onNavigate }) {
             if (bscError) {
               console.error('Failed to sync bill_service_consumables:', bscError);
             } else {
-              console.log('Successfully synced bill_service_consumables:', billServiceConsumableInserts.length, 'records');
+              console.log('Successfully synced bill_service_consumables for bill_service_id:', targetBillServiceId, '- Records:', billServiceConsumableInserts.length);
             }
+          } else {
+            console.log('No consumables to sync for bill_service_id:', targetBillServiceId);
           }
         }
         // ===== END bill_service_consumables sync =====

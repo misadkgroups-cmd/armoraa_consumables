@@ -290,15 +290,33 @@ const Welcome = ({ onBranchSelect, onMisLogin }) => {
       }
     };
 
-    // Handle before unload - logout when tab is closed
+    // Handle before unload - send a final heartbeat when the page is closed.
+    // NOTE: navigator.sendBeacon() always sends a POST (which PostgREST would
+    // interpret as an INSERT with an invalid column -> 400 Bad Request), so we
+    // use fetch() with keepalive:true to perform a proper PATCH heartbeat.
     const handleBeforeUnload = () => {
       const sessionToken = localStorage.getItem('sessionToken');
-      if (sessionToken) {
-        // Use sendBeacon for reliable delivery during page unload
-        const data = JSON.stringify({ sessionToken });
-        const url = supabase.supabaseUrl + '/rest/v1/user_sessions?session_token=eq.' + sessionToken;
-        navigator.sendBeacon(url, data);
-      }
+      if (!sessionToken) return;
+
+      // MIS direct login tokens start with 'mis_' - these are NOT stored in the
+      // DB, they are direct/offline tokens that are always valid until logout.
+      if (sessionToken.startsWith('mis_')) return;
+
+      // Use fetch with keepalive for reliable delivery during page unload
+      fetch(
+        supabase.supabaseUrl + '/rest/v1/user_sessions?session_token=eq.' + encodeURIComponent(sessionToken),
+        {
+          method: 'PATCH',
+          keepalive: true,
+          headers: {
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+            Authorization: 'Bearer ' + import.meta.env.VITE_SUPABASE_ANON_KEY,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify({ updated_at: new Date().toISOString() }),
+        }
+      );
     };
 
     document.addEventListener('visibilitychange', handleVisibilityChange);

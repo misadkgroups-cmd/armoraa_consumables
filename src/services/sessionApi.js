@@ -62,6 +62,14 @@ export const endSession = async (sessionToken = null, reason = 'logout') => {
   const tokenToEnd = sessionToken || localStorage.getItem('sessionToken');
   if (!tokenToEnd) return { success: true };
 
+  // MIS direct login tokens start with 'mis_' - these are NOT stored in the DB,
+  // they are direct/offline tokens that are always valid until logout.
+  if (tokenToEnd.startsWith('mis_')) {
+    localStorage.removeItem('sessionToken');
+    localStorage.removeItem('sessionLoginTime');
+    return { success: true };
+  }
+
   // First get the session to update logout time
   const { data: session } = await supabase
     .from('user_sessions')
@@ -109,10 +117,25 @@ export const updateHeartbeat = async () => {
   const sessionToken = localStorage.getItem('sessionToken');
   if (!sessionToken) return;
 
-  await supabase
-    .from('user_sessions')
-    .update({ updated_at: new Date().toISOString() })
-    .eq('session_token', sessionToken);
+  // MIS direct login tokens start with 'mis_' - these are NOT stored in the DB,
+  // they are direct/offline tokens that are always valid until logout.
+  if (sessionToken.startsWith('mis_')) return;
+
+  try {
+    const { error } = await supabase
+      .from('user_sessions')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('session_token', sessionToken);
+
+    if (error) {
+      // Heartbeats are best-effort (e.g. a 400 can occur if the live DB schema
+      // is out of sync with schema.sql). Log the detail so it can be diagnosed,
+      // but never let it become an unhandled rejection.
+      console.error('Heartbeat update failed:', error.message, error.details || '');
+    }
+  } catch (e) {
+    console.error('Heartbeat exception:', e);
+  }
 };
 
 // Logout user due to concurrent login
@@ -138,7 +161,13 @@ export const getUserSessions = async (userId) => {
 
 // Start heartbeat interval
 export const startHeartbeat = (intervalMs = 30000) => {
-  if (!localStorage.getItem('sessionToken')) return null;
+  const sessionToken = localStorage.getItem('sessionToken');
+  if (!sessionToken) return null;
+
+  // MIS direct login tokens start with 'mis_' - these are NOT stored in the DB,
+  // they are direct/offline tokens that are always valid until logout, so no
+  // heartbeat is needed.
+  if (sessionToken.startsWith('mis_')) return null;
   
   return setInterval(() => {
     updateHeartbeat();

@@ -38,11 +38,14 @@ const NotificationBell = ({ userId, onConflictLogin }) => {
     const checkSessionConflicts = async () => {
       const sessionToken = localStorage.getItem('sessionToken');
       if (!sessionToken) return;
+      // MIS direct login tokens start with 'mis_' - these are NOT stored in the DB,
+      // they are direct/offline tokens that are always valid until logout.
+      if (sessionToken.startsWith('mis_')) return;
       const { data: session, error } = await supabase
         .from('user_sessions')
         .select('is_active, logout_time')
         .eq('session_token', sessionToken)
-        .single();
+        .maybeSingle();
       if (session && !session.is_active) {
         setNotifications([{
           id: 'conflict',

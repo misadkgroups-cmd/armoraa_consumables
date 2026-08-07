@@ -784,8 +784,15 @@ export default function BillableConsumables({ onNavigate }) {
         const bsId = billServiceId ? Number(billServiceId) : null;
         
         // Only mark as complete if there are consumables to save.
-        // NOTE: non-billable rows have units='USED' so Number('USED') > 0 is false.
-        const hasConsumables = rows.some(row => row.consumableId && row.units && Number(row.units) > 0);
+        // NOTE: non-billable rows have units='USED' — a sentinel value meaning the
+        // product was consumed but is non-billable. Number('USED') is NaN, so the
+        // numeric check alone ignores these rows. Allow the 'USED' string to count
+        // as a valid consumable so a service with ONLY non-billable products can still
+        // be marked complete. Billable rows must still have a positive numeric units.
+        const hasConsumables = rows.some(row =>
+          row.consumableId &&
+          (row.units === 'USED' || (row.units && Number(row.units) > 0))
+        );
         
         if (!hasConsumables) {
           console.warn('Cannot mark service as complete: No consumables with valid units found');

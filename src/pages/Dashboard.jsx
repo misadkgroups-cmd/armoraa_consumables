@@ -24,7 +24,7 @@ const navSections = [
   {
     group: 'Consumables',
     items: [
-      { id: 'billable', label: 'Billable Consumables', icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4' },
+      { id: 'billable', label: 'Billable Consumables', icon: 'M9 5H7a2 2 0 0 0-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m-6 9l2 2 4-4' },
       { id: 'non-billable', label: 'Non-Billable Consumables', icon: 'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4' },
       { id: 'stock-management', label: 'Stock Management', icon: 'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4' },
     ]
@@ -98,7 +98,7 @@ const Dashboard = ({ currentPage = 'overview', urlState, onNavigate, onLogout, o
           {!sidebarCollapsed && <span className="sidebar-brand">ARMORAA</span>}
         </div>
 
-        <nav className="sidebar-nav">
+        <div className="sidebar-controls-row">
           <button 
             className="sidebar-toggle"
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -116,7 +116,9 @@ const Dashboard = ({ currentPage = 'overview', urlState, onNavigate, onLogout, o
           <div className="sidebar-notification-area">
             <NotificationBell userId={userId} onConflictLogin={handleConflictLogin} />
           </div>
+        </div>
 
+        <nav className="sidebar-nav">
           {navSections.map((section) => {
             const visibleItems = section.items.filter(item => misMode || !item.misOnly);
             if (visibleItems.length === 0) return null;

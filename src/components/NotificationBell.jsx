@@ -144,7 +144,7 @@ const NotificationBell = ({ userId, onConflictLogin }) => {
           </svg>
           {hasTransferNot && (
             <span className="notif-badge">
-              {unreadCount || notifications.length}
+              {unreadCount > 0 ? unreadCount : transferNots.length}
             </span>
           )}
         </button>

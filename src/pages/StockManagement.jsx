@@ -22,6 +22,7 @@ const StockManagement = () => {
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [search, setSearch] = useState('');
+  const [historyProductFilter, setHistoryProductFilter] = useState(null);
 
   // Adjust stock modal (existing, kept)
   const [adjustForm, setAdjustForm] = useState({ product_id: '', product_type: 'Billable', current_stock: 0, add_units: '', reduce_units: '', remarks: '' });
@@ -154,11 +155,11 @@ const StockManagement = () => {
 
   // Transaction History now lists stock_transfers.
   // MIS Admin -> ALL transfers. Branch user -> only to_branch / from_branch = me.
-  const fetchHistory = useCallback(async () => {
+  const fetchHistory = useCallback(async (productFilter = null) => {
     if (!misMode && !branchId) return;
     setLoading(true);
     try {
-      const data = await stockApi.getTransfers(branchId, misMode, 500);
+      const data = await stockApi.getTransfers(branchId, misMode, 500, productFilter?.id, productFilter?.type);
       setHistory(data || []);
       setErrorMsg('');
     } catch (e) {
@@ -177,7 +178,7 @@ const StockManagement = () => {
       const result = await stockApi.receiveTransfer(transfer.id, CURRENT_USER);
       if (result.success) {
         setSuccessMsg('Transfer received. Branch stock updated.');
-        fetchHistory();
+        fetchHistory(historyProductFilter);
         fetchStock();
       } else {
         setErrorMsg(result.message || 'Failed to receive transfer');
@@ -190,8 +191,10 @@ const StockManagement = () => {
   };
 
   const handleViewHistory = (product) => {
-    fetchHistory();
+    setHistoryProductFilter(product);
+    setSearch('');
     setActiveTab('history');
+    fetchHistory(product);
   };
 
   // ---- Adjust stock (existing) ----
@@ -729,8 +732,20 @@ const StockManagement = () => {
 
   const filteredHistory = useMemo(() => {
     const s = (search || '').toLowerCase().trim();
-    if (!s) return history;
-    return history.filter(item => {
+    let result = history;
+
+    // Product-specific filter: only show transfers for the selected product
+    if (historyProductFilter) {
+      const filterId = Number(historyProductFilter.id);
+      const filterType = historyProductFilter.type;
+      result = result.filter(item =>
+        Number(item.product_id) === filterId &&
+        (item.stock_type || '') === filterType
+      );
+    }
+
+    if (!s) return result;
+    return result.filter(item => {
       const productName = (item.product_name || '').toLowerCase();
       const type = (item.stock_type || '').toLowerCase();
       const fromBranch = branchNameById(item.from_branch_id).toLowerCase();
@@ -738,7 +753,7 @@ const StockManagement = () => {
       const status = (item.status || '').toLowerCase();
       return productName.includes(s) || type.includes(s) || fromBranch.includes(s) || toBranch.includes(s) || status.includes(s);
     });
-  }, [history, search, branches]);
+  }, [history, search, branches, historyProductFilter]);
 
   // ---- Unified export data (works for every tab) ----
   const buildExportData = useMemo(() => {
@@ -1006,7 +1021,7 @@ const StockManagement = () => {
           </button>
         )}
         <button
-          onClick={() => { setActiveTab('history'); setSearch(''); fetchHistory(); }}
+          onClick={() => { setActiveTab('history'); setSearch(''); setHistoryProductFilter(null); fetchHistory(); }}
           className={`flex-1 px-6 py-3 text-sm font-medium transition-all relative ${activeTab === 'history' ? 'text-[var(--color-primary)] border-b-2 border-[var(--color-primary)]' : 'text-muted hover:text-text'}`}
         >
           Transaction History
@@ -1024,6 +1039,22 @@ const StockManagement = () => {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
+          {/* Product filter indicator (History tab only) */}
+          {activeTab === 'history' && historyProductFilter && (
+            <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--color-primary)', fontWeight: 500, flexShrink: 0 }}>
+              <Package size={14} />
+              <span>Showing: {historyProductFilter.name || `Product #${historyProductFilter.id}`}</span>
+              <span style={{ color: 'var(--color-muted)', fontWeight: 400 }}>({filteredHistory.length} records)</span>
+              <button
+                onClick={() => setHistoryProductFilter(null)}
+                className="hover:text-[var(--color-ink)]"
+                style={{ fontSize: 11, padding: '2px 8px', border: '1px solid var(--color-line)', borderRadius: 4 }}
+                title="Show all transactions"
+              >
+                Clear
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1091,7 +1122,7 @@ const StockManagement = () => {
                           <Edit2 size={16} />
                         </button>
                         <button
-                          onClick={() => handleViewHistory({ id: item.product_id, type: item.stock_type })}
+                          onClick={() => handleViewHistory({ id: item.product_id, type: item.stock_type, name: item.product_name || product?.product_name || `Product ${item.product_id}` })}
                           className="rpt-act-icon"
                           title="View History"
                           style={{ color: 'var(--color-primary)' }}
@@ -1175,7 +1206,7 @@ const StockManagement = () => {
                           </button>
                         )}
                         <button
-                          onClick={() => handleViewHistory({ id: item.consumable_id, type: item.product_type })}
+                          onClick={() => handleViewHistory({ id: item.consumable_id, type: item.product_type, name: product?.product_name || `Product ${item.consumable_id}` })}
                           className="rpt-act-icon"
                           title="View History"
                           style={{ color: 'var(--color-primary)' }}

@@ -993,7 +993,7 @@ export async function createTransferRequest(transfers, toBranchId, toBranchName,
 
 // Fetch transfer requests for the current user.
 // MIS Admin -> ALL transfers. Branch user -> only their own (to/from).
-export async function getTransfers(userBranchId, isMis = false, limit = 500) {
+export async function getTransfers(userBranchId, isMis = false, limit = 500, productId = null, productType = null) {
   try {
     let q = supabase
       .from('stock_transfers')
@@ -1004,6 +1004,13 @@ export async function getTransfers(userBranchId, isMis = false, limit = 500) {
     if (!isMis && userBranchId) {
       const bid = Number(userBranchId);
       q = q.or(`to_branch_id.eq.${bid},from_branch_id.eq.${bid}`);
+    }
+
+    if (productId) {
+      q = q.eq('product_id', Number(productId));
+    }
+    if (productType) {
+      q = q.eq('stock_type', productType);
     }
 
     const { data, error } = await withRetry(() => q);

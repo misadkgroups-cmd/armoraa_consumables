@@ -1163,3 +1163,236 @@ export async function markTransferNotificationsRead(branchId) {
     return false;
   }
 }
+
+// ---------------------------------------------------------------------------
+// PRODUCT-LEVEL AUDIT TRAIL  (used by the History icon on a product row)
+// ---------------------------------------------------------------------------
+// Returns EVERY stock movement for a single product, merged from ALL sources
+// and sorted chronologically (newest first):
+//   * stock_transactions          -> branch level Inward / Outward / Adjustment
+//   * corporate_stock_transactions -> corporate Inward / Outward / Adjustment
+//   * stock_transfers             -> transfer request lifecycle (ship + receive)
+//
+// Transfer shipments/receipts are sourced ONLY from `stock_transfers` (the
+// canonical transfer log). The matching balance-bookkeeping rows that the
+// transfer flows ALSO write to stock_transactions / corporate_stock_transactions
+// are omitted so each transfer event appears exactly once on the audit trail.
+// ---------------------------------------------------------------------------
+export async function getProductHistory(productId, productType, productName = '', limit = 500) {
+  const pid = Number(productId);
+  const ptype = productType; // 'Billable' | 'Non-Billable'
+
+  try {
+    // 1. Branch-level movements (chronological — we need correct deltas)
+    const stRes = await withRetry(() =>
+      supabase
+        .from('stock_transactions')
+        .select('*')
+        .eq('consumable_id', pid)
+        .eq('product_type', ptype)
+        .order('created_at', { ascending: true })
+        .limit(limit)
+    );
+
+    // 2. Corporate-level movements
+    const cstRes = await withRetry(() =>
+      supabase
+        .from('corporate_stock_transactions')
+        .select('*')
+        .eq('product_id', pid)
+        .eq('stock_type', ptype)
+        .order('created_at', { ascending: true })
+        .limit(limit)
+    );
+
+    // 3. Transfer request lifecycle (shipment + optional receipt)
+    const trRes = await withRetry(() =>
+      supabase
+        .from('stock_transfers')
+        .select('*')
+        .eq('product_id', pid)
+        .eq('stock_type', ptype)
+        .order('transferred_at', { ascending: true })
+        .limit(limit)
+    );
+
+    if (stRes.error && stRes.error.code !== '503') console.warn('getProductHistory stock_transactions:', stRes.error.message);
+    if (cstRes.error && cstRes.error.code !== '503') console.warn('getProductHistory corporate_stock_transactions:', cstRes.error.message);
+    if (trRes.error && trRes.error.code !== '503') console.warn('getProductHistory stock_transfers:', trRes.error.message);
+
+    // Branch name resolution map (small lookup table)
+    const { data: branchesData } = await supabase.from('branches').select('id, branch_name');
+    const branchesMap = {};
+    (branchesData || []).forEach((b) => { branchesMap[Number(b.id)] = b.branch_name; });
+
+    const branchName = (id) => {
+      if (id === null || id === undefined || id === '' || id === 'corporate' || Number(id) === 0) return 'Corporate Warehouse';
+      const n = Number(id);
+      return branchesMap[n] || `Branch ${n}`;
+    };
+
+    const merged = [];
+
+    // --- stock_transactions (branch level) ---
+    // quantity is already signed in this table.
+    (stRes.data || []).forEach((r) => {
+      const t = (r.transaction_type || '').toLowerCase();
+      if (t === 'transfer') return; // represented canonically by stock_transfers
+      const qty = Number(r.quantity) || 0;
+      const branch = branchName(r.branch_id);
+      let type, from, to, signedQty;
+
+      if (t === 'inward') {
+        // Skip receipt rows emitted by receiveTransfer — they duplicate the
+        // "Branch Receipt" event already captured by stock_transfers.
+        if ((r.remarks || '').includes('Received from')) return;
+        type = 'Stock Added';
+        signedQty = Math.abs(qty);
+        from = '—';
+        to = branch;
+      } else if (t === 'outward') {
+        type = 'Stock Used';
+        signedQty = -Math.abs(qty);
+        from = branch;
+        to = 'Consumed';
+      } else if (t === 'adjustment') {
+        type = 'Manual Correction';
+        signedQty = qty; // already signed
+        from = 'Manual Adjustment';
+        to = branch;
+      } else {
+        type = 'Stock Movement';
+        signedQty = qty;
+        from = '—';
+        to = branch;
+      }
+
+      merged.push({
+        id: `st-${r.id}`,
+        source: 'stock_transactions',
+        transaction_type: type,
+        date: r.created_at,
+        product_name: r.product_name || productName || '',
+        product_id: r.consumable_id,
+        product_type: r.product_type,
+        quantity: signedQty,
+        from,
+        to,
+        status: (t.charAt(0).toUpperCase() + t.slice(1)) || 'Completed',
+        remarks: r.remarks || '',
+        created_by: r.created_by || 'System',
+        branch_id: r.branch_id || null,
+      });
+    });
+
+    // --- corporate_stock_transactions (corporate level) ---
+    // `quantity` here is the absolute magnitude (CHECK quantity > 0). The real
+    // signed change is derived from balance_after vs the previous corporate txn.
+    let prevCorpBalance = null;
+    (cstRes.data || []).forEach((r) => {
+      const balance = r.balance_after != null ? Number(r.balance_after) : prevCorpBalance;
+      const delta = prevCorpBalance !== null ? (balance - prevCorpBalance) : balance;
+      prevCorpBalance = balance; // track for every row (incl. transfers) in chronological order
+
+      const t = (r.transaction_type || '').toLowerCase();
+      if (t === 'transfer') return; // represented canonically by stock_transfers
+
+      const from = r.from_location || 'Corporate Warehouse';
+      const to = r.to_location || 'Corporate Warehouse';
+      let type;
+      if (t === 'inward') {
+        type = from === 'Opening Balance' || from === 'Opening Stock' ? 'Opening Stock' : 'Stock Added';
+      } else if (t === 'outward') {
+        type = 'Stock Used';
+      } else if (t === 'adjustment') {
+        type = 'Stock Updated';
+      } else {
+        type = 'Stock Movement';
+      }
+
+      merged.push({
+        id: `cct-${r.id}`,
+        source: 'corporate_stock_transactions',
+        transaction_type: type,
+        date: r.created_at,
+        product_name: r.product_name || productName || '',
+        product_id: r.product_id,
+        product_type: r.stock_type,
+        quantity: delta,
+        from,
+        to,
+        status: 'Completed',
+        remarks: r.remarks || '',
+        created_by: r.created_by || 'System',
+        balance_after: r.balance_after,
+      });
+    });
+
+    // --- stock_transfers (transfer lifecycle) ---
+    (trRes.data || []).forEach((r) => {
+      const qty = Number(r.quantity) || 0;
+      const fromBranch = branchName(r.from_branch_id);
+      const toBranch = branchName(r.to_branch_id);
+      const status = r.status || 'Pending';
+
+      // Always: the shipment (stock leaves the source)
+      merged.push({
+        id: `str-${r.id}-ship`,
+        source: 'stock_transfers',
+        transaction_type: 'Transfer Out',
+        date: r.transferred_at,
+        product_name: r.product_name || productName || '',
+        product_id: r.product_id,
+        product_type: r.stock_type,
+        quantity: -qty,
+        from: fromBranch,
+        to: toBranch,
+        status,
+        remarks: r.remarks || '',
+        created_by: r.transferred_by || 'System',
+      });
+
+      // When received: the goods land at the destination branch
+      if (status === 'Received' && r.received_at) {
+        merged.push({
+          id: `str-${r.id}-receipt`,
+          source: 'stock_transfers',
+          transaction_type: 'Branch Receipt',
+          date: r.received_at,
+          product_name: r.product_name || productName || '',
+          product_id: r.product_id,
+          product_type: r.stock_type,
+          quantity: qty,
+          from: fromBranch,
+          to: toBranch,
+          status: 'Received',
+          remarks: r.remarks || '',
+          created_by: r.received_by || r.transferred_by || 'System',
+        });
+      } else if (status === 'Cancelled') {
+        merged.push({
+          id: `str-${r.id}-cancel`,
+          source: 'stock_transfers',
+          transaction_type: 'Transfer Cancelled',
+          date: r.transferred_at,
+          product_name: r.product_name || productName || '',
+          product_id: r.product_id,
+          product_type: r.stock_type,
+          quantity: 0,
+          from: fromBranch,
+          to: toBranch,
+          status: 'Cancelled',
+          remarks: r.remarks || '',
+          created_by: r.transferred_by || 'System',
+        });
+      }
+    });
+
+    // Newest first
+    merged.sort((a, b) => new Date(b.date) - new Date(a.date));
+    return merged.slice(0, limit);
+  } catch (e) {
+    console.error('Error fetching product history:', e);
+    return [];
+  }
+}

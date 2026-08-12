@@ -293,19 +293,26 @@ const Reports = () => {
       }
 
       // 3. Extract all consumable IDs from consumable_1_id ... consumable_14_id
+      //    Billable items: consumable_X_id  -> master_billable_consumables
+      //    Non-billable items: non_billable_registry_id_X -> non_billable_consumable_registry -> master_non_billable_consumables
+      //    (consumable_X_id is NULL for non-billable, so the registry ID must be used instead)
       const billableConsumableIds = new Set();
-      const nonBillableConsumableIds = new Set();
+      const nonBillableRegistryIds = new Set();
 
       data.forEach((row) => {
         for (let i = 1; i <= 14; i++) {
           const cId = row[`consumable_${i}_id`];
           const isNB = row[`is_non_billable_${i}`];
-          if (cId) {
-            if (isNB) {
-              nonBillableConsumableIds.add(cId);
-            } else {
-              billableConsumableIds.add(cId);
+          const regId = row[`non_billable_registry_id_${i}`];
+
+          if (isNB) {
+            // Non-billable: resolve product name via the registry row
+            if (regId) {
+              nonBillableRegistryIds.add(regId);
             }
+          } else if (cId) {
+            // Billable: resolve product name via master_billable_consumables
+            billableConsumableIds.add(cId);
           }
         }
       });
@@ -324,16 +331,20 @@ const Reports = () => {
         }
       }
 
-      // Fetch Non-Billable Master Products
+      // Fetch Non-Billable Master Products via the registry table
+      // (registry_id -> product_id -> master_non_billable_consumables)
       let nonBillableProducts = {};
-      if (nonBillableConsumableIds.size > 0) {
-        const { data: nbp } = await supabase
-          .from('master_non_billable_consumables')
-          .select('id, product_name, cost')
-          .in('id', Array.from(nonBillableConsumableIds));
-        if (nbp) {
-          nbp.forEach((p) => {
-            nonBillableProducts[p.id] = { name: p.product_name, cost: Number(p.cost || 0) };
+      if (nonBillableRegistryIds.size > 0) {
+        const { data: regRows } = await supabase
+          .from('non_billable_consumable_registry')
+          .select('id, product_id, master_non_billable_consumables ( product_name, cost )')
+          .in('id', Array.from(nonBillableRegistryIds));
+        if (regRows) {
+          regRows.forEach((reg) => {
+            nonBillableProducts[reg.id] = {
+              name: reg.master_non_billable_consumables?.product_name || `Non-Billable Item #${reg.id}`,
+              cost: Number(reg.master_non_billable_consumables?.cost || 0),
+            };
           });
         }
       }
@@ -346,13 +357,26 @@ const Reports = () => {
 
         for (let i = 1; i <= 14; i++) {
           const cId = row[`consumable_${i}_id`];
-          const units = Number(row[`consumable_${i}_units`] || 0);
           const isNB = row[`is_non_billable_${i}`];
+          const regId = row[`non_billable_registry_id_${i}`];
 
-          if (cId) {
-            const product = isNB
-              ? nonBillableProducts[cId] || { name: `Non-Billable Item #${cId}`, cost: 0 }
-              : billableProducts[cId] || { name: `Billable Item #${cId}`, cost: 0 };
+          if (isNB) {
+            // Non-billable consumables do not track quantity.
+            // Always display the consumable name (resolved via the registry row)
+            // and set Units = 0 and Cost = 0 instead of showing blank or "-".
+            const product = nonBillableProducts[regId] || { name: `Non-Billable Item #${regId || i}`, cost: 0 };
+
+            consumables.push({
+              slot: i,
+              name: product.name,
+              units: 0,
+              cost: 0,
+            });
+            // Non-billable items: Units = 0, Cost = 0, no contribution to totals
+          } else if (cId) {
+            // Billable consumables: resolve via master_billable_consumables
+            const product = billableProducts[cId] || { name: `Billable Item #${cId}`, cost: 0 };
+            const units = Number(row[`consumable_${i}_units`] || 0);
 
             consumables.push({
               slot: i,

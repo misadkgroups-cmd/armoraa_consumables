@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
 import SearchableDropdown from '../components/SearchableDropdown';
-import { Eye, Pencil, FlaskConical } from 'lucide-react';
+import { Eye, Pencil, Trash2 } from 'lucide-react';
 import * as auditApi from '../services/auditApi';
 import AuditTimelineModal from '../components/AuditTimelineModal';
 
@@ -29,7 +29,7 @@ const STATUS_BADGE = {
 };
 
 export default function BillingLog({ onNavigate }) {
-  const { branchId } = useBranch();
+  const { branchId, misMode } = useBranch();
   const [bills, setBills] = useState([]);
   const [services, setServices] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -146,24 +146,6 @@ export default function BillingLog({ onNavigate }) {
     if (!services || services.length === 0) return 'Incomplete';
     const hasPending = services.some(s => !s.consumable_completed);
     return hasPending ? 'Incomplete' : 'Complete';
-  };
-
-  // Get service counts for a bill
-  const getServiceCounts = async (billId) => {
-    try {
-      const { data, error } = await supabase
-        .from('bill_services')
-        .select('consumable_completed')
-        .eq('bill_id', billId);
-      
-      if (error) return { total: 0, completed: 0, pending: 0 };
-      
-      const total = data.length;
-      const completed = data.filter(s => s.consumable_completed).length;
-      return { total, completed, pending: total - completed };
-    } catch (error) {
-      return { total: 0, completed: 0, pending: 0 };
-    }
   };
 
   // Get service counts from services array (used when bill_services is embedded)
@@ -327,16 +309,33 @@ export default function BillingLog({ onNavigate }) {
           console.warn('Warning: Could not create bill_services:', servicesError);
         }
 
-        // Log activity for bill update
+        const username = localStorage.getItem('username') || 'System';
+        // Log activity for bill update (production activity_logs: username,
+        // branch_name, page_name, action, remarks)
         await auditApi.logActivity({
+          userName: username,
+          branchName: `Branch ${branchId}`,
+          pageName: 'billing_log',
+          action: 'edited',
+          remarks: `Updated Bill #${formData.bill_no}`
+        });
+        // Per-bill audit trail (drives the Audit Trail modal)
+        await supabase.from('bill_history').insert({
+          bill_id: editingBillId,
+          username,
+          action_type: 'UPDATE',
+          field_name: 'bill',
+          new_value: `Updated Bill #${formData.bill_no}`
+        });
+        // Field-level audit log (audit_logs table)
+        await auditApi.logAudit({
+          username,
+          branchName: `Branch ${branchId}`,
           moduleName: 'billing_log',
+          actionType: 'UPDATE',
+          tableName: 'billing_log',
           recordId: editingBillId,
-          activityType: 'edited',
-          activityDescription: `Updated Bill #${formData.bill_no}`,
-          userId: null,
-          userName: 'manager_an',
-          userRole: 'Branch Manager',
-          branchId: branchId
+          newData: billPayload
         });
 
         showToast('success', 'Bill updated successfully');
@@ -374,16 +373,35 @@ export default function BillingLog({ onNavigate }) {
           console.warn('Warning: Could not create bill_services:', servicesError);
         }
 
-        // Log activity for bill creation
+        const username = localStorage.getItem('username') || 'System';
+        // Log activity for bill creation (production activity_logs schema)
         await auditApi.logActivity({
+          userName: username,
+          branchName: `Branch ${branchId}`,
+          pageName: 'billing_log',
+          action: 'created',
+          remarks: `Created Bill #${formData.bill_no}`
+        });
+        // Per-bill audit trail (drives the Audit Trail modal)
+        // Real-time lifecycle logging: genuine Created event timestamped NOW().
+        await supabase.from('bill_history').insert({
+          bill_id: billData.id,
+          username,
+          action_type: 'CREATE',
+          field_name: 'bill',
+          new_value: `Created Bill #${formData.bill_no}`,
+          created_at: new Date().toISOString()
+        });
+
+        // Field-level audit log (audit_logs table)
+        await auditApi.logAudit({
+          username,
+          branchName: `Branch ${branchId}`,
           moduleName: 'billing_log',
+          actionType: 'CREATE',
+          tableName: 'billing_log',
           recordId: billData.id,
-          activityType: 'created',
-          activityDescription: `Created Bill #${formData.bill_no}`,
-          userId: null,
-          userName: 'manager_an',
-          userRole: 'Branch Manager',
-          branchId: branchId
+          newData: billPayload
         });
 
         showToast('success', 'Bill created successfully');
@@ -419,54 +437,6 @@ export default function BillingLog({ onNavigate }) {
     setFormErrors({});
   };
 
-  const _handleSearch = () => {
-    fetchBills();
-  };
-
-  const _handleShowAll = async () => {
-    setFilters({
-      bill_no: '',
-      uid: '',
-      patient_name: '',
-      service_date: '',
-      status: 'All',
-    });
-    // Fetch all bills directly
-    setLoading(true);
-    try {
-      let query = supabase.from('billing_log').select('*, master_doctors(doctor_name), master_staff(staff_name)').order('created_at', { ascending: false });
-      if (branchId) query = query.eq('branch_id', branchId);
-      const { data, error } = await query;
-      if (error) throw error;
-      
-      // Calculate status for each bill
-      const billsWithCounts = await Promise.all((data || []).map(async (bill) => {
-        const counts = await getServiceCounts(bill.id);
-        return {
-          ...bill,
-          serviceCounts: counts,
-          calculatedStatus: calculateBillStatus(counts),
-        };
-      }));
-      setBills(billsWithCounts);
-    } catch (error) {
-      console.error('Error fetching all bills:', error);
-      showToast('error', 'Failed to fetch bills');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const _handleClearFilters = () => {
-    setFilters({
-      bill_no: '',
-      uid: '',
-      patient_name: '',
-      service_date: '',
-      status: 'All',
-    });
-    resetForm();
-  };
 
   // Navigate to Add Consumables for a specific service
   const handleAddConsumables = (bill, billServiceId, serviceId, serviceName) => {
@@ -570,7 +540,7 @@ export default function BillingLog({ onNavigate }) {
     
     try {
       // Step 1: Delete activity and audit logs first (no FK constraints)
-      const { error: alError } = await supabase.from('activity_logs').delete().eq('record_id', bill.id).eq('module', 'billing');
+      const { error: alError } = await supabase.from('activity_logs').delete().eq('page_name', 'billing_log');
       if (alError) console.warn('Warning deleting activity logs:', alError);
 
       const { error: auditError } = await supabase.from('audit_logs').delete().eq('record_id', bill.id).eq('table_name', 'billing_log');
@@ -841,10 +811,12 @@ export default function BillingLog({ onNavigate }) {
             <thead>
               <tr>
                 <th style={{ width: 80 }}>Bill No</th>
-                <th style={{ width: 120 }}>Patient</th>
                 <th style={{ width: 100 }}>UID</th>
-                <th style={{ width: 100 }}>Date</th>
-                <th style={{ width: 80, textAlign: 'center' }}>Services</th>
+                <th style={{ width: 120 }}>Patient Name</th>
+                <th style={{ width: 100 }}>Service Date</th>
+                <th style={{ width: 120 }}>Doctor Name</th>
+                <th style={{ width: 120 }}>Staff Name</th>
+                <th style={{ width: 80, textAlign: 'center' }}>Total Services</th>
                 <th style={{ width: 80, textAlign: 'center' }}>Completed</th>
                 <th style={{ width: 80, textAlign: 'center' }}>Pending</th>
                 <th style={{ width: 100, textAlign: 'center' }}>Status</th>
@@ -854,11 +826,11 @@ export default function BillingLog({ onNavigate }) {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan="9" style={{ textAlign: 'center', padding: '20px', color: 'var(--color-muted)' }}>Loading...</td>
+                  <td colSpan="11" style={{ textAlign: 'center', padding: '20px', color: 'var(--color-muted)' }}>Loading...</td>
                 </tr>
               ) : bills.length === 0 ? (
                 <tr>
-                  <td colSpan="9" style={{ textAlign: 'center', padding: '20px', color: 'var(--color-muted)' }}>No bills yet. Create your first bill above.</td>
+                  <td colSpan="11" style={{ textAlign: 'center', padding: '20px', color: 'var(--color-muted)' }}>No bills yet. Create your first bill above.</td>
                 </tr>
               ) : (
                 bills.slice(0, 3).map((bill) => {
@@ -870,9 +842,11 @@ export default function BillingLog({ onNavigate }) {
                        <td style={{ fontWeight: 600, color: 'var(--color-primary)', whiteSpace: 'nowrap', verticalAlign: 'middle' }}>
                          {bill.bill_no}
                        </td>
-                       <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle' }}>{bill.patient_name || '-'}</td>
                        <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', fontSize: 13 }}>{bill.uid || '-'}</td>
+                       <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle' }}>{bill.patient_name || '-'}</td>
                        <td style={{ fontSize: 13 }}>{bill.service_date || '-'}</td>
+                       <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', fontSize: 13 }}>{bill.master_doctors?.doctor_name || '-'}</td>
+                       <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', fontSize: 13 }}>{bill.master_staff?.staff_name || '-'}</td>
                        <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', textAlign: 'center', fontSize: 13, fontWeight: 600 }}>
                          {counts.total || 0}
                        </td>
@@ -917,6 +891,23 @@ export default function BillingLog({ onNavigate }) {
                                 <polyline points="12 6 12 12 16 12"/>
                               </svg>
                             </button>
+
+                            {/* Delete Button - MIS only */}
+                            {misMode && (
+                              <button
+                                onClick={() => handleDeleteBill(bill)}
+                                className="btn btn-sm"
+                                style={{
+                                  background: '#FEE2E2',
+                                  color: '#991B1B',
+                                  border: '1px solid #FECACA',
+                                  padding: '6px 8px',
+                                }}
+                                title="Delete bill"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            )}
                           </div>
                         </td>
                      </tr>

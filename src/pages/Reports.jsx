@@ -161,6 +161,8 @@ const Reports = () => {
           uid: row.uid || '-',
           report_date: row.report_date || '-',
           branch_name: row.branch_name || '-',
+          doctor_name: row.doctor_name || '-',
+          staff_name: row.staff_name || '-',
           servicesList: row.service_name && row.service_name !== '-' ? [row.service_name] : [],
           machinesList: row.machine_name && row.machine_name !== '-' ? [row.machine_name] : [],
           consumablesMap: new Map(),
@@ -215,6 +217,8 @@ const Reports = () => {
         uid: group.uid,
         report_date: group.report_date,
         branch_name: group.branch_name,
+        doctor_name: group.doctor_name || '-',
+        staff_name: group.staff_name || '-',
         servicesList: group.servicesList.length > 0 ? group.servicesList : ['-'],
         machine_name: group.machinesList.length > 0 ? group.machinesList.join(', ') : '-',
         consumables: combinedConsumables,
@@ -290,6 +294,41 @@ const Reports = () => {
       if (machineryIds.length) {
         const { data: mr } = await supabase.from('master_machinery').select('id, machine_name').in('id', machineryIds);
         if (mr) mr.forEach((m) => (machineryMap[m.id] = m.machine_name));
+      }
+
+      // 2b. Hydrate Doctor and Staff names via billing_log
+      // billable_report.billing_log_id -> billing_log(doctor_id, staff_id) -> master_doctors / master_staff
+      const billingLogIds = [...new Set(data.map((r) => r.billing_log_id).filter(Boolean))];
+      let billingInfoMap = {};
+      if (billingLogIds.length) {
+        const { data: logs } = await supabase
+          .from('billing_log')
+          .select('id, doctor_id, staff_id')
+          .in('id', billingLogIds);
+
+        const doctorIds = [...new Set((logs || []).map((l) => l.doctor_id).filter(Boolean))];
+        const staffIds = [...new Set((logs || []).map((l) => l.staff_id).filter(Boolean))];
+
+        let doctorNameLookup = {};
+        let staffNameLookup = {};
+
+        if (doctorIds.length) {
+          const { data: docs } = await supabase.from('master_doctors').select('id, doctor_name').in('id', doctorIds);
+          if (docs) docs.forEach((d) => (doctorNameLookup[d.id] = d.doctor_name));
+        }
+
+        if (staffIds.length) {
+          const { data: stf } = await supabase.from('master_staff').select('id, staff_name').in('id', staffIds);
+          if (stf) stf.forEach((s) => (staffNameLookup[s.id] = s.staff_name));
+        }
+
+        // Map billing_log_id -> { doctor_name, staff_name }
+        (logs || []).forEach((l) => {
+          billingInfoMap[l.id] = {
+            doctor_name: l.doctor_id ? (doctorNameLookup[l.doctor_id] || 'Unknown') : '-',
+            staff_name: l.staff_id ? (staffNameLookup[l.staff_id] || 'Unknown') : '-',
+          };
+        });
       }
 
       // 3. Extract all consumable IDs from consumable_1_id ... consumable_14_id
@@ -398,6 +437,8 @@ const Reports = () => {
           patient_name: row.patient_name || '-',
           report_date: row.report_date || '-',
           branch_name: (row.branch_id ? branchMap[row.branch_id] : null) || '-',
+          doctor_name: (row.billing_log_id && billingInfoMap[row.billing_log_id]?.doctor_name) || row.doctor_name || '-',
+          staff_name: (row.billing_log_id && billingInfoMap[row.billing_log_id]?.staff_name) || row.staff_name || '-',
           service_name: row.service_name || (row.service_id ? serviceMap[row.service_id] : null) || '-',
           machine_name: row.machine_name || (row.machinery_id ? machineryMap[row.machinery_id] : null) || '-',
           consumables,
@@ -492,7 +533,7 @@ const Reports = () => {
     } else {
       if (reportData.length === 0) return;
 
-      headers = ['BILL ID', 'PATIENT NAME', 'UID', 'DATE', 'BRANCH'];
+      headers = ['BILL ID', 'PATIENT NAME', 'UID', 'DATE', 'BRANCH', 'DOCTOR', 'STAFF'];
       for (let s = 1; s <= maxServices; s++) headers.push(`SERVICE ${s}`);
       headers.push('MACHINERY');
       for (let i = 1; i <= maxConsumables; i++) headers.push(`CONSUMABLE ${i}`, `UNITS ${i}`, `COST ${i}`);
@@ -505,6 +546,8 @@ const Reports = () => {
           row.uid || '-',
           row.report_date || '-',
           row.branch_name || '-',
+          row.doctor_name || '-',
+          row.staff_name || '-',
         ];
 
         for (let s = 0; s < maxServices; s++) {
@@ -568,6 +611,8 @@ const Reports = () => {
           UID: row.uid || '-',
           DATE: row.report_date || '-',
           BRANCH: row.branch_name || '-',
+          DOCTOR: row.doctor_name || '-',
+          STAFF: row.staff_name || '-',
         };
 
         for (let s = 0; s < maxServices; s++) {
@@ -844,6 +889,8 @@ const Reports = () => {
                           { label: 'UID', align: 'left', minW: '100px' },
                           { label: 'DATE', align: 'left', minW: '120px' },
                           { label: 'BRANCH', align: 'left', minW: '130px' },
+                          { label: 'DOCTOR', align: 'left', minW: '130px' },
+                          { label: 'STAFF', align: 'left', minW: '130px' },
                         ];
                         for (let s = 1; s <= maxServices; s++) headers.push({ label: `SERVICE ${s}`, align: 'left', minW: '180px' });
                         headers.push({ label: 'MACHINERY', align: 'left', minW: '180px' });
@@ -866,13 +913,13 @@ const Reports = () => {
                   <tbody className="divide-y divide-gray-100">
                     {reportData.length === 0 ? (
                       <tr>
-                        <td colSpan={5 + maxServices + 1 + maxConsumables * 3 + 2} className="px-4 py-10 text-center text-sm text-gray-400">
+                        <td colSpan={7 + maxServices + 1 + maxConsumables * 3 + 2} className="px-4 py-10 text-center text-sm text-gray-400">
                           No billable records found for the selected criteria.
                         </td>
                       </tr>
                     ) : (
                       reportData.map((row) => {
-                        const totalCols = 5 + maxServices + 1 + maxConsumables * 3 + 2;
+                        const totalCols = 7 + maxServices + 1 + maxConsumables * 3 + 2;
                         return (
                           <tr key={row.id} className="hover:bg-gray-50 transition-colors">
                             {(() => {
@@ -882,6 +929,8 @@ const Reports = () => {
                               cells.push(<td key="uid" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '100px' }}>{row.uid || '-'}</td>);
                               cells.push(<td key="date" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '120px' }}>{fmtDate(row.report_date)}</td>);
                               cells.push(<td key="branch" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '130px' }}>{row.branch_name || '-'}</td>);
+                              cells.push(<td key="doctor" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '130px' }}>{row.doctor_name || '-'}</td>);
+                              cells.push(<td key="staff" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '130px' }}>{row.staff_name || '-'}</td>);
                               
                               for (let s = 0; s < maxServices; s++) {
                                 cells.push(<td key={`svc-${s}`} className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '180px', maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.servicesList && row.servicesList[s] ? row.servicesList[s] : '-'}</td>);

@@ -5,8 +5,8 @@ import BranchSwitcher from '../components/BranchSwitcher';
 import Chart from 'react-apexcharts';
 import { motion } from 'framer-motion';
 import {
-  Calendar, Activity, FileText, Box, Stethoscope, Scissors,
-  Bell, TrendingUp, ClipboardList, CheckCircle, Clock, ChevronDown
+  Calendar, Activity, FileText,
+  TrendingUp, CheckCircle, Clock, ChevronDown
 } from 'lucide-react';
 
 /* ---------- Animated Counter ---------- */

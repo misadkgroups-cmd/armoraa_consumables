@@ -1,15 +1,14 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { BranchProvider, useBranch } from './context/BranchContext';
 import Welcome from './pages/Welcome';
 import Dashboard from './pages/Dashboard';
-import { validateSession, endSession, startHeartbeat, clearHeartbeat } from './services/sessionApi';
+import { endSession } from './services/sessionApi';
 import './App.css';
 
 const AppContent = () => {
   const [currentPage, setCurrentPage] = useState('overview');
   const [urlState, setUrlState] = useState({});
-  const { branchId, switchBranch, updateBranch, loginMis, logout } = useBranch();
-  const heartbeatIntervalRef = useRef(null);
+  const { branchId, switchBranch, loginMis, logout } = useBranch();
   const [showConflictModal, setShowConflictModal] = useState(false);
   const [conflictMessage, setConflictMessage] = useState('');
 
@@ -73,32 +72,15 @@ const AppContent = () => {
   
   const effectiveBranchId = branchId || (isAuthenticated ? Number(localStorage.getItem('branchId')) || null : null);
 
-  // Check session validity when app loads
+  // Listen for session conflict events from NotificationBell
   useEffect(() => {
-    const checkSession = async () => {
-      if (!isAuthenticated) return;
-      
-      const isValid = await validateSession();
-      if (!isValid) {
-        // Session was ended by concurrent login
-        setShowConflictModal(true);
-        setConflictMessage('Your session was ended because you logged in on another device. Please login again.');
-      }
+    const handleConflict = () => {
+      setShowConflictModal(true);
+      setConflictMessage('Your session was ended because you logged in on another device. Please login again.');
     };
-    
-    checkSession();
-    
-    // Start heartbeat
-    if (isAuthenticated) {
-      heartbeatIntervalRef.current = startHeartbeat();
-    }
-    
-    return () => {
-      if (heartbeatIntervalRef.current) {
-        clearHeartbeat(heartbeatIntervalRef.current);
-      }
-    };
-  }, [isAuthenticated]);
+    window.addEventListener('session-conflict', handleConflict);
+    return () => window.removeEventListener('session-conflict', handleConflict);
+  }, []);
 
   if (!effectiveBranchId && !isAuthenticated) {
     return (
@@ -163,23 +145,12 @@ const AppContent = () => {
     setCurrentPage(page);
   };
 
-  // Expose refresh function for child pages
-  const refreshCurrentPage = () => {
-    if (currentPage === 'all-bills' || currentPage === 'billing-log') {
-      // Force re-render by toggling urlState
-      setUrlState(prev => ({ ...prev, _refresh: Date.now() }));
-    }
-  };
-
   return (
     <Dashboard
       currentPage={currentPage}
       urlState={urlState}
       onNavigate={navigateWithState}
       onLogout={handleLogout}
-      onConflictLogin={() => {
-        setShowConflictModal(false);
-      }}
     />
   );
 };

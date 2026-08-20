@@ -140,7 +140,7 @@ export async function updateStock({
 }
 
 // Get stock transaction history
-export async function getStockHistory(productType, consumableId, branchId, limit = 50) {
+export async function getStockHistory(productType, consumableId, branchId, limit = 50, dateFrom = null, dateTo = null) {
   try {
     const { data, error } = await withRetry(() => {
       let query = supabase
@@ -151,6 +151,8 @@ export async function getStockHistory(productType, consumableId, branchId, limit
       if (productType) query = query.eq('product_type', productType);
       if (consumableId) query = query.eq('consumable_id', consumableId);
       if (branchId) query = query.eq('branch_id', branchId);
+      if (dateFrom) query = query.gte('created_at', dateFrom);
+      if (dateTo) query = query.lte('created_at', dateTo);
       
       return query.limit(limit);
     });
@@ -501,15 +503,17 @@ export async function addCorporateInwardStock(productId, stockType, productName,
 // Corporate stock transactions history (Transaction History tab)
 // Returns all corporate movements including the new From / To location columns.
 // ---------------------------------------------------------------------------
-export async function getCorporateTransactions(limit = 500) {
+export async function getCorporateTransactions(limit = 500, dateFrom = null, dateTo = null) {
   try {
-    const { data, error } = await withRetry(() =>
-      supabase
+    const { data, error } = await withRetry(() => {
+      let query = supabase
         .from('corporate_stock_transactions')
         .select('*')
-        .order('created_at', { ascending: false })
-        .limit(limit)
-    );
+        .order('created_at', { ascending: false });
+      if (dateFrom) query = query.gte('created_at', dateFrom);
+      if (dateTo) query = query.lte('created_at', dateTo);
+      return query.limit(limit);
+    });
 
     if (error) {
       console.warn('getCorporateTransactions: DB error after retries:', error.message);
@@ -992,8 +996,9 @@ export async function createTransferRequest(transfers, toBranchId, toBranchName,
 }
 
 // Fetch transfer requests for the current user.
-// MIS Admin -> ALL transfers. Branch user -> only their own (to/from).
-export async function getTransfers(userBranchId, isMis = false, limit = 500, productId = null, productType = null) {
+// MIS Admin -> ALL transfers (or filtered by explicit branchFilter).
+// Branch user -> only their own (to/from).
+export async function getTransfers(userBranchId, isMis = false, limit = 500, productId = null, productType = null, branchFilter = null, dateFrom = null, dateTo = null) {
   try {
     let q = supabase
       .from('stock_transfers')
@@ -1004,6 +1009,14 @@ export async function getTransfers(userBranchId, isMis = false, limit = 500, pro
     if (!isMis && userBranchId) {
       const bid = Number(userBranchId);
       q = q.or(`to_branch_id.eq.${bid},from_branch_id.eq.${bid}`);
+    } else if (isMis && branchFilter) {
+      if (branchFilter === 'corporate') {
+        // Corporate Warehouse is stored as NULL in from_branch_id / to_branch_id
+        q = q.or('from_branch_id.is.null,to_branch_id.is.null');
+      } else {
+        const bid = Number(branchFilter);
+        q = q.or(`to_branch_id.eq.${bid},from_branch_id.eq.${bid}`);
+      }
     }
 
     if (productId) {
@@ -1012,6 +1025,8 @@ export async function getTransfers(userBranchId, isMis = false, limit = 500, pro
     if (productType) {
       q = q.eq('stock_type', productType);
     }
+    if (dateFrom) q = q.gte('transferred_at', dateFrom);
+    if (dateTo) q = q.lte('transferred_at', dateTo);
 
     const { data, error } = await withRetry(() => q);
     if (error) {
@@ -1178,43 +1193,63 @@ export async function markTransferNotificationsRead(branchId) {
 // transfer flows ALSO write to stock_transactions / corporate_stock_transactions
 // are omitted so each transfer event appears exactly once on the audit trail.
 // ---------------------------------------------------------------------------
-export async function getProductHistory(productId, productType, productName = '', limit = 500) {
+export async function getProductHistory(productId, productType, productName = '', limit = 500, dateFrom = null, dateTo = null, branchFilter = null) {
   const pid = Number(productId);
   const ptype = productType; // 'Billable' | 'Non-Billable'
 
   try {
     // 1. Branch-level movements (chronological — we need correct deltas)
-    const stRes = await withRetry(() =>
-      supabase
+    const stRes = await withRetry(() => {
+      let q = supabase
         .from('stock_transactions')
         .select('*')
         .eq('consumable_id', pid)
         .eq('product_type', ptype)
-        .order('created_at', { ascending: true })
-        .limit(limit)
-    );
+        .order('created_at', { ascending: true });
+      if (branchFilter && branchFilter !== 'corporate') {
+        q = q.eq('branch_id', Number(branchFilter));
+      }
+      if (dateFrom) q = q.gte('created_at', dateFrom);
+      if (dateTo) q = q.lte('created_at', dateTo);
+      return q.limit(limit);
+    });
 
-    // 2. Corporate-level movements
-    const cstRes = await withRetry(() =>
-      supabase
-        .from('corporate_stock_transactions')
-        .select('*')
-        .eq('product_id', pid)
-        .eq('stock_type', ptype)
-        .order('created_at', { ascending: true })
-        .limit(limit)
-    );
+    // 2. Corporate-level movements (only when no specific non-corporate branch filter)
+    let cstRes = { data: [], error: null };
+    if (branchFilter === null || branchFilter === 'corporate') {
+      cstRes = await withRetry(() => {
+        let q = supabase
+          .from('corporate_stock_transactions')
+          .select('*')
+          .eq('product_id', pid)
+          .eq('stock_type', ptype)
+          .order('created_at', { ascending: true });
+        if (dateFrom) q = q.gte('created_at', dateFrom);
+        if (dateTo) q = q.lte('created_at', dateTo);
+        return q.limit(limit);
+      });
+    }
 
     // 3. Transfer request lifecycle (shipment + optional receipt)
-    const trRes = await withRetry(() =>
-      supabase
+    const trRes = await withRetry(() => {
+      let q = supabase
         .from('stock_transfers')
         .select('*')
         .eq('product_id', pid)
         .eq('stock_type', ptype)
-        .order('transferred_at', { ascending: true })
-        .limit(limit)
-    );
+        .order('transferred_at', { ascending: true });
+      if (branchFilter) {
+        if (branchFilter === 'corporate') {
+          q = q.or('from_branch_id.is.null,to_branch_id.is.null');
+        } else {
+          const bid = Number(branchFilter);
+          q = q.or(`to_branch_id.eq.${bid},from_branch_id.eq.${bid}`);
+        }
+      }
+      if (dateFrom) q = q.gte('transferred_at', dateFrom);
+      if (dateTo) q = q.lte('transferred_at', dateTo);
+      return q.limit(limit);
+    });
 
     if (stRes.error && stRes.error.code !== '503') console.warn('getProductHistory stock_transactions:', stRes.error.message);
     if (cstRes.error && cstRes.error.code !== '503') console.warn('getProductHistory corporate_stock_transactions:', cstRes.error.message);

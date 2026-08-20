@@ -2,36 +2,38 @@ import { useState, useEffect, useRef, useMemo } from 'react';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
 import SearchableDropdown from '../components/SearchableDropdown';
+import * as auditApi from '../services/auditApi';
 import { prepareSavePayload } from '../utils/billableReportPayload';
 
-// Read URL query params for Billing Log → Billable Consumables flow
-const useQueryParams = () => {
+const PARAM_KEYS = [
+  'bill_no', 'uid', 'service_id', 'service_name',
+  'service_date', 'billing_log_id', 'bill_service_id',
+];
+
+// Read URL query params for Billing Log → Billable Consumables flow.
+// When initialParams is supplied (embedded mode), those values are used as
+// a fallback so the component can operate without URL query parameters.
+const useQueryParams = (initialParams = {}) => {
+  const mergeParams = (urlParams, baseParams = initialParams) => {
+    const result = { ...baseParams };
+    PARAM_KEYS.forEach((key) => {
+      const val = urlParams.get(key);
+      if (val) result[key] = val;
+    });
+    return result;
+  };
+
   const [params, setParams] = useState(() => {
-    if (typeof window === 'undefined') return {};
+    if (typeof window === 'undefined') return { ...initialParams };
     const search = new URLSearchParams(window.location.search);
-    return {
-      bill_no: search.get('bill_no') || '',
-      uid: search.get('uid') || '',
-      service_id: search.get('service_id') || '',
-      service_name: search.get('service_name') || '',
-      service_date: search.get('service_date') || '',
-      billing_log_id: search.get('billing_log_id') || '',
-      bill_service_id: search.get('bill_service_id') || '',
-    };
+    return mergeParams(search);
   });
 
   useEffect(() => {
     const updateParams = () => {
+      if (typeof window === 'undefined') return;
       const search = new URLSearchParams(window.location.search);
-      setParams({
-        bill_no: search.get('bill_no') || '',
-        uid: search.get('uid') || '',
-        service_id: search.get('service_id') || '',
-        service_name: search.get('service_name') || '',
-        service_date: search.get('service_date') || '',
-        billing_log_id: search.get('billing_log_id') || '',
-        bill_service_id: search.get('bill_service_id') || '',
-      });
+      setParams(prev => mergeParams(search, prev));
     };
 
     const onPop = () => updateParams();
@@ -44,10 +46,11 @@ const useQueryParams = () => {
       window.removeEventListener('popstate', onPop);
       window.removeEventListener('pushstate', updateParams);
     };
-  }, []);
+  }, [initialParams]);
 
   return params;
 };
+
 
 const FIELD_LABEL = {
   fontSize: '11px',
@@ -64,9 +67,9 @@ const CARD_STYLE = {
   boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
 };
 
-export default function BillableConsumables({ onNavigate }) {
+export default function BillableConsumables({ onNavigate, onSaveComplete, onCancel, embedded = false, initialParams = {} }) {
   const { branchId } = useBranch();
-  const query = useQueryParams();
+  const query = useQueryParams(initialParams);
   const [billId, setBillId] = useState(query.bill_no || '');
   const [uid, setUid] = useState(query.uid || '');
   const [service, setService] = useState(query.service_id || '');
@@ -83,7 +86,7 @@ export default function BillableConsumables({ onNavigate }) {
   const [billableStockMap, setBillableStockMap] = useState({});
   const [rows, setRows] = useState([]);
   const [toast, setToast] = useState(null);
-  const [reportDate, setReportDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [reportDate, setReportDate] = useState(query.service_date || new Date().toISOString().split('T')[0]);
   const [machineryLocked, setMachineryLocked] = useState(false);
   const [noMachineryMapping, setNoMachineryMapping] = useState(false);
   const billIdRef = useRef(null);
@@ -527,7 +530,10 @@ export default function BillableConsumables({ onNavigate }) {
     setMachinery(''); setMachineryLocked(false); setNoMachineryMapping(false);
   };
 
-  // Helper to update bill status based on service completion
+  // Helper to update bill status based on service completion.
+  // Records a genuine Status Changed event (with the EXACT completion time)
+  // whenever the bill transitions to / away from Complete, so the Audit Trail
+  // shows the real completion timestamp instead of falling back to updated_at.
   const updateBillStatus = async (billId) => {
     if (!billId) return;
     try {
@@ -535,34 +541,74 @@ export default function BillableConsumables({ onNavigate }) {
         .from('bill_services')
         .select('consumable_completed')
         .eq('bill_id', Number(billId));
-      
+
       if (error || !services || services.length === 0) {
         console.log('No services found for bill:', billId, error);
         return;
       }
-      
-      const allComplete = services.every(s => s.consumable_completed);
+
+      const allComplete = services.every((s) => s.consumable_completed);
+      const newStatus = allComplete ? 'Complete' : 'Incomplete';
       console.log('Bill services completion status:', services, 'All complete:', allComplete);
-      
+
+      // Read the previous status so we only log genuine transitions.
+      const { data: billRow, error: billErr } = await supabase
+        .from('billing_log')
+        .select('bill_status, bill_no')
+        .eq('id', Number(billId))
+        .maybeSingle();
+      if (billErr) console.warn('Could not read current bill status:', billErr);
+      const prevStatus = billRow?.bill_status || 'Incomplete';
+
+      // Timestamp the lifecycle transition precisely (completion time).
+      const nowIso = new Date().toISOString();
+      const username = localStorage.getItem('username') || 'System';
+
       const { error: updateError } = await supabase
         .from('billing_log')
-        .update({ bill_status: allComplete ? 'Complete' : 'Incomplete' })
+        .update({
+          bill_status: newStatus,
+          updated_at: nowIso,
+        })
         .eq('id', Number(billId));
-      
+
       if (updateError) {
         console.error('Failed to update billing_log status:', updateError);
-      } else {
-        console.log('Successfully updated billing_log status to:', allComplete ? 'Complete' : 'Incomplete');
+        return;
+      }
+      console.log('Successfully updated billing_log status to:', newStatus);
+
+      // Real-time lifecycle logging: record the Status Changed event at the
+      // exact time of the transition. The bill_history row's created_at is the
+      // true completion timestamp; updated_at stays in sync as a fallback.
+      if (prevStatus !== newStatus) {
+        await supabase.from('bill_history').insert({
+          bill_id: Number(billId),
+          username,
+          action_type: 'STATUS_CHANGE',
+          field_name: 'bill_status',
+          old_value: prevStatus,
+          new_value: newStatus,
+          created_at: nowIso,
+        });
+        await auditApi.logActivity({
+          userName: username,
+          branchName: `Branch ${branchId}`,
+          pageName: 'billing_log',
+          action: 'status_changed',
+          remarks: `Bill #${billRow?.bill_no || billId} status changed: ${prevStatus} → ${newStatus}`,
+        });
       }
     } catch (e) {
       console.error('Failed to update bill status', e);
     }
   };
 
-  // Helper to log service consumable action to bill_history
+  // Helper to log service consumable action to bill_history + audit_logs
   const logServiceConsumableAction = async (billId, serviceName, action) => {
     try {
       const username = localStorage.getItem('username') || 'System';
+      // Per-bill history row (drives the Audit Trail modal "Consumables Updated")
       await supabase.from('bill_history').insert({
         bill_id: billId,
         username,
@@ -571,6 +617,16 @@ export default function BillableConsumables({ onNavigate }) {
         old_value: null,
         new_value: serviceName,
         created_at: new Date().toISOString()
+      });
+      // Field-level audit row (audit_logs table)
+      await auditApi.logAudit({
+        username,
+        branchName: `Branch ${branchId}`,
+        moduleName: 'billable_consumables',
+        actionType: action === 'CREATE' ? 'CREATE' : 'UPDATE',
+        tableName: 'billable_consumables',
+        recordId: billId,
+        newData: { service: serviceName, action }
       });
     } catch (e) {
       console.error('Failed to log service consumable action', e);
@@ -930,10 +986,20 @@ export default function BillableConsumables({ onNavigate }) {
         await deductInventory(reportPayload, savedReport.id, isUpdate, oldReport);
       }
 
-      // Set refresh flag for parent page
+      // Set refresh flag for parent page (still useful for standalone mode)
       localStorage.setItem('forceRefreshBills', Date.now().toString());
-      
-      // Navigate back to Detailed Log after successful save
+
+      // Embedded mode: callback instead of navigating away (keeps popup open)
+      if (onSaveComplete) {
+        onSaveComplete({
+          billId: validBillingLogId,
+          serviceId: query.service_id,
+          billServiceId: query.bill_service_id,
+        });
+        return;
+      }
+
+      // Navigate back to Detailed Log after successful save (standalone mode)
       setTimeout(() => {
         if (onNavigate) {
           // Pass bill ID to show the specific bill details
@@ -975,7 +1041,29 @@ export default function BillableConsumables({ onNavigate }) {
 
   const showToast = (type, message) => { setToast({ type, message }); setTimeout(() => setToast(null), 3000); };
 
+  const handleCancel = () => {
+    if (embedded && onCancel) {
+      onCancel();
+      return;
+    }
+    // Non-embedded: navigate back to Detailed Log
+    if (window.location.search) {
+      const clean = window.location.pathname;
+      window.history.replaceState({}, '', clean);
+    }
+    if (onNavigate) {
+      onNavigate('all-bills', { refresh: true });
+    } else {
+      window.location.href = '/billing-log/all-bills?refresh=' + Date.now();
+    }
+  };
+
   const handleExit = async () => {
+    if (embedded) {
+      // In embedded mode, cancel returns to service list in the modal
+      if (onCancel) onCancel();
+      return;
+    }
     // Clean query params first
     if (window.location.search) {
       const clean = window.location.pathname;
@@ -998,6 +1086,10 @@ export default function BillableConsumables({ onNavigate }) {
   };
 
   const handleClose = () => {
+    if (embedded) {
+      if (onCancel) onCancel();
+      return;
+    }
     // Best-effort cleanup: remove query params so returning to this page is clean
     if (window.location.search) {
       const clean = window.location.pathname;
@@ -1006,27 +1098,47 @@ export default function BillableConsumables({ onNavigate }) {
   };
 
   return (
-    <div className="page-wrapper animate-fade-in">
-      <div className="page-header">
-        <div className="page-header-left">
-          <h1>Billable Consumables</h1>
-          <p>Record consumables used per patient bill</p>
+    <div className={embedded ? "consumables-embed-content" : "page-wrapper animate-fade-in"}>
+      {embedded ? (
+        <div className="consumables-embed-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '16px 20px', borderBottom: '1px solid var(--color-line)' }}>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: 'var(--color-ink)' }}>
+              {query.service_name ? `Consumables — ${query.service_name}` : 'Consumables'}
+            </h3>
+            <p style={{ margin: 0, fontSize: 12, color: 'var(--color-muted)' }}>
+              Bill #{query.bill_no} · Date: {query.service_date || '-'}
+            </p>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={handleCancel} className="btn btn-secondary btn-sm">← Back to Services</button>
+            <button onClick={handleSave} className="btn btn-primary" disabled={noMachineryMapping}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Save
+            </button>
+          </div>
         </div>
-        <div className="page-header-actions">
-          <button onClick={handleSave} className="btn btn-primary" disabled={noMachineryMapping}>
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-            Save Record
-          </button>
-          <button onClick={handleClear} className="btn btn-secondary">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
-            Clear
-          </button>
-          <button onClick={handleExit} className="btn btn-ghost" title="Exit to Detailed Log">
-            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-            Exit
-          </button>
+      ) : (
+        <div className="page-header">
+          <div className="page-header-left">
+            <h1>Billable Consumables</h1>
+            <p>Record consumables used per patient bill</p>
+          </div>
+          <div className="page-header-actions">
+            <button onClick={handleSave} className="btn btn-primary" disabled={noMachineryMapping}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+              Save Record
+            </button>
+            <button onClick={handleClear} className="btn btn-secondary">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+              Clear
+            </button>
+            <button onClick={handleExit} className="btn btn-ghost" title="Exit to Detailed Log">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+              Exit
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="card" style={{ ...CARD_STYLE, padding: 0, overflow: 'visible' }}>
         <div className="grid grid-cols-5 gap-0" style={{ borderBottom: '1px solid var(--color-line)' }}>

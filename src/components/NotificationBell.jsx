@@ -3,11 +3,10 @@ import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
 import * as stockApi from '../services/stockApi';
 
-const NotificationBell = ({ userId, onConflictLogin }) => {
+const NotificationBell = ({ userId }) => {
   const { branchId } = useBranch();
   const [branchName, setBranchName] = useState('');
   const [branches, setBranches] = useState([]);
-  const [notifications, setNotifications] = useState([]);
   const [transferNots, setTransferNots] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -47,12 +46,8 @@ const NotificationBell = ({ userId, onConflictLogin }) => {
         .eq('session_token', sessionToken)
         .maybeSingle();
       if (session && !session.is_active) {
-        setNotifications([{
-          id: 'conflict',
-          type: 'conflict',
-          message: 'Your login credential was used on another device',
-          timestamp: new Date().toISOString(),
-        }]);
+        // Dispatch event so AppContent can show the conflict modal
+        window.dispatchEvent(new Event('session-conflict'));
       }
     };
     const interval = setInterval(checkSessionConflicts, 30000);
@@ -99,12 +94,6 @@ const NotificationBell = ({ userId, onConflictLogin }) => {
     }, 200);
   };
 
-  const handleConflictClick = async () => {
-    if (onConflictLogin) await onConflictLogin();
-    setNotifications([]);
-    closeDropdown();
-  };
-
   const handleConfirmReceive = async (transfer) => {
     const result = await stockApi.receiveTransfer(transfer.id, branchName || 'Branch User');
     if (result.success) {
@@ -122,8 +111,6 @@ const NotificationBell = ({ userId, onConflictLogin }) => {
     setUnreadCount(0);
     setTransferNots(await stockApi.getIncomingTransfers(branchId));
   };
-
-  const showBell = true; // Always show bell icon
 
   const getPositionStyle = () => {
     if (!bellRef.current) return { top: '60px', left: '12px' };

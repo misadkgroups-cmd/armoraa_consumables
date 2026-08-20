@@ -56,7 +56,7 @@ const NavIcon = ({ path }) => (
   </svg>
 );
 
-const Dashboard = ({ currentPage = 'overview', urlState, onNavigate, onLogout, onConflictLogin }) => {
+const Dashboard = ({ currentPage = 'overview', urlState, onNavigate, onLogout }) => {
   const { branchName, misMode, userId } = useBranch();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [userInfo, setUserInfo] = useState({ username: '', role: '' });
@@ -84,12 +84,6 @@ const Dashboard = ({ currentPage = 'overview', urlState, onNavigate, onLogout, o
     }
   };
 
-  const handleConflictLogin = async () => {
-    if (onConflictLogin) {
-      onConflictLogin();
-    }
-  };
-
   return (
     <div className="app-container">
       <aside className={`sidebar ${sidebarCollapsed ? 'collapsed' : ''}`}>
@@ -114,7 +108,7 @@ const Dashboard = ({ currentPage = 'overview', urlState, onNavigate, onLogout, o
           </button>
 
           <div className="sidebar-notification-area">
-            <NotificationBell userId={userId} onConflictLogin={handleConflictLogin} />
+            <NotificationBell userId={userId} />
           </div>
         </div>
 

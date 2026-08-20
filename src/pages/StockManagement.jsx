@@ -23,6 +23,12 @@ const StockManagement = () => {
   const [successMsg, setSuccessMsg] = useState('');
   const [search, setSearch] = useState('');
   const [historyProductFilter, setHistoryProductFilter] = useState(null);
+  // History sub-tab: 'transfers' (Stock Transfers) | 'consumed' (Consumed / Usage History)
+  const [historySubTab, setHistorySubTab] = useState('transfers');
+  // History filters: branch (MIS only) + date range
+  const [historyBranchFilter, setHistoryBranchFilter] = useState('');
+  const [historyDateFrom, setHistoryDateFrom] = useState('');
+  const [historyDateTo, setHistoryDateTo] = useState('');
 
   // Adjust stock modal (existing, kept)
   const [adjustForm, setAdjustForm] = useState({ product_id: '', product_type: 'Billable', current_stock: 0, add_units: '', reduce_units: '', remarks: '' });
@@ -153,22 +159,129 @@ const StockManagement = () => {
     return b ? b.branch_name : (id === 'corporate' ? 'Corporate Warehouse' : `Branch ${id}`);
   };
 
-  // Transaction History now lists stock_transfers.
-  // MIS Admin -> ALL transfers. Branch user -> only to_branch / from_branch = me.
+  // Transaction History shows BOTH inter-branch transfers (stock_transfers) AND
+  // branch-level stock movements (stock_transactions) — i.e. consumption/usage
+  // (Outward), stock adds (Inward) and manual adjustments — so that consumable
+  // usage is visible here, not just transfers.
+  // MIS Admin -> ALL. Branch user -> only their own branch.
+  // NOTE: transfer bookkeeping rows are skipped because they are already
+  // represented by the canonical stock_transfers records (avoids duplicates).
   const fetchHistory = useCallback(async (productFilter = null) => {
-    if (!misMode && !branchId) return;
+    if (!misMode && !branchId && !productFilter) return;
     setLoading(true);
     try {
-      const data = await stockApi.getTransfers(branchId, misMode, 500, productFilter?.id, productFilter?.type);
-      setHistory(data || []);
+      let merged = [];
+
+      // Resolve active filters (branch filter only applies to MIS Admin)
+      const activeBranchFilter = misMode ? (historyBranchFilter || null) : null;
+      const dateFrom = historyDateFrom ? new Date(historyDateFrom).toISOString() : null;
+      const dateTo = historyDateTo ? new Date(historyDateTo + 'T23:59:59').toISOString() : null;
+
+      if (productFilter) {
+        // ================================================================
+        // PRODUCT-SPECIFIC HISTORY (View History icon):
+        // Use the comprehensive product-level audit trail that matches the
+        // EXACT product_id and merges ALL sources:
+        //   stock_transactions  (branch Inward/Outward/Adjustment)
+        //   corporate_stock_transactions (corporate movements)
+        //   stock_transfers     (transfer lifecycle: ship + receive)
+        // ================================================================
+        const rows = await stockApi.getProductHistory(
+          productFilter.id,
+          productFilter.type,
+          productFilter.name || '',
+          500,
+          dateFrom,
+          dateTo,
+          activeBranchFilter
+        );
+
+        merged = (rows || []).map((r) => ({
+          id: r.id,
+          source: r.source,
+          transaction_type: r.transaction_type,
+          product_id: r.product_id,
+          product_type: r.product_type,
+          stock_type: r.product_type,
+          product_name: r.product_name || productFilter.name || `Product ${r.product_id || ''}`,
+          quantity: Number(r.quantity) || 0,
+          transferred_at: r.date,
+          status: r.status || 'Completed',
+          fromLabel: r.from,
+          toLabel: r.to,
+          from_branch_id: null,
+          to_branch_id: null,
+          branch_id: r.branch_id || null,
+          remarks: r.remarks || '',
+          balance_after: r.balance_after,
+        }));
+      } else {
+        // ================================================================
+        // GLOBAL TRANSACTION HISTORY (Transaction History tab, no filter):
+        // Shows inter-branch transfers (stock_transfers) AND branch-level
+        // stock movements (stock_transactions — consumption/usage, adds,
+        // adjustments). MIS Admin -> ALL. Branch user -> their branch only.
+        // ================================================================
+        // Branch filter applies to usage records too (MIS Admin only).
+        // 'corporate' has no branch_id in stock_transactions (it lives in
+        // corporate_stock_transactions), so pass null for that case.
+        const txnBranchId = misMode
+          ? (activeBranchFilter && activeBranchFilter !== 'corporate' ? Number(activeBranchFilter) : null)
+          : branchId;
+        const [transferData, txnData] = await Promise.all([
+          stockApi.getTransfers(branchId, misMode, 500, null, null, activeBranchFilter, dateFrom, dateTo),
+          stockApi.getStockHistory(null, null, txnBranchId, 500, dateFrom, dateTo),
+        ]);
+
+        // stock_transactions does not store the product name; resolve it from the
+        // master product list (falls back to "Product <id>").
+        const productLookup = {};
+        (products || []).forEach((p) => {
+          productLookup[`${Number(p.id)}|${p.type}`] = p.product_name;
+        });
+
+        const consumptionRows = (txnData || [])
+          .filter((r) => {
+            const t = (r.transaction_type || '').toLowerCase();
+            if (t === 'transfer') return false; // mirrored by stock_transfers
+            if (t === 'inward' && (r.remarks || '').toLowerCase().includes('received from')) return false; // receipt already on stock_transfers
+            return true;
+          })
+          .map((r) => {
+            const t = (r.transaction_type || '').toLowerCase();
+            const isOutward = t === 'outward';
+            const isInward = t === 'inward';
+            return {
+              id: `tx-${r.id}`,
+              source: 'stock_transactions',
+              transaction_type: r.transaction_type,
+              product_id: r.consumable_id,
+              product_type: r.product_type,
+              stock_type: r.product_type,
+              product_name: r.product_name || productLookup[`${Number(r.consumable_id)}|${r.product_type}`] || `Product ${r.consumable_id || ''}`,
+              quantity: Number(r.quantity) || 0,
+              transferred_at: r.created_at,
+              status: 'Completed',
+              from_branch_id: isOutward ? r.branch_id : null,
+              to_branch_id: (isInward || t === 'adjustment') ? r.branch_id : null,
+              branch_id: r.branch_id,
+              remarks: r.remarks || '',
+            };
+          });
+
+        merged = [...(transferData || []), ...consumptionRows];
+      }
+
+      merged.sort((a, b) => new Date(b.transferred_at || 0) - new Date(a.transferred_at || 0));
+      setHistory(merged);
       setErrorMsg('');
     } catch (e) {
-      console.error('Error fetching transfer history:', e);
+      console.error('Error fetching transaction history:', e);
       setErrorMsg('Failed to load transaction history');
     } finally {
       setLoading(false);
     }
-  }, [misMode, branchId]);
+  }, [misMode, branchId, products, historyBranchFilter, historyDateFrom, historyDateTo]);
 
   // Branch user confirms receipt -> stock moves into the destination branch
   const handleReceive = async (transfer) => {
@@ -195,6 +308,14 @@ const StockManagement = () => {
     setSearch('');
     setActiveTab('history');
     fetchHistory(product);
+  };
+
+  // Clear all history filters (branch + date range)
+  const clearHistoryFilters = () => {
+    setHistoryBranchFilter('');
+    setHistoryDateFrom('');
+    setHistoryDateTo('');
+    fetchHistory(historyProductFilter);
   };
 
   // ---- Adjust stock (existing) ----
@@ -407,10 +528,8 @@ const StockManagement = () => {
 
   // ---- Transfer helpers ----
   const initTransferRows = (productType, sourceBranchId) => {
-    console.log('initTransferRows called:', { productType, sourceBranchId, stockLength: stock.length, corporateStockLength: corporateStock.length });
-    
     if (sourceBranchId === 'corporate') {
-      const rows = corporateStock
+      return corporateStock
         .filter(x => x.stock_type === productType)
         .map(x => ({
           id: x.id,
@@ -421,29 +540,23 @@ const StockManagement = () => {
           qty: '',
           selected: false,
         }));
-      console.log('Corporate rows:', rows.length);
-      return rows;
     }
     
     // Branch-to-Branch or Branch-to-Corporate: use current branch stock as source
-    const filteredStock = stock.filter(x => x.product_type === productType);
-    console.log('Branch stock filtered:', filteredStock.length, 'products:', filteredStock.map(x => x.consumable_id));
-    
-    const rows = filteredStock.map(x => {
-      const product = products.find(p => p.id === x.consumable_id && p.type === x.product_type);
-      return {
-        id: x.id,
-        product_id: x.consumable_id,
-        product_name: product?.product_name || `Product ${x.consumable_id}`,
-        stock_type: x.product_type,
-        available: Number(x.current_stock) || 0,
-        qty: '',
-        selected: false,
-      };
-    });
-    
-    console.log('Branch rows:', rows.length, 'products:', rows.map(r => r.product_name));
-    return rows;
+    return stock
+      .filter(x => x.product_type === productType)
+      .map(x => {
+        const product = products.find(p => p.id === x.consumable_id && p.type === x.product_type);
+        return {
+          id: x.id,
+          product_id: x.consumable_id,
+          product_name: product?.product_name || `Product ${x.consumable_id}`,
+          stock_type: x.product_type,
+          available: Number(x.current_stock) || 0,
+          qty: '',
+          selected: false,
+        };
+      });
   };
 
   const openTransferModal = () => {
@@ -468,23 +581,11 @@ const StockManagement = () => {
     setTransferRows(rows);
     setTransferSearch('');
     setShowTransferModal(true);
-    
-    console.log('Transfer modal opened:', { 
-      transferType, 
-      fromBranchId, 
-      branchId,
-      productCount: rows.length, 
-      selectedCount: rows.filter(r => r.selected).length,
-      products: rows.filter(r => r.selected).map(r => r.product_name)
-    });
   };
 
   const getAvailableLocations = (transferType, currentBranchId) => {
-    console.log('getAvailableLocations called:', { transferType, currentBranchId, branchesCount: branches.length, branchIds: branches.map(b => b.id) });
-    
     // Ensure branches are loaded before filtering
     if (!branches || branches.length === 0) {
-      console.log('No branches loaded, returning default');
       return [{ id: 'corporate', name: 'Corporate Warehouse' }];
     }
     
@@ -502,7 +603,6 @@ const StockManagement = () => {
         // From: Current branch, To: Other branches (exclude corporate)
         const currentBranch = locs.find(l => l.id === currentId);
         const otherBranches = locs.filter(l => l.id !== 'corporate' && l.id !== currentId);
-        console.log('Branch→Branch locations:', { currentBranch, otherBranchesCount: otherBranches.length });
         if (currentBranch) {
           return [currentBranch, ...otherBranches];
         }
@@ -518,19 +618,10 @@ const StockManagement = () => {
     if (showTransferModal && transferForm.from_branch_id) {
       const rows = initTransferRows(transferForm.product_type, transferForm.from_branch_id);
       setTransferRows(rows);
-      console.log('Transfer rows synced:', {
-        transfer_type: transferForm.transfer_type,
-        from_branch_id: transferForm.from_branch_id,
-        product_type: transferForm.product_type,
-        count: rows.length,
-        selected: rows.filter(r => r.selected).length
-      });
     }
   }, [showTransferModal, transferForm.from_branch_id, transferForm.product_type]);
 
   const handleTransferTypeChange = (newType) => {
-    console.log('handleTransferTypeChange called:', { newType, currentBranchId: branchId });
-    
     let fromId = 'corporate';
     let toId = '';
     
@@ -540,8 +631,6 @@ const StockManagement = () => {
     } else if ((newType === 'Branch→Corporate' || newType === 'Branch→Branch') && branchId) {
       fromId = String(branchId);
     }
-    
-    console.log('Setting from_branch_id to:', fromId, 'branchId:', branchId);
     
     // Guard: if branchId is not available for branch-based transfers, don't update
     if ((newType === 'Branch→Corporate' || newType === 'Branch→Branch') && !branchId) {
@@ -564,14 +653,6 @@ const StockManagement = () => {
     // Update both form and rows together
     setTransferForm(updatedForm);
     setTransferRows(newRows);
-    
-    console.log('Transfer type changed:', {
-      newType,
-      fromId,
-      toId,
-      productType: transferForm.product_type,
-      productsLoaded: newRows.length
-    });
   };
 
   const handleTransferAll = async () => {
@@ -666,17 +747,11 @@ const StockManagement = () => {
 
   const toggleTransferRow = (productId) => {
     const idStr = String(productId);
-    console.log('Toggling product:', idStr, 'Current rows:', transferRows.map(r => ({ id: r.id, product_id: r.product_id, name: r.product_name })));
-    
-    setTransferRows(prev => {
-      const newRows = prev.map(r => 
-        (String(r.product_id) === idStr || String(r.id) === idStr) 
-          ? { ...r, selected: !r.selected, qty: '' }
-          : r
-      );
-      console.log('After toggle:', newRows.filter(r => r.selected).map(r => r.product_name));
-      return newRows;
-    });
+    setTransferRows(prev => prev.map(r => 
+      (String(r.product_id) === idStr || String(r.id) === idStr) 
+        ? { ...r, selected: !r.selected, qty: '' }
+        : r
+    ));
   };
 
   // ---- Helpers ----
@@ -695,12 +770,6 @@ const StockManagement = () => {
       case 'Adjustment': return <Edit2 size={16} className="text-orange-600" />;
       default: return <Package size={16} className="text-gray-600" />;
     }
-  };
-
-  const getQuantityColor = (quantity) => {
-    if (quantity > 0) return 'text-green-600';
-    if (quantity < 0) return 'text-red-600';
-    return 'text-gray-600';
   };
 
   // ---- Filtering (search) ----
@@ -730,6 +799,36 @@ const StockManagement = () => {
     });
   }, [corporateStock, products, search]);
 
+  // ---------------------------------------------------------------------------
+  // HISTORY SUB-TAB CLASSIFICATION
+  // ---------------------------------------------------------------------------
+  // Stock Transfers tab  -> inter-warehouse / inter-branch movements
+  //   (stock_transfers lifecycle: Transfer Out / Branch Receipt / Transfer
+  //    Cancelled, plus any row with status Pending / Received / Cancelled).
+  // Consumed / Usage tab -> clinic consumption (Outward / Stock Used / "Consumed").
+  // ---------------------------------------------------------------------------
+  const transferHistory = useMemo(() => {
+    return (history || []).filter(item => {
+      if (item.source === 'stock_transfers') return true;
+      const t = (item.transaction_type || '').toLowerCase();
+      if (t.includes('transfer')) return true;
+      if (item.status === 'Pending' || item.status === 'Received' || item.status === 'Cancelled') return true;
+      // Global inter-branch transfer rows carry both from + to branch ids
+      if (item.from_branch_id && item.to_branch_id && t !== 'outward' && item.toLabel !== 'Consumed') return true;
+      return false;
+    });
+  }, [history]);
+
+  const consumedHistory = useMemo(() => {
+    return (history || []).filter(item => {
+      const t = (item.transaction_type || '').toLowerCase();
+      if (t === 'outward') return true;
+      if (t.includes('used')) return true;   // "Stock Used" (product audit trail)
+      if (item.toLabel === 'Consumed') return true;
+      return false;
+    });
+  }, [history]);
+
   const filteredHistory = useMemo(() => {
     const s = (search || '').toLowerCase().trim();
     let result = history;
@@ -744,6 +843,17 @@ const StockManagement = () => {
       );
     }
 
+    // Sub-tab filter (Stock Management History tab only)
+    if (activeTab === 'history') {
+      if (historySubTab === 'consumed') {
+        const ids = new Set(consumedHistory.map(i => i.id));
+        result = result.filter(item => ids.has(item.id));
+      } else {
+        const ids = new Set(transferHistory.map(i => i.id));
+        result = result.filter(item => ids.has(item.id));
+      }
+    }
+
     if (!s) return result;
     return result.filter(item => {
       const productName = (item.product_name || '').toLowerCase();
@@ -751,9 +861,11 @@ const StockManagement = () => {
       const fromBranch = branchNameById(item.from_branch_id).toLowerCase();
       const toBranch = branchNameById(item.to_branch_id).toLowerCase();
       const status = (item.status || '').toLowerCase();
-      return productName.includes(s) || type.includes(s) || fromBranch.includes(s) || toBranch.includes(s) || status.includes(s);
+      const txnType = (item.transaction_type || '').toLowerCase();
+      const remarks = (item.remarks || '').toLowerCase();
+      return productName.includes(s) || type.includes(s) || fromBranch.includes(s) || toBranch.includes(s) || status.includes(s) || txnType.includes(s) || remarks.includes(s);
     });
-  }, [history, search, branches, historyProductFilter]);
+  }, [history, search, branches, historyProductFilter, activeTab, historySubTab, transferHistory, consumedHistory, historyBranchFilter, historyDateFrom, historyDateTo]);
 
   // ---- Unified export data (works for every tab) ----
   const buildExportData = useMemo(() => {
@@ -769,15 +881,20 @@ const StockManagement = () => {
     }
 
     if (activeTab === 'history') {
+      const isConsumedTab = historySubTab === 'consumed';
       const rows = filteredHistory.map(item => ({
         'Date': item.transferred_at ? new Date(item.transferred_at).toLocaleString('en-GB') : '-',
         'Product': item.product_name || `Product ${item.product_id || ''}`,
-        'Qty': item.quantity,
-        'From': branchNameById(item.from_branch_id),
-        'To': branchNameById(item.to_branch_id),
+        'Qty': isConsumedTab ? `-${Math.abs(Number(item.quantity) || 0)}` : item.quantity,
+        'From': item.fromLabel || (item.transaction_type === 'Inward' ? 'Stock Added' : item.transaction_type === 'Adjustment' ? 'Manual Correction' : branchNameById(item.from_branch_id)),
+        'To': item.toLabel || (item.transaction_type === 'Outward' ? 'Consumed' : branchNameById(item.to_branch_id)),
         'Status': item.status || '-',
       }));
-      return { title: 'Transaction History Report', headers: ['Date', 'Product', 'Qty', 'From', 'To', 'Status'], rows };
+      return {
+        title: isConsumedTab ? 'Consumed / Usage History Report' : 'Stock Transfers Report',
+        headers: ['Date', 'Product', 'Qty', 'From', 'To', 'Status'],
+        rows,
+      };
     }
 
     const rows = filteredStock.map(item => {
@@ -1021,7 +1138,7 @@ const StockManagement = () => {
           </button>
         )}
         <button
-          onClick={() => { setActiveTab('history'); setSearch(''); setHistoryProductFilter(null); fetchHistory(); }}
+          onClick={() => { setActiveTab('history'); setSearch(''); setHistoryProductFilter(null); setHistoryBranchFilter(''); setHistoryDateFrom(''); setHistoryDateTo(''); fetchHistory(); }}
           className={`flex-1 px-6 py-3 text-sm font-medium transition-all relative ${activeTab === 'history' ? 'text-[var(--color-primary)] border-b-2 border-[var(--color-primary)]' : 'text-muted hover:text-text'}`}
         >
           Transaction History
@@ -1030,8 +1147,8 @@ const StockManagement = () => {
 
       {/* Filters */}
       <div className="card mb-4">
-        <div className="flex items-center gap-4">
-          <div className="search-box flex-1">
+        <div className="flex items-center gap-4" style={{ flexWrap: 'wrap' }}>
+          <div className="search-box flex-1" style={{ minWidth: 180 }}>
             <Search size={15} />
             <input
               placeholder={activeTab === 'history' ? 'Search history...' : 'Search products...'}
@@ -1039,6 +1156,60 @@ const StockManagement = () => {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
+
+          {/* History filters: Branch (MIS only) + Date Range */}
+          {activeTab === 'history' && (
+            <>
+              {misMode && (
+                <select
+                  value={historyBranchFilter}
+                  onChange={(e) => setHistoryBranchFilter(e.target.value)}
+                  className="form-input"
+                  style={{ width: 160, padding: '8px 10px', fontSize: 13 }}
+                >
+                  <option value="">All Branches</option>
+                  {(branches || []).map((b) => (
+                    <option key={b.id} value={String(b.id)}>{b.branch_name}</option>
+                  ))}
+                </select>
+              )}
+              <input
+                type="date"
+                value={historyDateFrom}
+                onChange={(e) => setHistoryDateFrom(e.target.value)}
+                className="form-input"
+                style={{ width: 150, padding: '8px 10px', fontSize: 13 }}
+                title="From Date"
+              />
+              <input
+                type="date"
+                value={historyDateTo}
+                onChange={(e) => setHistoryDateTo(e.target.value)}
+                className="form-input"
+                style={{ width: 150, padding: '8px 10px', fontSize: 13 }}
+                title="To Date"
+              />
+              <button
+                onClick={() => fetchHistory(historyProductFilter)}
+                className="btn btn-primary"
+                style={{ fontSize: 12, padding: '6px 14px', whiteSpace: 'nowrap' }}
+                title="Apply filters"
+              >
+                Apply
+              </button>
+              {(historyBranchFilter || historyDateFrom || historyDateTo) && (
+                <button
+                  onClick={clearHistoryFilters}
+                  className="btn btn-secondary"
+                  style={{ fontSize: 12, padding: '6px 12px', whiteSpace: 'nowrap' }}
+                  title="Clear all filters"
+                >
+                  Clear Filters
+                </button>
+              )}
+            </>
+          )}
+
           {/* Product filter indicator (History tab only) */}
           {activeTab === 'history' && historyProductFilter && (
             <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--color-primary)', fontWeight: 500, flexShrink: 0 }}>
@@ -1046,7 +1217,11 @@ const StockManagement = () => {
               <span>Showing: {historyProductFilter.name || `Product #${historyProductFilter.id}`}</span>
               <span style={{ color: 'var(--color-muted)', fontWeight: 400 }}>({filteredHistory.length} records)</span>
               <button
-                onClick={() => setHistoryProductFilter(null)}
+                onClick={() => {
+                  setHistoryProductFilter(null);
+                  setSearch('');
+                  fetchHistory();
+                }}
                 className="hover:text-[var(--color-ink)]"
                 style={{ fontSize: 11, padding: '2px 8px', border: '1px solid var(--color-line)', borderRadius: 4 }}
                 title="Show all transactions"
@@ -1223,63 +1398,164 @@ const StockManagement = () => {
         </div>
       )}
 
-      {/* History Tab */}
+      {/* History Tab — split into Stock Transfers / Consumed Usage sub-tabs */}
       {activeTab === 'history' && (
-        <div className="table-container">
-          <table className="rpt-table">
-            <thead>
-              <tr>
-                <th className="rpt-c-date">Date</th>
-                <th className="rpt-c-service">Product</th>
-                <th className="rpt-c-units">Qty</th>
-                <th className="rpt-c-units">From</th>
-                <th className="rpt-c-units">To</th>
-                <th className="rpt-c-service">Status</th>
-                {!misMode && <th className="rpt-c-actions">Action</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {filteredHistory.length === 0 && (
+        <>
+          {/* Sub-tabs */}
+          <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+            <button
+              onClick={() => setHistorySubTab('transfers')}
+              style={{
+                flex: '1',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                padding: '10px 16px',
+                borderRadius: 8,
+                fontSize: 13.5,
+                fontWeight: 600,
+                border: historySubTab === 'transfers' ? '2px solid var(--color-primary)' : '1px solid var(--color-line)',
+                background: historySubTab === 'transfers' ? 'var(--color-tint)' : 'var(--color-surface)',
+                color: historySubTab === 'transfers' ? 'var(--color-primary)' : 'var(--color-muted)',
+                cursor: 'pointer',
+              }}
+            >
+              <ArrowLeftRight size={16} />
+              Stock Transfers
+              <span style={{ marginLeft: 2, fontSize: 12, fontWeight: 700, background: historySubTab === 'transfers' ? 'var(--color-primary)' : 'var(--color-line)', color: historySubTab === 'transfers' ? '#fff' : 'var(--color-muted)', borderRadius: 999, padding: '2px 9px' }}>
+                {transferHistory.length} records
+              </span>
+            </button>
+            <button
+              onClick={() => setHistorySubTab('consumed')}
+              style={{
+                flex: '1',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                padding: '10px 16px',
+                borderRadius: 8,
+                fontSize: 13.5,
+                fontWeight: 600,
+                border: historySubTab === 'consumed' ? '2px solid var(--color-primary)' : '1px solid var(--color-line)',
+                background: historySubTab === 'consumed' ? 'var(--color-tint)' : 'var(--color-surface)',
+                color: historySubTab === 'consumed' ? 'var(--color-primary)' : 'var(--color-muted)',
+                cursor: 'pointer',
+              }}
+            >
+              <TrendingDown size={16} />
+              Consumed / Usage History
+              <span style={{ marginLeft: 2, fontSize: 12, fontWeight: 700, background: historySubTab === 'consumed' ? 'var(--color-primary)' : 'var(--color-line)', color: historySubTab === 'consumed' ? '#fff' : 'var(--color-muted)', borderRadius: 999, padding: '2px 9px' }}>
+                {consumedHistory.length} records
+              </span>
+            </button>
+          </div>
+
+          {/* Sub-tab active-count badge in the filter bar (dynamic) */}
+          <div style={{ fontSize: 12, color: 'var(--color-muted)', marginBottom: 10 }}>
+            {historySubTab === 'transfers' ? 'Transfers: ' : 'Consumed: '}
+            <strong style={{ color: 'var(--color-ink)' }}>{historySubTab === 'transfers' ? transferHistory.length : consumedHistory.length} records</strong>
+            {historyProductFilter && (
+              <>
+                {' '}— Showing: <strong style={{ color: 'var(--color-primary)' }}>{historyProductFilter.name || `Product #${historyProductFilter.id}`}</strong>
+              </>
+            )}
+          </div>
+
+          <div className="table-container">
+            <table className="rpt-table">
+              <thead>
                 <tr>
-                  <td colSpan={!misMode ? 7 : 6} className="text-center text-muted" style={{ padding: 40 }}>
-                    {loading ? 'Loading...' : 'No transaction history found'}
-                  </td>
+                  <th className="rpt-c-date">Date</th>
+                  <th className="rpt-c-service">Product</th>
+                  <th className="rpt-c-units">{historySubTab === 'consumed' ? 'Qty Consumed' : 'Qty'}</th>
+                  <th className="rpt-c-units">{historySubTab === 'consumed' ? 'Branch' : 'From Location'}</th>
+                  <th className="rpt-c-units">{historySubTab === 'consumed' ? 'Reference / Status' : 'To Location'}</th>
+                  {historySubTab === 'transfers' && <th className="rpt-c-service">Status</th>}
+                  {historySubTab === 'transfers' && !misMode && <th className="rpt-c-actions">Action</th>}
                 </tr>
-              )}
-              {filteredHistory.map((item) => {
-                const statusColor = item.status === 'Received' ? 'text-green-600' : item.status === 'Pending' ? 'text-amber-600' : 'text-gray-600';
-                const canReceive = !misMode && branchId && String(item.to_branch_id) === String(branchId) && item.status === 'Pending';
-                return (
-                  <tr key={item.id}>
-                    <td className="rpt-nowrap">
-                      <span className="rpt-date">
-                        {item.transferred_at ? new Date(item.transferred_at).toLocaleString('en-GB') : '-'}
-                      </span>
+              </thead>
+              <tbody>
+                {filteredHistory.length === 0 && (
+                  <tr>
+                    <td colSpan={historySubTab === 'transfers' ? (!misMode ? 7 : 6) : 5} className="text-center text-muted" style={{ padding: 40 }}>
+                      {loading ? 'Loading...' : historySubTab === 'transfers' ? 'No stock transfers found' : 'No consumed usage records found'}
                     </td>
-                    <td className="rpt-wrap font-medium">{item.product_name || `Product ${item.product_id || ''}`}</td>
-                    <td className="rpt-nowrap" style={{ textAlign: 'center' }}><span className="font-semibold">{item.quantity}</span></td>
-                    <td className="rpt-nowrap">{branchNameById(item.from_branch_id)}</td>
-                    <td className="rpt-nowrap">{branchNameById(item.to_branch_id)}</td>
-                    <td className="rpt-nowrap">
-                      <span className={`font-medium ${statusColor}`}>{item.status || '-'}</span>
-                    </td>
-                    {!misMode && (
-                      <td className="rpt-actions-cell">
-                        {canReceive ? (
-                          <button onClick={() => handleReceive(item)} disabled={loading} className="btn btn-primary" style={{ fontSize: 12, padding: '4px 10px' }}>
-                            Receive
-                          </button>
-                        ) : (
-                          <span className="text-xs text-muted" style={{ opacity: 0.5 }}>-</span>
+                  </tr>
+                )}
+                {filteredHistory.map((item) => {
+                  const t = (item.transaction_type || '').toLowerCase();
+                  const statusColor = item.status === 'Received' ? 'text-green-600' : item.status === 'Pending' ? 'text-amber-600' : 'text-gray-600';
+                  const canReceive = !misMode && branchId && String(item.to_branch_id) === String(branchId) && item.status === 'Pending';
+
+                  if (historySubTab === 'transfers') {
+                    return (
+                      <tr key={item.id}>
+                        <td className="rpt-nowrap">
+                          <span className="rpt-date">
+                            {item.transferred_at ? new Date(item.transferred_at).toLocaleString('en-GB') : '-'}
+                          </span>
+                        </td>
+                        <td className="rpt-wrap font-medium">{item.product_name || `Product ${item.product_id || ''}`}</td>
+                        <td className="rpt-nowrap" style={{ textAlign: 'center' }}><span className="font-semibold">{item.quantity}</span></td>
+                        <td className="rpt-nowrap">
+                          {item.fromLabel || (item.transaction_type === 'Inward' ? 'Stock Added' : item.transaction_type === 'Adjustment' ? 'Manual Correction' : branchNameById(item.from_branch_id))}
+                        </td>
+                        <td className="rpt-nowrap">
+                          {item.toLabel || (item.transaction_type === 'Outward' ? 'Consumed' : branchNameById(item.to_branch_id))}
+                        </td>
+                        <td className="rpt-nowrap">
+                          <span className={`font-medium ${statusColor}`}>{item.status || '-'}</span>
+                        </td>
+                        {!misMode && (
+                          <td className="rpt-actions-cell">
+                            {canReceive ? (
+                              <button onClick={() => handleReceive(item)} disabled={loading} className="btn btn-primary" style={{ fontSize: 12, padding: '4px 10px' }}>
+                                Receive
+                              </button>
+                            ) : (
+                              <span className="text-xs text-muted" style={{ opacity: 0.5 }}>-</span>
+                            )}
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  }
+
+                  // Consumed / Usage tab
+                  return (
+                    <tr key={item.id}>
+                      <td className="rpt-nowrap">
+                        <span className="rpt-date">
+                          {item.transferred_at ? new Date(item.transferred_at).toLocaleString('en-GB') : '-'}
+                        </span>
+                      </td>
+                      <td className="rpt-wrap font-medium">{item.product_name || `Product ${item.product_id || ''}`}</td>
+                      <td className="rpt-nowrap" style={{ textAlign: 'center' }}>
+                        <span className="font-semibold text-red-600">-{Math.abs(Number(item.quantity) || 0)}</span>
+                      </td>
+                      <td className="rpt-nowrap">
+                        {item.toLabel === 'Consumed' ? (item.fromLabel || branchNameById(item.branch_id)) : branchNameById(item.branch_id)}
+                      </td>
+                      <td className="rpt-nowrap">
+                        <span className={`font-medium ${statusColor}`}>
+                          {item.toLabel === 'Consumed' ? 'Consumed' : (item.status || 'Completed')}
+                        </span>
+                        {item.remarks && (
+                          <div style={{ fontSize: 11, color: 'var(--color-muted)', marginTop: 2 }}>
+                            {item.remarks}
+                          </div>
                         )}
                       </td>
-                    )}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       {/* Adjust Stock Modal - MIS Only */}

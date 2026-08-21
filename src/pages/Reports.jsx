@@ -131,6 +131,7 @@ const Reports = () => {
   const processReportData = useCallback((rows, viewMode) => {
     if (!rows || !rows.length) return { processed: [], maxS: 1, maxC: 1 };
 
+    // ============ SERVICE WISE DETAILED (original) ============
     if (viewMode === 'service-wise') {
       let maxC = 1;
       const processed = rows.map((r) => {
@@ -142,6 +143,43 @@ const Reports = () => {
         };
       });
       return { processed, maxS: 1, maxC };
+    }
+
+    // ============ SERVICE WISE SUMMARY / MACHINERY WISE SUMMARY ============
+    if (viewMode === 'service-wise-summary' || viewMode === 'machinery-wise') {
+      const byService = viewMode === 'service-wise-summary';
+      const summaryMap = new Map();
+
+      rows.forEach((row) => {
+        const rawKey = byService ? row.service_name : row.machine_name;
+        const key = String(rawKey || '').trim() || '-';
+        if (!summaryMap.has(key)) {
+          summaryMap.set(key, { name: key, serviceCount: 0, totalCost: 0 });
+        }
+        const item = summaryMap.get(key);
+        item.serviceCount += 1;
+        item.totalCost += Number(row.totalCost || 0);
+      });
+
+      const processed = Array.from(summaryMap.values())
+        .map((item, idx) =>
+          byService
+            ? {
+                id: `svc-summary-${idx}`,
+                serviceName: item.name,
+                serviceCount: item.serviceCount,
+                totalCost: item.totalCost,
+              }
+            : {
+                id: `mach-summary-${idx}`,
+                machineName: item.name,
+                serviceCount: item.serviceCount,
+                totalCost: item.totalCost,
+              }
+        )
+        .sort((a, b) => (a.serviceName || a.machineName || '').localeCompare(b.serviceName || b.machineName || ''));
+
+      return { processed, maxS: 1, maxC: 1 };
     }
 
     // Bill-wise grouping
@@ -297,7 +335,6 @@ const Reports = () => {
       }
 
       // 2b. Hydrate Doctor and Staff names via billing_log
-      // billable_report.billing_log_id -> billing_log(doctor_id, staff_id) -> master_doctors / master_staff
       const billingLogIds = [...new Set(data.map((r) => r.billing_log_id).filter(Boolean))];
       let billingInfoMap = {};
       if (billingLogIds.length) {
@@ -322,7 +359,6 @@ const Reports = () => {
           if (stf) stf.forEach((s) => (staffNameLookup[s.id] = s.staff_name));
         }
 
-        // Map billing_log_id -> { doctor_name, staff_name }
         (logs || []).forEach((l) => {
           billingInfoMap[l.id] = {
             doctor_name: l.doctor_id ? (doctorNameLookup[l.doctor_id] || 'Unknown') : '-',
@@ -331,10 +367,7 @@ const Reports = () => {
         });
       }
 
-      // 3. Extract all consumable IDs from consumable_1_id ... consumable_14_id
-      //    Billable items: consumable_X_id  -> master_billable_consumables
-      //    Non-billable items: non_billable_registry_id_X -> non_billable_consumable_registry -> master_non_billable_consumables
-      //    (consumable_X_id is NULL for non-billable, so the registry ID must be used instead)
+      // 3. Extract all consumable IDs
       const billableConsumableIds = new Set();
       const nonBillableRegistryIds = new Set();
 
@@ -345,12 +378,10 @@ const Reports = () => {
           const regId = row[`non_billable_registry_id_${i}`];
 
           if (isNB) {
-            // Non-billable: resolve product name via the registry row
             if (regId) {
               nonBillableRegistryIds.add(regId);
             }
           } else if (cId) {
-            // Billable: resolve product name via master_billable_consumables
             billableConsumableIds.add(cId);
           }
         }
@@ -371,7 +402,6 @@ const Reports = () => {
       }
 
       // Fetch Non-Billable Master Products via the registry table
-      // (registry_id -> product_id -> master_non_billable_consumables)
       let nonBillableProducts = {};
       if (nonBillableRegistryIds.size > 0) {
         const { data: regRows } = await supabase
@@ -400,20 +430,14 @@ const Reports = () => {
           const regId = row[`non_billable_registry_id_${i}`];
 
           if (isNB) {
-            // Non-billable consumables do not track quantity.
-            // Always display the consumable name (resolved via the registry row)
-            // and set Units = 0 and Cost = 0 instead of showing blank or "-".
             const product = nonBillableProducts[regId] || { name: `Non-Billable Item #${regId || i}`, cost: 0 };
-
             consumables.push({
               slot: i,
               name: product.name,
               units: 0,
               cost: 0,
             });
-            // Non-billable items: Units = 0, Cost = 0, no contribution to totals
           } else if (cId) {
-            // Billable consumables: resolve via master_billable_consumables
             const product = billableProducts[cId] || { name: `Billable Item #${cId}`, cost: 0 };
             const units = Number(row[`consumable_${i}_units`] || 0);
 
@@ -506,13 +530,36 @@ const Reports = () => {
     let headers, rows;
     if (reportType === 'non-billable') {
       if (nbReportMode === 'summary') {
-        headers = ['NON-BILLABLE CONSUMABLE', 'QUANTITY USED', 'TOTAL COST'];
-        rows = nbData.map((r) => [r['NON-BILLABLE CONSUMABLE'] || '-', r['QUANTITY USED'] || 0, r['TOTAL COST'] || 0]);
+        headers = [
+          'NON-BILLABLE CONSUMABLE',
+          'COMPLETED QTY',
+          'INCOMPLETE QTY',
+          'TOTAL REGISTRY COUNT',
+          'SERVICE USAGE COUNT',
+          'OPENING STOCK',
+          'RECEIVED',
+          'USED',
+          'CLOSING STOCK',
+          'TOTAL COST',
+        ];
+        rows = nbData.map((r) => [
+          r['NON-BILLABLE CONSUMABLE'] || '-',
+          r['COMPLETED QTY'] || 0,
+          r['INCOMPLETE QTY'] || 0,
+          r['TOTAL REGISTRY COUNT'] || 0,
+          r['SERVICE USAGE COUNT'] || 0,
+          r['OPENING STOCK'] || 0,
+          r['RECEIVED'] || 0,
+          r['USED'] || 0,
+          r['CLOSING STOCK'] || 0,
+          r['TOTAL COST'] || 0,
+        ]);
       } else {
         headers = [
           'DATE',
           'BRANCH',
           'NON-BILLABLE CONSUMABLE',
+          'BATCH',
           'OPENING DATE',
           'CLOSING DATE',
           'SERVICE USED BY',
@@ -523,6 +570,7 @@ const Reports = () => {
           r.date || '-',
           r.branch || '-',
           r.consumableName || '-',
+          r.batchId || '-',
           r.openingDate || '-',
           r.closingDate || '-',
           r.serviceUsedBy || '-',
@@ -530,6 +578,17 @@ const Reports = () => {
           r.status || '-',
         ]);
       }
+    } else if (billableReportView === 'service-wise-summary' || billableReportView === 'machinery-wise') {
+      if (reportData.length === 0) return;
+      const isSvcWise = billableReportView === 'service-wise-summary';
+      headers = isSvcWise
+        ? ['SERVICE NAME', 'SERVICE COUNT', 'TOTAL CONSUMABLE COST']
+        : ['MACHINERY NAME', 'SERVICE COUNT', 'TOTAL CONSUMABLE COST'];
+      rows = reportData.map((r) => [
+        isSvcWise ? r.serviceName || '-' : r.machineName || '-',
+        r.serviceCount || 0,
+        Number(r.totalCost || 0).toFixed(2),
+      ]);
     } else {
       if (reportData.length === 0) return;
 
@@ -586,7 +645,14 @@ const Reports = () => {
       if (nbReportMode === 'summary') {
         rows = nbData.map((r) => ({
           'NON-BILLABLE CONSUMABLE': r['NON-BILLABLE CONSUMABLE'] || '-',
-          'QUANTITY USED': r['QUANTITY USED'] || 0,
+          'COMPLETED QTY': r['COMPLETED QTY'] || 0,
+          'INCOMPLETE QTY': r['INCOMPLETE QTY'] || 0,
+          'TOTAL REGISTRY COUNT': r['TOTAL REGISTRY COUNT'] || 0,
+          'SERVICE USAGE COUNT': r['SERVICE USAGE COUNT'] || 0,
+          'OPENING STOCK': r['OPENING STOCK'] || 0,
+          'RECEIVED': r['RECEIVED'] || 0,
+          'USED': r['USED'] || 0,
+          'CLOSING STOCK': r['CLOSING STOCK'] || 0,
           'TOTAL COST': r['TOTAL COST'] || 0,
         }));
       } else {
@@ -594,6 +660,7 @@ const Reports = () => {
           DATE: r.date || '-',
           BRANCH: r.branch || '-',
           'NON-BILLABLE CONSUMABLE': r.consumableName || '-',
+          BATCH: r.batchId || '-',
           'OPENING DATE': r.openingDate || '-',
           'CLOSING DATE': r.closingDate || '-',
           'SERVICE USED BY': r.serviceUsedBy || '-',
@@ -601,6 +668,14 @@ const Reports = () => {
           STATUS: r.status || '-',
         }));
       }
+    } else if (billableReportView === 'service-wise-summary' || billableReportView === 'machinery-wise') {
+      if (reportData.length === 0) return;
+      const isSvcWise = billableReportView === 'service-wise-summary';
+      rows = reportData.map((r) => ({
+        [isSvcWise ? 'SERVICE NAME' : 'MACHINERY NAME']: isSvcWise ? r.serviceName || '-' : r.machineName || '-',
+        'SERVICE COUNT': r.serviceCount || 0,
+        'TOTAL CONSUMABLE COST': Number(r.totalCost || 0).toFixed(2),
+      }));
     } else {
       if (reportData.length === 0) return;
 
@@ -684,7 +759,7 @@ const Reports = () => {
         <p className="text-sm mt-2" style={{ color: '#6B7280' }}>Generate, analyze, and export consumable usage reports</p>
       </div>
 
-      {/* Tab Navigation — 20px gap after subtitle, 24px gap before content */}
+      {/* Tab Navigation */}
       <div style={{ borderBottom: '1px solid #E5E7EB', marginBottom: '24px' }}>
         <div style={{ display: 'flex', gap: '0', marginBottom: '-1px' }}>
           <button
@@ -740,9 +815,8 @@ const Reports = () => {
       {/* ================= BILLABLE VIEW ================= */}
       {reportType === 'billable' ? (
         <>
-          {/* Main Filter Card — 20px margin-top */}
+          {/* Main Filter Card */}
           <div style={{ background: '#FFFFFF', border: '1px solid #E5E7EB', borderRadius: '12px', padding: '24px', width: '100%' }}>
-            {/* Card Header: Flexbox — title left, toggle right */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
               <h2 style={{ fontSize: '14px', fontWeight: 700, color: '#1F2937', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Billable Report</h2>
               <div style={{ display: 'inline-flex', padding: '4px', backgroundColor: '#F3F4F6', borderRadius: '8px' }}>
@@ -776,14 +850,45 @@ const Reports = () => {
                     color: billableReportView === 'service-wise' ? '#FFFFFF' : '#4B5563',
                   }}
                 >
-                  Service Wise
+                  Service Wise Detailed
+                </button>
+                <button
+                  onClick={() => setBillableReportView('service-wise-summary')}
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '12px',
+                    fontWeight: billableReportView === 'service-wise-summary' ? 600 : 500,
+                    borderRadius: '6px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                    background: billableReportView === 'service-wise-summary' ? '#7C5CFC' : 'transparent',
+                    color: billableReportView === 'service-wise-summary' ? '#FFFFFF' : '#4B5563',
+                  }}
+                >
+                  Service Wise Summary
+                </button>
+                <button
+                  onClick={() => setBillableReportView('machinery-wise')}
+                  style={{
+                    padding: '4px 12px',
+                    fontSize: '12px',
+                    fontWeight: billableReportView === 'machinery-wise' ? 600 : 500,
+                    borderRadius: '6px',
+                    border: 'none',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                    background: billableReportView === 'machinery-wise' ? '#7C5CFC' : 'transparent',
+                    color: billableReportView === 'machinery-wise' ? '#FFFFFF' : '#4B5563',
+                  }}
+                >
+                  Machinery Wise
                 </button>
               </div>
             </div>
 
-            {/* Filters: CSS Grid — 5 equal columns + auto for button */}
+            {/* Filters */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr 1fr auto', gap: '16px', alignItems: 'end' }}>
-              {/* Start Date */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Start Date</label>
                 <input
@@ -791,11 +896,8 @@ const Reports = () => {
                   value={dateRange.start}
                   onChange={(e) => setDateRange((prev) => ({ ...prev, start: e.target.value }))}
                   style={{ width: '100%', height: '42px', padding: '0 12px', fontSize: '14px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#1F2937', outline: 'none', boxSizing: 'border-box' }}
-                  onFocus={(e) => { e.target.style.borderColor = '#7C5CFC'; e.target.style.boxShadow = '0 0 0 2px rgba(124,92,252,0.15)'; }}
-                  onBlur={(e) => { e.target.style.borderColor = '#D1D5DB'; e.target.style.boxShadow = 'none'; }}
                 />
               </div>
-              {/* End Date */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>End Date</label>
                 <input
@@ -803,11 +905,8 @@ const Reports = () => {
                   value={dateRange.end}
                   onChange={(e) => setDateRange((prev) => ({ ...prev, end: e.target.value }))}
                   style={{ width: '100%', height: '42px', padding: '0 12px', fontSize: '14px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#1F2937', outline: 'none', boxSizing: 'border-box' }}
-                  onFocus={(e) => { e.target.style.borderColor = '#7C5CFC'; e.target.style.boxShadow = '0 0 0 2px rgba(124,92,252,0.15)'; }}
-                  onBlur={(e) => { e.target.style.borderColor = '#D1D5DB'; e.target.style.boxShadow = 'none'; }}
                 />
               </div>
-              {/* Branch */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Branch</label>
                 <SearchableDropdown
@@ -820,7 +919,6 @@ const Reports = () => {
                   disabled={loading}
                 />
               </div>
-              {/* Service */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Service</label>
                 <SearchableDropdown
@@ -837,7 +935,6 @@ const Reports = () => {
                   disabled={loading}
                 />
               </div>
-              {/* Machinery */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Machinery</label>
                 <SearchableDropdown
@@ -850,21 +947,20 @@ const Reports = () => {
                   disabled={loading}
                 />
               </div>
-              {/* Generate Report Button — fixed 160px width */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <div style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px', visibility: 'hidden' }}>Action</div>
-                <button onClick={generateBillableReport} disabled={loading} style={{ width: '160px', height: '42px', padding: '0 16px', background: '#7C5CFC', color: '#FFFFFF', fontSize: '13px', fontWeight: 600, border: 'none', borderRadius: '8px', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.5 : 1, whiteSpace: 'nowrap', transition: 'background 0.15s ease' }} onMouseEnter={(e) => { if (!loading) e.target.style.background = '#6D28D9'; }} onMouseLeave={(e) => { if (!loading) e.target.style.background = '#7C5CFC'; }}>
+                <button onClick={generateBillableReport} disabled={loading} style={{ width: '160px', height: '42px', padding: '0 16px', background: '#7C5CFC', color: '#FFFFFF', fontSize: '13px', fontWeight: 600, border: 'none', borderRadius: '8px', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.5 : 1, whiteSpace: 'nowrap' }}>
                   {loading ? 'Generating...' : 'Generate Report'}
                 </button>
               </div>
             </div>
 
-            {/* Action Links — 16px gap from filters */}
+            {/* Action Links */}
             <div style={{ display: 'flex', gap: '16px', marginTop: '18px' }}>
-              <button onClick={downloadCSV} disabled={!reportData.length} style={{ padding: '7px 16px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#374151', fontSize: '13px', fontWeight: 500, cursor: !reportData.length ? 'not-allowed' : 'pointer', opacity: !reportData.length ? 0.4 : 1, transition: 'background 0.15s ease' }} onMouseEnter={(e) => { if (reportData.length) e.target.style.background = '#F9FAFB'; }} onMouseLeave={(e) => { if (reportData.length) e.target.style.background = '#FFFFFF'; }}>
+              <button onClick={downloadCSV} disabled={!reportData.length} style={{ padding: '7px 16px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#374151', fontSize: '13px', fontWeight: 500, cursor: !reportData.length ? 'not-allowed' : 'pointer', opacity: !reportData.length ? 0.4 : 1 }}>
                 Export CSV
               </button>
-              <button onClick={downloadExcel} disabled={!reportData.length} style={{ padding: '7px 16px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#374151', fontSize: '13px', fontWeight: 500, cursor: !reportData.length ? 'not-allowed' : 'pointer', opacity: !reportData.length ? 0.4 : 1, transition: 'background 0.15s ease' }} onMouseEnter={(e) => { if (reportData.length) e.target.style.background = '#F9FAFB'; }} onMouseLeave={(e) => { if (reportData.length) e.target.style.background = '#FFFFFF'; }}>
+              <button onClick={downloadExcel} disabled={!reportData.length} style={{ padding: '7px 16px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#374151', fontSize: '13px', fontWeight: 500, cursor: !reportData.length ? 'not-allowed' : 'pointer', opacity: !reportData.length ? 0.4 : 1 }}>
                 Export Excel
               </button>
               {(filterBranch || filterService || filterMachinery) && (
@@ -879,10 +975,24 @@ const Reports = () => {
           {hasReport && (
             <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden" style={{ marginTop: '16px' }}>
               <div className="overflow-x-auto w-full">
-                <table className="w-full text-left border-collapse" style={{ minWidth: 1200 }}>
+                <table className="w-full text-left border-collapse" style={{ minWidth: billableReportView === 'bill-wise' || billableReportView === 'service-wise' ? 1200 : 800 }}>
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-200">
                       {(() => {
+                        if (billableReportView === 'service-wise-summary') {
+                          return [
+                            { label: 'SERVICE NAME', align: 'left', minW: '240px' },
+                            { label: 'SERVICE COUNT', align: 'center', minW: '140px' },
+                            { label: 'TOTAL CONSUMABLE COST', align: 'right', minW: '200px' },
+                          ];
+                        }
+                        if (billableReportView === 'machinery-wise') {
+                          return [
+                            { label: 'MACHINERY NAME', align: 'left', minW: '240px' },
+                            { label: 'SERVICE COUNT', align: 'center', minW: '140px' },
+                            { label: 'TOTAL CONSUMABLE COST', align: 'right', minW: '200px' },
+                          ];
+                        }
                         const headers = [
                           { label: 'BILL NO / ID', align: 'left', minW: '110px' },
                           { label: 'PATIENT NAME', align: 'left', minW: '160px' },
@@ -913,63 +1023,71 @@ const Reports = () => {
                   <tbody className="divide-y divide-gray-100">
                     {reportData.length === 0 ? (
                       <tr>
-                        <td colSpan={7 + maxServices + 1 + maxConsumables * 3 + 2} className="px-4 py-10 text-center text-sm text-gray-400">
+                        <td colSpan={billableReportView === 'bill-wise' || billableReportView === 'service-wise' ? 7 + maxServices + 1 + maxConsumables * 3 + 2 : 3} className="px-4 py-10 text-center text-sm text-gray-400">
                           No billable records found for the selected criteria.
                         </td>
                       </tr>
+                    ) : billableReportView === 'service-wise-summary' ? (
+                      reportData.map((row) => (
+                        <tr key={row.id} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-4 py-3 text-sm font-semibold text-gray-900 whitespace-nowrap">{row.serviceName || '-'}</td>
+                          <td className="px-4 py-3 text-sm font-semibold text-gray-900 text-center whitespace-nowrap">{row.serviceCount || 0}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row.totalCost ? `$${Number(row.totalCost).toFixed(2)}` : '$0.00'}</td>
+                        </tr>
+                      ))
+                    ) : billableReportView === 'machinery-wise' ? (
+                      reportData.map((row) => (
+                        <tr key={row.id} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-4 py-3 text-sm font-semibold text-gray-900 whitespace-nowrap">{row.machineName || '-'}</td>
+                          <td className="px-4 py-3 text-sm font-semibold text-gray-900 text-center whitespace-nowrap">{row.serviceCount || 0}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row.totalCost ? `$${Number(row.totalCost).toFixed(2)}` : '$0.00'}</td>
+                        </tr>
+                      ))
                     ) : (
-                      reportData.map((row) => {
-                        const totalCols = 7 + maxServices + 1 + maxConsumables * 3 + 2;
-                        return (
-                          <tr key={row.id} className="hover:bg-gray-50 transition-colors">
-                            {(() => {
-                              const cells = [];
-                              cells.push(<td key="bill_no" className="px-4 py-3 text-sm font-semibold text-gray-900 whitespace-nowrap" style={{ minWidth: '110px' }}>{row.bill_no || row.bill_id || '-'}</td>);
-                              cells.push(<td key="patient" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '160px' }}>{row.patient_name || '-'}</td>);
-                              cells.push(<td key="uid" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '100px' }}>{row.uid || '-'}</td>);
-                              cells.push(<td key="date" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '120px' }}>{fmtDate(row.report_date)}</td>);
-                              cells.push(<td key="branch" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '130px' }}>{row.branch_name || '-'}</td>);
-                              cells.push(<td key="doctor" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '130px' }}>{row.doctor_name || '-'}</td>);
-                              cells.push(<td key="staff" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '130px' }}>{row.staff_name || '-'}</td>);
-                              
-                              for (let s = 0; s < maxServices; s++) {
-                                cells.push(<td key={`svc-${s}`} className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '180px', maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.servicesList && row.servicesList[s] ? row.servicesList[s] : '-'}</td>);
-                              }
-                              
-                              cells.push(<td key="machine" className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '180px', maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.machine_name || '-'}</td>);
-                              
-                              for (let i = 0; i < maxConsumables; i++) {
-                                const c = row.consumables ? row.consumables[i] : null;
-                                cells.push(<td key={`csm-${i}`} className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ minWidth: '180px', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c ? c.name : '-'}</td>);
-                                cells.push(<td key={`units-${i}`} className="px-4 py-3 text-sm text-gray-700 text-center whitespace-nowrap" style={{ minWidth: '80px' }}>{c ? c.units : 0}</td>);
-                                cells.push(<td key={`cost-${i}`} className="px-4 py-3 text-sm font-semibold text-gray-700 text-right whitespace-nowrap" style={{ minWidth: '100px' }}>{c && c.cost ? `$${c.cost.toFixed(2)}` : '$0.00'}</td>);
-                              }
-                              
-                              cells.push(<td key="totalUnits" className="px-4 py-3 text-sm font-semibold text-gray-700 text-right whitespace-nowrap" style={{ minWidth: '120px' }}>{row.totalUnits || 0}</td>);
-                              cells.push(<td key="totalCost" className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap" style={{ minWidth: '120px' }}>{row.totalCost ? `$${row.totalCost.toFixed(2)}` : '$0.00'}</td>);
-                              cells.push(<td key="actions" className="px-4 py-3 text-center whitespace-nowrap" style={{ minWidth: '80px' }}>
-                                <button onClick={() => deleteBill(row.id)} className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-gray-200 bg-white hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-all text-gray-400" title="Delete">
-                                  <Trash2 size={14} />
-                                </button>
-                              </td>);
-                              return cells;
-                            })()}
-                          </tr>
-                        );
-                      })
+                      reportData.map((row) => (
+                        <tr key={row.id} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-4 py-3 text-sm font-semibold text-gray-900 whitespace-nowrap">{row.bill_no || row.bill_id || '-'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{row.patient_name || '-'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{row.uid || '-'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{fmtDate(row.report_date)}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{row.branch_name || '-'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{row.doctor_name || '-'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{row.staff_name || '-'}</td>
+                          {Array.from({ length: maxServices }).map((_, s) => (
+                            <td key={`svc-${s}`} className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{row.servicesList && row.servicesList[s] ? row.servicesList[s] : '-'}</td>
+                          ))}
+                          <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{row.machine_name || '-'}</td>
+                          {Array.from({ length: maxConsumables }).map((_, i) => {
+                            const c = row.consumables ? row.consumables[i] : null;
+                            return (
+                              <React.Fragment key={`csm-${i}`}>
+                                <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{c ? c.name : '-'}</td>
+                                <td className="px-4 py-3 text-sm text-gray-700 text-center whitespace-nowrap">{c ? c.units : 0}</td>
+                                <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-right whitespace-nowrap">{c && c.cost ? `$${c.cost.toFixed(2)}` : '$0.00'}</td>
+                              </React.Fragment>
+                            );
+                          })}
+                          <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-right whitespace-nowrap">{row.totalUnits || 0}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row.totalCost ? `$${row.totalCost.toFixed(2)}` : '$0.00'}</td>
+                          <td className="px-4 py-3 text-center whitespace-nowrap">
+                            <button onClick={() => deleteBill(row.id)} className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-gray-200 bg-white hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-all text-gray-400" title="Delete">
+                              <Trash2 size={14} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))
                     )}
-                </tbody>
-              </table>
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        )}
-      </>
+          )}
+        </>
       ) : (
         /* ================= NON-BILLABLE VIEW ================= */
         <>
-          {/* Non-Billable Filter Card — matching billable card styling */}
+          {/* Non-Billable Filter Card */}
           <div style={{ background: '#FFFFFF', border: '1px solid #E5E7EB', borderRadius: '12px', padding: '24px', width: '100%' }}>
-            {/* Card Header: Flexbox — title left, toggle right */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
               <h2 style={{ fontSize: '14px', fontWeight: 700, color: '#1F2937', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Non-Billable Reports</h2>
               <div style={{ display: 'inline-flex', padding: '4px', backgroundColor: '#F3F4F6', borderRadius: '8px' }}>
@@ -1008,9 +1126,8 @@ const Reports = () => {
               </div>
             </div>
 
-            {/* Filters: 4-column grid — Start Date, End Date, Branch, Generate */}
+            {/* Filters */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 160px', gap: '16px', alignItems: 'end' }}>
-              {/* Start Date */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Start Date</label>
                 <input
@@ -1018,11 +1135,8 @@ const Reports = () => {
                   value={nbStart}
                   onChange={(e) => { setNbStart(e.target.value); setNbHasReport(false); }}
                   style={{ width: '100%', height: '42px', padding: '0 12px', fontSize: '14px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#1F2937', outline: 'none', boxSizing: 'border-box' }}
-                  onFocus={(e) => { e.target.style.borderColor = '#7C5CFC'; e.target.style.boxShadow = '0 0 0 2px rgba(124,92,252,0.15)'; }}
-                  onBlur={(e) => { e.target.style.borderColor = '#D1D5DB'; e.target.style.boxShadow = 'none'; }}
                 />
               </div>
-              {/* End Date */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>End Date</label>
                 <input
@@ -1030,11 +1144,8 @@ const Reports = () => {
                   value={nbEnd}
                   onChange={(e) => { setNbEnd(e.target.value); setNbHasReport(false); }}
                   style={{ width: '100%', height: '42px', padding: '0 12px', fontSize: '14px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#1F2937', outline: 'none', boxSizing: 'border-box' }}
-                  onFocus={(e) => { e.target.style.borderColor = '#7C5CFC'; e.target.style.boxShadow = '0 0 0 2px rgba(124,92,252,0.15)'; }}
-                  onBlur={(e) => { e.target.style.borderColor = '#D1D5DB'; e.target.style.boxShadow = 'none'; }}
                 />
               </div>
-              {/* Branch */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Branch</label>
                 <SearchableDropdown
@@ -1047,10 +1158,9 @@ const Reports = () => {
                   disabled={nbLoading}
                 />
               </div>
-              {/* Generate Report Button — same position as billable */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 <div style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px', visibility: 'hidden' }}>Action</div>
-                <button onClick={reloadNonBillable} disabled={nbLoading} style={{ width: '160px', height: '42px', padding: '0 16px', background: '#7C5CFC', color: '#FFFFFF', fontSize: '13px', fontWeight: 600, border: 'none', borderRadius: '8px', cursor: nbLoading ? 'not-allowed' : 'pointer', opacity: nbLoading ? 0.5 : 1, whiteSpace: 'nowrap', transition: 'background 0.15s ease' }} onMouseEnter={(e) => { if (!nbLoading) e.target.style.background = '#6D28D9'; }} onMouseLeave={(e) => { if (!nbLoading) e.target.style.background = '#7C5CFC'; }}>
+                <button onClick={reloadNonBillable} disabled={nbLoading} style={{ width: '160px', height: '42px', padding: '0 16px', background: '#7C5CFC', color: '#FFFFFF', fontSize: '13px', fontWeight: 600, border: 'none', borderRadius: '8px', cursor: nbLoading ? 'not-allowed' : 'pointer', opacity: nbLoading ? 0.5 : 1, whiteSpace: 'nowrap' }}>
                   {nbLoading ? 'Loading...' : 'Generate Report'}
                 </button>
               </div>
@@ -1058,10 +1168,10 @@ const Reports = () => {
 
             {/* Action Links */}
             <div style={{ display: 'flex', gap: '16px', marginTop: '18px' }}>
-              <button onClick={downloadCSV} disabled={!nbData.length} style={{ padding: '7px 16px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#374151', fontSize: '13px', fontWeight: 500, cursor: !nbData.length ? 'not-allowed' : 'pointer', opacity: !nbData.length ? 0.4 : 1, transition: 'background 0.15s ease' }} onMouseEnter={(e) => { if (nbData.length) e.target.style.background = '#F9FAFB'; }} onMouseLeave={(e) => { if (nbData.length) e.target.style.background = '#FFFFFF'; }}>
+              <button onClick={downloadCSV} disabled={!nbData.length} style={{ padding: '7px 16px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#374151', fontSize: '13px', fontWeight: 500, cursor: !nbData.length ? 'not-allowed' : 'pointer', opacity: !nbData.length ? 0.4 : 1 }}>
                 Export CSV
               </button>
-              <button onClick={downloadExcel} disabled={!nbData.length} style={{ padding: '7px 16px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#374151', fontSize: '13px', fontWeight: 500, cursor: !nbData.length ? 'not-allowed' : 'pointer', opacity: !nbData.length ? 0.4 : 1, transition: 'background 0.15s ease' }} onMouseEnter={(e) => { if (nbData.length) e.target.style.background = '#F9FAFB'; }} onMouseLeave={(e) => { if (nbData.length) e.target.style.background = '#FFFFFF'; }}>
+              <button onClick={downloadExcel} disabled={!nbData.length} style={{ padding: '7px 16px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#374151', fontSize: '13px', fontWeight: 500, cursor: !nbData.length ? 'not-allowed' : 'pointer', opacity: !nbData.length ? 0.4 : 1 }}>
                 Export Excel
               </button>
               {nbBranch && (
@@ -1072,17 +1182,24 @@ const Reports = () => {
             </div>
           </div>
 
-          {/* Table Output — only shown when there is actual data */}
+          {/* Table Output */}
           {nbHasReport && nbData.length > 0 && (
             <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden" style={{ marginTop: '16px' }}>
               <div className="overflow-x-auto w-full">
-                <table className="w-full text-left border-collapse" style={{ minWidth: nbReportMode === 'summary' ? 500 : 1000 }}>
+                <table className="w-full text-left border-collapse" style={{ minWidth: nbReportMode === 'summary' ? 1200 : 1000 }}>
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-200">
                       {nbReportMode === 'summary' ? (
                         <>
                           <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Non-Billable Consumable</th>
-                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Quantity Used</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Completed Qty</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Incomplete Qty</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Total Registry Count</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Service Usage Count</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Opening Stock</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Received</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Used</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Closing Stock</th>
                           <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-right">Total Cost</th>
                         </>
                       ) : (
@@ -1090,6 +1207,7 @@ const Reports = () => {
                           <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ minWidth: 110 }}>Date</th>
                           <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ minWidth: 130 }}>Branch</th>
                           <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ minWidth: 200 }}>Consumable</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ minWidth: 130 }}>Batch</th>
                           <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ minWidth: 130 }}>Opening Date</th>
                           <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ minWidth: 130 }}>Closing Date</th>
                           <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap" style={{ minWidth: 180 }}>Service Used By</th>
@@ -1102,7 +1220,7 @@ const Reports = () => {
                   <tbody className="divide-y divide-gray-100">
                     {nbData.length === 0 ? (
                       <tr>
-                        <td colSpan={nbReportMode === 'summary' ? 3 : 8} className="px-4 py-10 text-center text-sm text-gray-400">
+                        <td colSpan={nbReportMode === 'summary' ? 10 : 9} className="px-4 py-10 text-center text-sm text-gray-400">
                           No matching records found. Try changing the selected filters.
                         </td>
                       </tr>
@@ -1111,7 +1229,14 @@ const Reports = () => {
                         nbReportMode === 'summary' ? (
                           <tr key={i} className="hover:bg-gray-50 transition-colors">
                             <td className="px-4 py-3 text-sm text-gray-700">{row['NON-BILLABLE CONSUMABLE'] || '-'}</td>
-                            <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['QUANTITY USED'] || 0}</td>
+                            <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['COMPLETED QTY'] || 0}</td>
+                            <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['INCOMPLETE QTY'] || 0}</td>
+                            <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['TOTAL REGISTRY COUNT'] || 0}</td>
+                            <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['SERVICE USAGE COUNT'] || 0}</td>
+                            <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['OPENING STOCK'] || 0}</td>
+                            <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['RECEIVED'] || 0}</td>
+                            <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['USED'] || 0}</td>
+                            <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['CLOSING STOCK'] || 0}</td>
                             <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row['TOTAL COST'] ? `$${row['TOTAL COST']}` : '$0.00'}</td>
                           </tr>
                         ) : (
@@ -1119,6 +1244,7 @@ const Reports = () => {
                             <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{fmtDate(row.date)}</td>
                             <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{row.branch || '-'}</td>
                             <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.consumableName || '-'}</td>
+                            <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{row.batchId || '-'}</td>
                             <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{fmtDate(row.openingDate)}</td>
                             <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{fmtDate(row.closingDate)}</td>
                             <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.serviceUsedBy || '-'}</td>
@@ -1128,14 +1254,14 @@ const Reports = () => {
                         )
                       )
                     )}
-                </tbody>
-              </table>
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        )}
-      </>
-    )}
-  </div>
+          )}
+        </>
+      )}
+    </div>
   );
 };
 

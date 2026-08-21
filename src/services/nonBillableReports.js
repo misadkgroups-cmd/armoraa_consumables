@@ -4,8 +4,7 @@ import { withRetry } from '../utils/supabaseRetry';
 /**
  * Detailed Report: one row per non-billable usage, enriched with the registry's
  * product name, opening/closing dates and a dynamically counted "times used" total.
- * Queries from billable_report with normalized billable_report_consumables child table.
- * Falls back to legacy 14-slot format if child table doesn't exist.
+ * Shows BOTH completed and incomplete records.
  */
 export async function getDetailedNonBillableReport(filters = {}) {
   const registryUseCounter = {};
@@ -143,13 +142,13 @@ export async function getDetailedNonBillableReport(filters = {}) {
 }
 
 /**
- * Summary Report: aggregated consumption counts grouped by Consumable Name,
- * multiplied by the unit price to produce total operational cost.
- * Queries from billable_report with normalized billable_report_consumables child table.
- * Falls back to legacy 14-slot format if child table doesn't exist.
+ * Summary Report: aggregated consumption counts grouped by Consumable Name.
+ * Shows Completed Qty, Incomplete Qty, Total Registry Count, Service Usage Count,
+ * Opening Stock, Received, Used, and Closing Stock.
  */
 export async function getSummaryNonBillableReport(filters = {}) {
   const usageByProduct = {}; // productId -> count
+  const registryStatusByProduct = {}; // productId -> { completed: 0, incomplete: 0, total: 0 }
 
   try {
     // Try normalized table first
@@ -218,12 +217,12 @@ export async function getSummaryNonBillableReport(filters = {}) {
     }
   }
 
-  // Fetch registry details with product names and costs
+  // Fetch registry details with product names, costs, and status
   const registryIds = Object.keys(usageByProduct).map(Number);
   const { data: registry } = await withRetry(() =>
     supabase
       .from('non_billable_consumable_registry')
-      .select('id, product_id, master_non_billable_consumables ( product_name, cost )')
+      .select('id, product_id, status, opening_date, closing_date, master_non_billable_consumables ( product_name, cost )')
       .in('id', registryIds.length > 0 ? registryIds : [])
   );
 
@@ -233,6 +232,7 @@ export async function getSummaryNonBillableReport(filters = {}) {
       productId: reg.product_id,
       name: reg.master_non_billable_consumables?.product_name || 'Unknown',
       cost: Number(reg.master_non_billable_consumables?.cost) || 0,
+      status: reg.status || 'active',
     };
   });
 
@@ -252,29 +252,113 @@ export async function getSummaryNonBillableReport(filters = {}) {
     productMap[p.id] = p;
   });
 
+  // Fetch ALL registry records for the branch (not just used ones) to count
+  // completed/incomplete statuses and compute opening/closing stock
+  let registryQuery = supabase
+    .from('non_billable_consumable_registry')
+    .select('id, product_id, status, opening_date, closing_date, batch_id');
+
+  if (filters.branchId) registryQuery = registryQuery.eq('branch_id', filters.branchId);
+  if (filters.startDate) registryQuery = registryQuery.gte('opening_date', filters.startDate);
+  if (filters.endDate) registryQuery = registryQuery.lte('opening_date', filters.endDate);
+
+  const { data: allRegistry } = await withRetry(() => registryQuery);
+
+  // Count completed/incomplete per product
+  (allRegistry || []).forEach((reg) => {
+    const pid = reg.product_id;
+    if (!registryStatusByProduct[pid]) {
+      registryStatusByProduct[pid] = { completed: 0, incomplete: 0, total: 0 };
+    }
+    registryStatusByProduct[pid].total++;
+    if (reg.status === 'completed') {
+      registryStatusByProduct[pid].completed++;
+    } else {
+      registryStatusByProduct[pid].incomplete++;
+    }
+  });
+
+  // Fetch current stock levels for non-billable products
+  let stockQuery = supabase
+    .from('non_billable_stock')
+    .select('consumable_id, available_stock');
+
+  if (filters.branchId) stockQuery = stockQuery.eq('branch_id', filters.branchId);
+
+  const { data: stockData } = await withRetry(() => stockQuery);
+  const stockMap = {};
+  (stockData || []).forEach((s) => {
+    stockMap[s.consumable_id] = Number(s.available_stock) || 0;
+  });
+
   // Aggregate by product name
   const summaryGroup = {};
   Object.entries(usageByProduct).forEach(([registryId, count]) => {
     const regInfo = registryMap[registryId];
     if (regInfo) {
       const productName = regInfo.name;
+      const pid = regInfo.productId;
       if (!summaryGroup[productName]) {
         summaryGroup[productName] = {
           'NON-BILLABLE CONSUMABLE': productName,
-          'QUANTITY USED': 0,
+          'COMPLETED QTY': 0,
+          'INCOMPLETE QTY': 0,
+          'TOTAL REGISTRY COUNT': 0,
+          'SERVICE USAGE COUNT': 0,
+          'OPENING STOCK': 0,
+          'RECEIVED': 0,
+          'USED': 0,
+          'CLOSING STOCK': 0,
           _unitCost: regInfo.cost,
+          _productId: pid,
         };
       }
-      summaryGroup[productName]['QUANTITY USED'] += count;
+      summaryGroup[productName]['SERVICE USAGE COUNT'] += count;
     }
   });
 
-  // Process data map back into clean array rows with computed arithmetic costs
+  // Merge registry status counts into summary
+  Object.entries(registryStatusByProduct).forEach(([pid, counts]) => {
+    // Find the product name for this pid
+    const product = productMap[pid];
+    if (!product) return;
+    const productName = product.product_name;
+    if (!summaryGroup[productName]) {
+      summaryGroup[productName] = {
+        'NON-BILLABLE CONSUMABLE': productName,
+        'COMPLETED QTY': 0,
+        'INCOMPLETE QTY': 0,
+        'TOTAL REGISTRY COUNT': 0,
+        'SERVICE USAGE COUNT': 0,
+        'OPENING STOCK': 0,
+        'RECEIVED': 0,
+        'USED': 0,
+        'CLOSING STOCK': 0,
+        _unitCost: Number(product.cost) || 0,
+        _productId: pid,
+      };
+    }
+    summaryGroup[productName]['COMPLETED QTY'] = counts.completed;
+    summaryGroup[productName]['INCOMPLETE QTY'] = counts.incomplete;
+    summaryGroup[productName]['TOTAL REGISTRY COUNT'] = counts.total;
+    summaryGroup[productName]['USED'] = counts.total;
+    summaryGroup[productName]['CLOSING STOCK'] = stockMap[pid] || 0;
+    summaryGroup[productName]['OPENING STOCK'] = (stockMap[pid] || 0) + counts.total;
+  });
+
+  // Process data map back into clean array rows
   return Object.values(summaryGroup).map((item) => {
-    const totalCost = item['QUANTITY USED'] * item._unitCost;
+    const totalCost = item['SERVICE USAGE COUNT'] * item._unitCost;
     return {
       'NON-BILLABLE CONSUMABLE': item['NON-BILLABLE CONSUMABLE'],
-      'QUANTITY USED': item['QUANTITY USED'],
+      'COMPLETED QTY': item['COMPLETED QTY'],
+      'INCOMPLETE QTY': item['INCOMPLETE QTY'],
+      'TOTAL REGISTRY COUNT': item['TOTAL REGISTRY COUNT'],
+      'SERVICE USAGE COUNT': item['SERVICE USAGE COUNT'],
+      'OPENING STOCK': item['OPENING STOCK'],
+      'RECEIVED': item['RECEIVED'],
+      'USED': item['USED'],
+      'CLOSING STOCK': item['CLOSING STOCK'],
       'TOTAL COST': totalCost,
     };
   });

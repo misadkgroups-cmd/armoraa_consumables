@@ -986,10 +986,9 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
         await deductInventory(reportPayload, savedReport.id, isUpdate, oldReport);
       }
 
-      // Set refresh flag for parent page (still useful for standalone mode)
-      localStorage.setItem('forceRefreshBills', Date.now().toString());
-
-      // Embedded mode: callback instead of navigating away (keeps popup open)
+      // Embedded mode: callback instead of navigating away (keeps popup open).
+      // The callback triggers a service-only data refresh in the parent modal.
+      // We do NOT set the forceRefreshBills flag or navigate — the popup stays open.
       if (onSaveComplete) {
         onSaveComplete({
           billId: validBillingLogId,
@@ -999,13 +998,17 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
         return;
       }
 
-      // Navigate back to Detailed Log after successful save (standalone mode)
+      // Standalone mode (not embedded): navigate back to Detailed Log and auto-open
+      // the bill details popup for the bill that was just saved.
+      // NOTE: We intentionally do NOT set the forceRefreshBills flag here — AllBills
+      // already re-fetches fresh data on mount, so setting it would cause a redundant
+      // second fetch and a visible "Loading..." flash (looks like a hard refresh).
       setTimeout(() => {
         if (onNavigate) {
-          // Pass bill ID to show the specific bill details
-          onNavigate('all-bills', { refresh: true, highlightBill: validBillingLogId });
+          // Pass bill ID to show the specific bill details popup
+          onNavigate('all-bills', { refresh: true, highlightBill: validBillingLogId, openBillDetails: true });
         } else {
-          window.location.href = '/billing-log/all-bills?refresh=' + Date.now();
+          window.location.href = '/billing-log/all-bills?refresh=' + Date.now() + '&openBill=' + (validBillingLogId || '');
         }
       }, 800);
     } catch (e) {

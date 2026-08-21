@@ -5,6 +5,7 @@ import SearchableDropdown from '../components/SearchableDropdown';
 import { Eye, Pencil, Trash2 } from 'lucide-react';
 import * as auditApi from '../services/auditApi';
 import AuditTimelineModal from '../components/AuditTimelineModal';
+import BillDetailsModal from '../components/BillDetailsModal';
 
 const FIELD_LABEL = {
   fontSize: '11px',
@@ -35,6 +36,7 @@ export default function BillingLog({ onNavigate }) {
   const [loading, setLoading] = useState(true);
   const [viewData, setViewData] = useState(null);
   const [billServices, setBillServices] = useState([]);
+  const [consumableCounts, setConsumableCounts] = useState({});
   const [toast, setToast] = useState(null);
 
   // Master data
@@ -478,6 +480,64 @@ export default function BillingLog({ onNavigate }) {
     }
   };
 
+  // Fetch consumable counts per bill_service (used for the progress display)
+  const fetchConsumableCounts = async (servicesList) => {
+    if (!servicesList || servicesList.length === 0) return;
+    try {
+      const serviceIds = servicesList.map(s => s.id);
+      const { data: counts, error } = await supabase
+        .from('bill_service_consumables')
+        .select('bill_service_id, id')
+        .in('bill_service_id', serviceIds)
+        .eq('status', 'Used');
+      
+      if (error) {
+        console.error('Error fetching consumable counts:', error);
+        return;
+      }
+
+      const countMap = {};
+      (counts || []).forEach(bsc => {
+        countMap[bsc.bill_service_id] = (countMap[bsc.bill_service_id] || 0) + 1;
+      });
+
+      const result = {};
+      servicesList.forEach(s => {
+        result[s.id] = countMap[s.id] || 0;
+      });
+      setConsumableCounts(result);
+    } catch (error) {
+      console.error('Error in fetchConsumableCounts:', error);
+    }
+  };
+
+  // Refresh bill services after an embedded consumable save (keeps popup open).
+  // Accepts an optional savedInfo payload from the embedded editor.
+  // Memoised with useCallback so the BillDetailsModal can memoise its onSaveComplete handler.
+  const refreshBillServices = useCallback(async (savedInfo) => {
+    if (!viewData?.bill?.id) return;
+    try {
+      // Re-fetch latest service status (consumable_completed, service_status) from DB
+      const { data: services, error } = await supabase
+        .from('bill_services')
+        .select('id, service_id, service_name, consumable_completed, service_status')
+        .eq('bill_id', viewData.bill.id);
+
+      if (error) {
+        console.error('Error refreshing bill services:', error);
+        return;
+      }
+
+      const updatedServices = services || [];
+      // Update local state — this drives the table and the progress summary in the modal.
+      setBillServices(updatedServices);
+      // Re-fetch consumable counts for the refreshed services.
+      fetchConsumableCounts(updatedServices);
+    } catch (error) {
+      console.error('Error refreshing bill services:', error);
+    }
+  }, [viewData?.bill?.id]);
+
   // View bill details modal
   const handleViewBill = async (bill) => {
     try {
@@ -491,6 +551,7 @@ export default function BillingLog({ onNavigate }) {
       
       setBillServices(services || []);
       setViewData({ bill, viewMode: 'details' });
+      fetchConsumableCounts(services || []);
     } catch (error) {
       console.error('Error fetching bill services:', error);
       showToast('error', 'Failed to fetch bill details');
@@ -532,6 +593,29 @@ export default function BillingLog({ onNavigate }) {
   const handleViewHistory = (bill) => {
     setViewData({ bill, viewMode: 'history' });
     setShowHistoryModal(true);
+  };
+
+  // Navigate directly to the Billable Consumables page for a service.
+  // All bill/service context is passed via urlState so the page auto-loads.
+  const handleViewConsumables = (bill, bs) => {
+    setViewData(null);
+    setBillServices([]);
+    setConsumableCounts({});
+    if (onNavigate) {
+      onNavigate('billable', {
+        bill_no: bill.bill_no,
+        uid: bill.uid || '',
+        service_id: bs.service_id,
+        service_name: bs.service_name,
+        service_date: bill.service_date,
+        billing_log_id: bill.id,
+        bill_service_id: bs.id,
+      });
+    } else {
+      const url = `/billable-consumables?bill_no=${encodeURIComponent(bill.bill_no)}&uid=${encodeURIComponent(bill.uid || '')}&service_date=${bill.service_date}&billing_log_id=${bill.id}&bill_service_id=${bs.id}&service_id=${bs.service_id}&service_name=${encodeURIComponent(bs.service_name)}`;
+      window.history.pushState({}, '', url);
+      window.location.reload();
+    }
   };
 
   // Delete bill with explicit cascading deletes
@@ -713,16 +797,7 @@ export default function BillingLog({ onNavigate }) {
 
         {/* Services Section */}
         <div style={{ marginBottom: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-            <label style={{ ...FIELD_LABEL, marginBottom: 0 }}>Services <span style={{ color: '#EF4444' }}>*</span></label>
-            <button 
-              onClick={addServiceRow} 
-              className="btn btn-ghost btn-sm"
-              style={{ fontSize: 12 }}
-            >
-              + Add Service
-            </button>
-          </div>
+          <label style={{ ...FIELD_LABEL, marginBottom: 8 }}>Services <span style={{ color: '#EF4444' }}>*</span></label>
           {formErrors.services && <div style={{ fontSize: 11, color: '#EF4444', marginBottom: 8 }}>{formErrors.services}</div>}
           
           <div className="space-y-3">
@@ -753,7 +828,15 @@ export default function BillingLog({ onNavigate }) {
                   )}
                 </div>
                 <div style={{ gridColumn: 'span 1' }}>
-                  <span className="text-xs text-muted">{index + 1}.</span>
+                  {index === serviceRows.length - 1 && (
+                    <button 
+                      onClick={addServiceRow} 
+                      className="btn btn-ghost btn-sm"
+                      style={{ fontSize: 12, whiteSpace: 'nowrap' }}
+                    >
+                      + Add Service
+                    </button>
+                  )}
                 </div>
                 <div style={{ gridColumn: 'span 1' }}>
                   {serviceRows.length > 1 && (
@@ -919,89 +1002,21 @@ export default function BillingLog({ onNavigate }) {
         </div>
       </div>
 
-      {/* View Bill Details Modal */}
+      {/* View Bill Details Modal — uses the shared BillDetailsModal component
+          with embedded mode so consumable saving keeps the popup open. */}
       {viewData && viewData.viewMode === 'details' && (
-        <div className="modal-overlay" onClick={() => setViewData(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px', width: '95%' }}>
-            <div className="modal-header">
-              <h3>Bill Details</h3>
-              <button onClick={() => setViewData(null)} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--color-muted)' }}>×</button>
-            </div>
-            <div className="modal-body">
-              <div style={{ background: 'var(--color-tint-2)', padding: 16, borderRadius: 8, marginBottom: 20 }}>
-                <div className="grid grid-cols-3 gap-3">
-                  <div>
-                    <div style={{ fontSize: 11, color: 'var(--color-muted)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em' }}>Bill No</div>
-                    <div style={{ fontWeight: 600, color: 'var(--color-primary)', marginTop: 2 }}>{viewData.bill.bill_no}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 11, color: 'var(--color-muted)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em' }}>UID</div>
-                    <div style={{ fontWeight: 600, marginTop: 2 }}>{viewData.bill.uid || '-'}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 11, color: 'var(--color-muted)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em' }}>Patient Name</div>
-                    <div style={{ fontWeight: 600, marginTop: 2 }}>{viewData.bill.patient_name}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 11, color: 'var(--color-muted)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em' }}>Date</div>
-                    <div style={{ fontWeight: 600, marginTop: 2 }}>{viewData.bill.service_date}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 11, color: 'var(--color-muted)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em' }}>Doctor</div>
-                    <div style={{ fontWeight: 600, marginTop: 2 }}>{viewData.bill.master_doctors?.doctor_name || '-'}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: 11, color: 'var(--color-muted)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em' }}>Staff</div>
-                    <div style={{ fontWeight: 600, marginTop: 2 }}>{viewData.bill.master_staff?.staff_name || '-'}</div>
-                  </div>
-                </div>
-              </div>
-
-               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: 'var(--color-ink)' }}>Services & Consumable Status</div>
-               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                 <thead>
-                   <tr>
-                     <th style={{ padding: '8px 12px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: 'var(--color-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--color-line)', background: 'var(--color-tint-2)' }}>Service</th>
-                     <th style={{ padding: '8px 12px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: 'var(--color-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--color-line)', background: 'var(--color-tint-2)' }}>Status</th>
-                     <th style={{ padding: '8px 12px', textAlign: 'center', fontSize: 11, fontWeight: 600, color: 'var(--color-muted)', textTransform: 'uppercase', borderBottom: '1px solid var(--color-line)', background: 'var(--color-tint-2)' }}>Consumables</th>
-                   </tr>
-                 </thead>
-                 <tbody>
-                   {billServices.map((bs) => (
-                     <tr key={bs.id}>
-                       <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-line-2)', fontSize: 13 }}>{bs.service_name}</td>
-                       <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-line-2)', textAlign: 'center' }}>
-                         {bs.consumable_completed ? getStatusBadge('Complete') : getStatusBadge('Pending')}
-                       </td>
-                       <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-line-2)', textAlign: 'center', fontSize: 12, color: 'var(--color-muted)' }}>
-                         {bs.consumable_completed ? (
-                           <span style={{ color: 'var(--color-primary)', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
-                             onClick={() => handleEditConsumables(viewData.bill, bs.id, bs.service_id, bs.service_name)}
-                             title="Click to view/edit consumables"
-                           >
-                             View Details
-                           </span>
-                         ) : (
-                           <button
-                             onClick={() => handleAddConsumables(viewData.bill, bs.id, bs.service_id, bs.service_name)}
-                             className="btn btn-sm"
-                             style={{ background: '#D1FAE5', color: '#065F46', border: '1px solid #A7F3D0' }}
-                             title="Add consumables for this service"
-                           >
-                             + Add Consumables
-                           </button>
-                         )}
-                       </td>
-                     </tr>
-                   ))}
-                 </tbody>
-               </table>
-            </div>
-            <div className="modal-footer">
-              <button onClick={() => setViewData(null)} className="btn btn-secondary">Close</button>
-            </div>
-          </div>
-        </div>
+        <BillDetailsModal
+          bill={viewData.bill}
+          billServices={billServices}
+          consumableCounts={consumableCounts}
+          onClose={() => {
+            setViewData(null);
+            setBillServices([]);
+            setConsumableCounts({});
+          }}
+          onRefreshServices={refreshBillServices}
+          onViewConsumables={handleViewConsumables}
+        />
       )}
 
       {/* Audit Timeline Modal */}

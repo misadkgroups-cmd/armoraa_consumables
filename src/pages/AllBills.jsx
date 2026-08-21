@@ -91,6 +91,17 @@ export default function AllBills({ onNavigate, urlState }) {
     }
   }, [bills]);
 
+  // Auto-open the bill details popup when returning from Billable Consumables
+  // (urlState.openBillDetails is set after a successful consumable save).
+  useEffect(() => {
+    if (urlState?.openBillDetails && urlState?.highlightBill && bills.length > 0) {
+      const billToOpen = bills.find(b => b.id === Number(urlState.highlightBill));
+      if (billToOpen) {
+        handleViewBill(billToOpen);
+      }
+    }
+  }, [urlState, bills]);
+
   const showToast = (type, message) => {
     setToast({ type, message });
     setTimeout(() => setToast(null), 3000);
@@ -206,10 +217,14 @@ export default function AllBills({ onNavigate, urlState }) {
     fetchConsumableCounts(services);
   };
 
-  // Refresh bill services after an embedded consumable save (keeps popup open)
-  const refreshBillServices = async () => {
+  // Refresh bill services after an embedded consumable save (keeps popup open).
+  // Accepts an optional savedInfo payload from the embedded editor so the caller
+  // can pass context (billId, serviceId, billServiceId) if needed for targeted updates.
+  // Wrapped in useCallback so the BillDetailsModal can memoise its onSaveComplete handler.
+  const refreshBillServices = useCallback(async (savedInfo) => {
     if (!viewData?.bill?.id) return;
     try {
+      // Re-fetch latest service status (consumable_completed, service_status) from DB
       const { data: services, error } = await supabase
         .from('bill_services')
         .select('id, service_id, service_name, consumable_completed, service_status')
@@ -221,15 +236,41 @@ export default function AllBills({ onNavigate, urlState }) {
       }
 
       const updatedServices = services || [];
+      // Update local state — this drives the table and the progress summary in the modal.
       setBillServices(updatedServices);
+      // Re-fetch consumable counts for the refreshed services.
       fetchConsumableCounts(updatedServices);
     } catch (error) {
       console.error('Error refreshing bill services:', error);
     }
-  };
+  }, [viewData?.bill?.id]);
   const handleViewHistory = (bill) => {
     setViewData({ bill, viewMode: 'history' });
     setShowHistoryModal(true);
+  };
+
+  // Navigate straight to the Billable Consumables page for a service.
+  // All bill/service context is passed via urlState so BillableConsumables
+  // auto-loads the selected bill, UID, service, date and machinery.
+  const handleViewConsumables = (bill, bs) => {
+    setShowViewModal(false);
+    setViewData(null);
+    setBillServices([]);
+    if (onNavigate) {
+      onNavigate('billable', {
+        bill_no: bill.bill_no,
+        uid: bill.uid || '',
+        service_id: bs.service_id,
+        service_name: bs.service_name,
+        service_date: bill.service_date,
+        billing_log_id: bill.id,
+        bill_service_id: bs.id,
+      });
+    } else {
+      const url = `/billable-consumables?bill_no=${encodeURIComponent(bill.bill_no)}&uid=${encodeURIComponent(bill.uid || '')}&service_date=${bill.service_date}&billing_log_id=${bill.id}&bill_service_id=${bs.id}&service_id=${bs.service_id}&service_name=${encodeURIComponent(bs.service_name)}`;
+      window.history.pushState({}, '', url);
+      window.location.reload();
+    }
   };
 
   const fetchConsumableCounts = async (services) => {
@@ -706,16 +747,7 @@ export default function AllBills({ onNavigate, urlState }) {
 
           {/* Services Section */}
           <div style={{ marginBottom: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-              <label style={{ ...FIELD_LABEL, marginBottom: 0 }}>Services <span style={{ color: '#EF4444' }}>*</span></label>
-              <button 
-                onClick={addServiceRow} 
-                className="btn btn-ghost btn-sm"
-                style={{ fontSize: 12 }}
-              >
-                + Add Service
-              </button>
-            </div>
+            <label style={{ ...FIELD_LABEL, marginBottom: 8 }}>Services <span style={{ color: '#EF4444' }}>*</span></label>
             {formErrors.services && <div style={{ fontSize: 11, color: '#EF4444', marginBottom: 8 }}>{formErrors.services}</div>}
             
             <div className="space-y-3">
@@ -735,7 +767,15 @@ export default function AllBills({ onNavigate, urlState }) {
                     />
                   </div>
                   <div style={{ gridColumn: 'span 1' }}>
-                    <span className="text-xs text-muted">{index + 1}.</span>
+                    {index === serviceRows.length - 1 && (
+                      <button 
+                        onClick={addServiceRow} 
+                        className="btn btn-ghost btn-sm"
+                        style={{ fontSize: 12, whiteSpace: 'nowrap' }}
+                      >
+                        + Add Service
+                      </button>
+                    )}
                   </div>
                   <div style={{ gridColumn: 'span 1' }}>
                     {serviceRows.length > 1 && (
@@ -910,6 +950,7 @@ export default function AllBills({ onNavigate, urlState }) {
             setBillServices([]);
           }}
           onRefreshServices={refreshBillServices}
+          onViewConsumables={handleViewConsumables}
         />
       )}
 

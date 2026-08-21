@@ -1,7 +1,7 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useCallback, Fragment } from 'react';
 import BillableConsumables from '../pages/BillableConsumables';
 
-const BillDetailsModal = ({ bill, billServices, consumableCounts, onClose, onRefreshServices }) => {
+const BillDetailsModal = ({ bill, billServices, consumableCounts, onClose, onRefreshServices, onViewConsumables }) => {
   const [showServiceDetails, setShowServiceDetails] = useState({});
   const [editingServiceId, setEditingServiceId] = useState(null);
   const [editingServiceData, setEditingServiceData] = useState(null);
@@ -30,7 +30,7 @@ const BillDetailsModal = ({ bill, billServices, consumableCounts, onClose, onRef
       Complete: { bg: '#D1FAE5', color: '#065F46', border: '#A7F3D0' },
       Incomplete: { bg: '#FEE2E2', color: '#991B1B', border: '#FECACA' },
       Pending: { bg: '#FEF3C7', color: '#92400E', border: '#FDE68A' },
-    }[status] || { bg: '#FEF3C7', color: '#92400E', border: '#FDE68Y' };
+    }[status] || { bg: '#FEF3C7', color: '#92400E', border: '#FDE68A' };
 
     return (
       <span
@@ -51,8 +51,14 @@ const BillDetailsModal = ({ bill, billServices, consumableCounts, onClose, onRef
     );
   };
 
-  // Switch to the embedded consumables editor for a service
+  // Switch to the embedded consumables editor for a service,
+  // or navigate straight to the Billable Consumables page when
+  // an onViewConsumables callback is provided (preferred workflow).
   const handleViewDetails = (bs) => {
+    if (onViewConsumables) {
+      onViewConsumables(bill, bs);
+      return;
+    }
     setEditingServiceId(bs.id);
     setEditingServiceData({
       bill_no: bill.bill_no,
@@ -65,12 +71,23 @@ const BillDetailsModal = ({ bill, billServices, consumableCounts, onClose, onRef
     });
   };
 
-  // After the embedded editor saves, refresh the service data and return to the list
-  const handleSaveComplete = () => {
-    onRefreshServices?.();
-    setEditingServiceId(null);
-    setEditingServiceData(null);
-  };
+  // After the embedded editor saves, refresh the service data and return to the list.
+  // The popup stays OPEN — we only refresh the bill_services data inside the parent.
+  // We await the refresh so the list shows updated statuses instantly (no stale flash).
+  const handleSaveComplete = useCallback(async (savedInfo) => {
+    try {
+      // Re-fetch latest service status, consumable status, and counts.
+      // This updates the parent's billServices state which drives the progress summary.
+      await onRefreshServices?.(savedInfo);
+    } catch (e) {
+      console.error('Failed to refresh services after save:', e);
+    } finally {
+      // Always return to the services list view (collapse the editor).
+      // The popup itself is NOT closed.
+      setEditingServiceId(null);
+      setEditingServiceData(null);
+    }
+  }, [onRefreshServices]);
 
   // Cancel (Back to Services) from the embedded editor
   const handleCancelEditor = () => {
@@ -89,17 +106,19 @@ const BillDetailsModal = ({ bill, billServices, consumableCounts, onClose, onRef
     </div>
   );
 
+  const isEditing = !!editingServiceId;
+
   return (
-    <div className="modal-overlay" onClick={editingServiceId ? handleCancelEditor : onClose}>
+    <div className="modal-overlay" onClick={isEditing ? undefined : onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '900px', width: '95%' }}>
         <div className="modal-header">
           <h3>
-            {editingServiceId ? 'Service Consumables' : 'Bill Details'}
+            {isEditing ? 'Service Consumables' : 'Bill Details'}
           </h3>
-          <button onClick={editingServiceId ? handleCancelEditor : onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--color-muted)' }}>×</button>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', color: 'var(--color-muted)' }}>×</button>
         </div>
         <div className="modal-body" style={{ paddingBottom: 12 }}>
-          {editingServiceId ? (
+          {isEditing ? (
             // ─── Embedded Consumables Editor ───
             <BillableConsumables
               embedded={true}
@@ -174,22 +193,22 @@ const BillDetailsModal = ({ bill, billServices, consumableCounts, onClose, onRef
                   {billServices.map((bs) => {
                     const count = consumableCounts[bs.id] || 0;
                     const isExpanded = showServiceDetails[bs.id];
-                  
+
                     return (
-                      <>
-                        <tr key={bs.id}>
+                      <Fragment key={bs.id}>
+                        <tr>
                           <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-line-2)', fontSize: 13, cursor: 'pointer' }} onClick={() => toggleServiceDetails(bs.id)}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                               <span>{bs.service_name}</span>
-                              <svg 
-                                viewBox="0 0 24 24" 
-                                fill="none" 
-                                stroke="currentColor" 
-                                strokeWidth="2" 
-                                strokeLinecap="round" 
-                                strokeLinejoin="round" 
-                                style={{ 
-                                  width: 14, 
+                              <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                style={{
+                                  width: 14,
                                   height: 14,
                                   transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
                                   transition: 'transform 0.2s',
@@ -203,30 +222,30 @@ const BillDetailsModal = ({ bill, billServices, consumableCounts, onClose, onRef
                           <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-line-2)', textAlign: 'center' }}>
                             {bs.consumable_completed ? getStatusBadge('Complete') : getStatusBadge('Pending')}
                           </td>
-                           <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-line-2)', textAlign: 'center', fontSize: 12, color: 'var(--color-muted)' }}>
-                             {bs.consumable_completed ? (
-                               <span
-                                 style={{ color: 'var(--color-primary)', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
-                                 onClick={() => handleViewDetails(bs)}
-                                 title="View/edit consumables for this service"
-                               >
-                                 View Details
-                               </span>
-                             ) : (
-                               <button
-                                 onClick={() => handleViewDetails(bs)}
-                                 className="btn btn-sm"
-                                 style={{ 
-                                   background: '#D1FAE5', 
-                                   color: '#065F46', 
-                                   border: '1px solid #A7F3D0' 
-                                 }}
-                                 title="Add/View consumables"
-                               >
-                                 View Details ({count})
-                               </button>
-                             )}
-                           </td>
+                          <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-line-2)', textAlign: 'center', fontSize: 12, color: 'var(--color-muted)' }}>
+                            {bs.consumable_completed ? (
+                              <span
+                                style={{ color: 'var(--color-primary)', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
+                                onClick={() => handleViewDetails(bs)}
+                                title="View/edit consumables for this service"
+                              >
+                                View Details
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => handleViewDetails(bs)}
+                                className="btn btn-sm"
+                                style={{
+                                  background: '#D1FAE5',
+                                  color: '#065F46',
+                                  border: '1px solid #A7F3D0'
+                                }}
+                                title="Add/View consumables"
+                              >
+                                View Details ({count})
+                              </button>
+                            )}
+                          </td>
                         </tr>
                         {isExpanded && (
                           <tr key={`${bs.id}-details`}>
@@ -249,7 +268,7 @@ const BillDetailsModal = ({ bill, billServices, consumableCounts, onClose, onRef
                             </td>
                           </tr>
                         )}
-                      </>
+                      </Fragment>
                     );
                   })}
                 </tbody>
@@ -277,8 +296,8 @@ const BillDetailsModal = ({ bill, billServices, consumableCounts, onClose, onRef
           )}
         </div>
         <div className="modal-footer">
-          <button onClick={editingServiceId ? handleCancelEditor : onClose} className="btn btn-secondary">
-            {editingServiceId ? 'Back to Services' : 'Close'}
+          <button onClick={onClose} className="btn btn-secondary">
+            Close
           </button>
         </div>
       </div>

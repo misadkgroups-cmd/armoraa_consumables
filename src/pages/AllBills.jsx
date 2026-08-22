@@ -754,16 +754,13 @@ export default function AllBills({ onNavigate, urlState }) {
               {serviceRows.map((row, index) => (
                 <div key={row.id} className="grid grid-cols-6 gap-4 items-center">
                   <div style={{ gridColumn: 'span 4' }}>
-                    <input
-                      type="text"
-                      value={row.service_name}
-                      onChange={(e) => {
-                        const newRows = [...serviceRows];
-                        newRows[index].service_name = e.target.value;
-                        setServiceRows(newRows);
-                      }}
-                      placeholder="Enter service name"
-                      className="form-input"
+                    <SearchableDropdown
+                      value={row.service_id}
+                      onChange={(val) => handleServiceChange(row.id, val)}
+                      options={services.map(s => ({ value: s.id, label: s.service_name }))}
+                      placeholder="Select Service"
+                      displayKey="label"
+                      valueKey="value"
                     />
                   </div>
                   <div style={{ gridColumn: 'span 1' }}>

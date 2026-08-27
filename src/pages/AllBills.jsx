@@ -333,6 +333,17 @@ export default function AllBills({ onNavigate, urlState }) {
     resetForm();
   };
 
+  // Edit must happen on the Billing Log entry page, NOT inline here in Detailed Log.
+  // Navigate to Billing Log in edit mode for the selected bill.
+  const handleEditInBillingLog = (bill) => {
+    if (onNavigate) {
+      onNavigate('billing-log', { edit_bill_id: String(bill.id) });
+    } else {
+      // Standalone fallback: full reload directly onto Billing Log with the edit param
+      window.location.href = `/billing-log?edit_bill_id=${bill.id}`;
+    }
+  };
+
   const validateForm = () => {
     const errors = {};
     if (!formData.bill_no.trim()) errors.bill_no = 'Bill Number is required';
@@ -407,11 +418,31 @@ export default function AllBills({ onNavigate, urlState }) {
         if (updateError) throw updateError;
 
         // Delete existing bill_services and recreate
-        const { error: deleteError } = await supabase
+        // NOTE: The delete must succeed before inserting the new rows, otherwise
+        // the removed services would stay in the DB alongside the recreated ones
+        // (making each "remove service" edit INCREASE the service count).
+        // First remove child consumable rows so FK constraints cannot block the delete,
+        // then fail hard if either delete/insert fails.
+        const { data: existingServices, error: fetchSvcError } = await supabase
           .from('bill_services')
-          .delete()
+          .select('id')
           .eq('bill_id', editingBillId);
-        if (deleteError) console.warn('Warning deleting old services:', deleteError);
+        if (fetchSvcError) throw fetchSvcError;
+
+        const existingServiceIds = (existingServices || []).map(bs => bs.id);
+        if (existingServiceIds.length > 0) {
+          const { error: bscDeleteError } = await supabase
+            .from('bill_service_consumables')
+            .delete()
+            .in('bill_service_id', existingServiceIds);
+          if (bscDeleteError) throw bscDeleteError;
+
+          const { error: servicesDeleteError } = await supabase
+            .from('bill_services')
+            .delete()
+            .in('id', existingServiceIds);
+          if (servicesDeleteError) throw servicesDeleteError;
+        }
 
         // Create new bill_services
         const billServicesPayload = serviceRows.map(row => ({
@@ -423,9 +454,7 @@ export default function AllBills({ onNavigate, urlState }) {
         }));
 
         const { error: servicesError } = await supabase.from('bill_services').insert(billServicesPayload);
-        if (servicesError) {
-          console.warn('Warning: Could not create bill_services:', servicesError);
-        }
+        if (servicesError) throw servicesError;
 
         const username = localStorage.getItem('username') || 'System';
         // Log activity for bill update (production activity_logs: username,
@@ -886,9 +915,9 @@ export default function AllBills({ onNavigate, urlState }) {
                            <Eye size={16} />
                          </button>
                          
-                         {/* Edit Button */}
-                         <button 
-                           onClick={() => handleEditBill(bill)}
+                         {/* Edit Button - navigates to Billing Log edit mode */}
+                         <button
+                           onClick={() => handleEditInBillingLog(bill)}
                            className="btn btn-ghost btn-sm"
                            title="Edit Bill"
                            style={{ padding: '6px 8px', color: 'var(--color-primary)' }}

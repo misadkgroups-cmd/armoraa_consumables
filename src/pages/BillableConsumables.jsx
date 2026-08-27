@@ -1078,13 +1078,21 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       await updateBillStatus(billingLogId);
     }
     
-    // Navigate to Detailed Log page and force refresh
+    // Navigate to Detailed Log page and force refresh.
+    // When we arrived from a bill (billingLogId known), reopen that bill's
+    // "View Services" popup on return — same behaviour as the Save flow —
+    // so Exit no longer closes the whole drill-down.
     if (onNavigate) {
-      // Pass a flag to force refresh
-      onNavigate('all-bills', { refresh: true });
+      if (billingLogId) {
+        // Pass a flag to force refresh + reopen the bill details popup
+        onNavigate('all-bills', { refresh: true, highlightBill: billingLogId, openBillDetails: true });
+      } else {
+        // Pass a flag to force refresh
+        onNavigate('all-bills', { refresh: true });
+      }
     } else {
       // Force page reload to see updated status
-      window.location.href = '/billing-log/all-bills?refresh=' + Date.now();
+      window.location.href = '/billing-log/all-bills?refresh=' + Date.now() + '&openBill=' + (billingLogId || '');
     }
   };
 

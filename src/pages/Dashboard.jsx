@@ -71,7 +71,7 @@ const Dashboard = ({ currentPage = 'overview', urlState, onNavigate, onLogout })
   const renderPage = () => {
     switch (currentPage) {
       case 'overview': return <Overview />;
-      case 'billing-log': return <BillingLog onNavigate={onNavigate} />;
+      case 'billing-log': return <BillingLog onNavigate={onNavigate} urlState={urlState} />;
       case 'all-bills': return <AllBills onNavigate={onNavigate} urlState={urlState} />;
       case 'billable': return <BillableConsumables onNavigate={onNavigate} />;
       case 'non-billable': return <NonBillableConsumables />;

@@ -29,7 +29,7 @@ const STATUS_BADGE = {
   Pending: { bg: '#FEF3C7', color: '#92400E', border: '#FDE68A' },
 };
 
-export default function BillingLog({ onNavigate }) {
+export default function BillingLog({ onNavigate, urlState }) {
   const { branchId, misMode } = useBranch();
   const [bills, setBills] = useState([]);
   const [services, setServices] = useState([]);
@@ -291,11 +291,31 @@ export default function BillingLog({ onNavigate }) {
         if (updateError) throw updateError;
 
         // Delete existing bill_services and recreate
-        const { error: deleteError } = await supabase
+        // NOTE: The delete must succeed before inserting the new rows, otherwise
+        // the removed services would stay in the DB alongside the recreated ones
+        // (making each "remove service" edit INCREASE the service count).
+        // First remove child consumable rows so FK constraints cannot block the delete,
+        // then fail hard if either delete/insert fails.
+        const { data: existingServices, error: fetchSvcError } = await supabase
           .from('bill_services')
-          .delete()
+          .select('id')
           .eq('bill_id', editingBillId);
-        if (deleteError) console.warn('Warning deleting old services:', deleteError);
+        if (fetchSvcError) throw fetchSvcError;
+
+        const existingServiceIds = (existingServices || []).map(bs => bs.id);
+        if (existingServiceIds.length > 0) {
+          const { error: bscDeleteError } = await supabase
+            .from('bill_service_consumables')
+            .delete()
+            .in('bill_service_id', existingServiceIds);
+          if (bscDeleteError) throw bscDeleteError;
+
+          const { error: servicesDeleteError } = await supabase
+            .from('bill_services')
+            .delete()
+            .in('id', existingServiceIds);
+          if (servicesDeleteError) throw servicesDeleteError;
+        }
 
         // Create new bill_services
         const billServicesPayload = serviceRows.map(row => ({
@@ -307,9 +327,7 @@ export default function BillingLog({ onNavigate }) {
         }));
 
         const { error: servicesError } = await supabase.from('bill_services').insert(billServicesPayload);
-        if (servicesError) {
-          console.warn('Warning: Could not create bill_services:', servicesError);
-        }
+        if (servicesError) throw servicesError;
 
         const username = localStorage.getItem('username') || 'System';
         // Log activity for bill update (production activity_logs: username,
@@ -702,20 +720,79 @@ export default function BillingLog({ onNavigate }) {
     );
   };
 
-  // Check URL for edit parameter AFTER handleEditBill is defined
+  // Check for an incoming "edit this bill" request AFTER handleEditBill is defined.
+  // Sources:
+  //   (a) SPA navigation from Detailed Log: onNavigate('billing-log', { edit_bill_id })
+  //       arrives as the `urlState` prop (window.location.search can lag behind on
+  //       client-side navigation, so the prop is checked first),
+  //   (b) legacy URL param ?edit=<bill_no> (matched against loaded bills),
+  //   (c) URL param ?edit_bill_id=<id> from a full-page load.
+  // The request is always cleared after being consumed so revisiting the page
+  // never re-opens edit mode unexpectedly.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const editBillNo = params.get('edit');
-    if (editBillNo && bills.length > 0) {
-      const billToEdit = bills.find(b => b.bill_no === editBillNo);
-      if (billToEdit) {
-        console.log('Found bill to edit:', billToEdit.bill_no);
-        handleEditBill(billToEdit);
-        // Clean URL
-        window.history.replaceState({}, '', window.location.pathname);
+    const stateId = urlState && urlState.edit_bill_id ? Number(urlState.edit_bill_id) : null;
+    const paramId = params.get('edit_bill_id') ? Number(params.get('edit_bill_id')) : null;
+    const legacyBillNo = params.get('edit'); // legacy: match by bill_no
+    const editBillId = stateId || paramId;
+
+    if (!editBillId && !legacyBillNo) return;
+    if (bills.length === 0 && !editBillId) return; // wait until list loads for bill_no lookup
+
+    let cancelled = false;
+
+    const clearRequest = () => {
+      window.history.replaceState({}, '', window.location.pathname);
+      if (stateId && onNavigate) {
+        onNavigate('billing-log', {}); // clear propagated page state
       }
-    }
-  }, [bills]);
+    };
+
+    const openEditor = async () => {
+      try {
+        let billToEdit = null;
+
+        if (editBillId) {
+          // Fetch the exact bill by id — works even when it is not in the
+          // currently loaded/filtered bill list.
+          const { data, error } = await supabase
+            .from('billing_log')
+            .select(`
+              *,
+              master_doctors ( id, doctor_name ),
+              master_staff ( id, staff_name ),
+              bill_services(id, service_id, service_name, consumable_completed, service_status)
+            `)
+            .eq('id', editBillId)
+            .maybeSingle();
+          if (error) throw error;
+          if (!data) throw new Error(`Bill #${editBillId} not found`);
+          if (cancelled) return;
+          billToEdit = data;
+        } else {
+          billToEdit = bills.find(b => b.bill_no === legacyBillNo);
+          if (!billToEdit) {
+            showToast('error', `Bill "${legacyBillNo}" not found`);
+            clearRequest();
+            return;
+          }
+        }
+
+        handleEditBill(billToEdit);
+        showToast('info', 'Editing in Billing Log. Make changes and click Update Bill.');
+        clearRequest();
+      } catch (error) {
+        console.error('Error opening bill for editing:', error);
+        if (!cancelled) {
+          showToast('error', error.message || 'Could not open the bill for editing');
+          clearRequest();
+        }
+      }
+    };
+
+    openEditor();
+    return () => { cancelled = true; };
+  }, [bills, urlState]);
 
   return (
     <div className="page-wrapper animate-fade-in">

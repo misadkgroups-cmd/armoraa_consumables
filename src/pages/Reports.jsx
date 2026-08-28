@@ -53,6 +53,8 @@ const Reports = () => {
 
   useEffect(() => {
     if (ctxBranch && !filterBranch) setFilterBranch(ctxBranch);
+    if (ctxBranch && !nbBranch) setNbBranch(ctxBranch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctxBranch]);
 
   useEffect(() => {
@@ -108,14 +110,19 @@ const Reports = () => {
         data = r.data;
       }
       if (data) {
-        const seen = new Set();
-        const uniq = data.filter((m) => {
-          const k = m.machine_name.toLowerCase().trim();
-          if (seen.has(k)) return false;
-          seen.add(k);
-          return true;
+        // Group machines by name: the same machine name (e.g. "CHEMICAL PEEL")
+        // can exist as many master_machinery rows (one per service variant).
+        // The dropdown shows one entry per name, and the filter must match ALL ids.
+        const seen = new Map();
+        data.forEach((m) => {
+          const k = String(m.machine_name || '').toLowerCase().trim();
+          if (!k) return;
+          if (!seen.has(k)) {
+            seen.set(k, { id: m.machine_name, machine_name: m.machine_name, ids: [] });
+          }
+          seen.get(k).ids.push(m.id);
         });
-        setMachines(uniq);
+        setMachines(Array.from(seen.values()));
       }
     } catch (e) {
       console.error(e);
@@ -296,7 +303,16 @@ const Reports = () => {
 
       if (filterBranch) query = query.eq('branch_id', filterBranch);
       if (filterService) query = query.eq('service_id', filterService);
-      if (filterMachinery) query = query.eq('machinery_id', filterMachinery);
+      if (filterMachinery) {
+        // filterMachinery holds the machine NAME. One name can map to many
+        // master_machinery rows (e.g. "CHEMICAL PEEL" -> 90+ variants), so
+        // match all of them, not just a single machinery_id.
+        const machineGroup = machines.find(
+          (m) => String(m.id) === String(filterMachinery) || String(m.machine_name) === String(filterMachinery)
+        );
+        const ids = machineGroup?.ids?.length ? machineGroup.ids : [filterMachinery];
+        query = query.in('machinery_id', ids);
+      }
 
       const { data, error } = await query.order('id', { ascending: true });
 
@@ -1183,7 +1199,7 @@ const Reports = () => {
           </div>
 
           {/* Table Output */}
-          {nbHasReport && nbData.length > 0 && (
+          {nbHasReport && (
             <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden" style={{ marginTop: '16px' }}>
               <div className="overflow-x-auto w-full">
                 <table className="w-full text-left border-collapse" style={{ minWidth: nbReportMode === 'summary' ? 1200 : 1000 }}>

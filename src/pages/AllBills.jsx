@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
 import { Eye, Pencil, Trash2 } from 'lucide-react';
@@ -30,8 +30,18 @@ export default function AllBills({ onNavigate, urlState }) {
   const [billServices, setBillServices] = useState([]);
   const [consumableCounts, setConsumableCounts] = useState({});
   const [toast, setToast] = useState(null);
-  const [selectedDate, setSelectedDate] = useState('');
-  const [statusFilter, setStatusFilter] = useState('All');
+  // Persist filters in sessionStorage so they survive the unmount that happens
+  // when navigating to Billable Consumables and back (Complete/Exit flow).
+  const [selectedDate, setSelectedDate] = useState(() => sessionStorage.getItem('allBillsSelectedDate') || '');
+  const [statusFilter, setStatusFilter] = useState(() => sessionStorage.getItem('allBillsStatusFilter') || 'All');
+
+  useEffect(() => {
+    sessionStorage.setItem('allBillsSelectedDate', selectedDate);
+  }, [selectedDate]);
+
+  useEffect(() => {
+    sessionStorage.setItem('allBillsStatusFilter', statusFilter);
+  }, [statusFilter]);
   const [refreshToken, setRefreshToken] = useState(0);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [editingBillId, setEditingBillId] = useState(null);
@@ -93,10 +103,18 @@ export default function AllBills({ onNavigate, urlState }) {
 
   // Auto-open the bill details popup when returning from Billable Consumables
   // (urlState.openBillDetails is set after a successful consumable save).
+  // NOTE: urlState lives in App and is NOT cleared after being consumed, so this
+  // effect must auto-open only ONCE per navigation request (identified by the
+  // unique `ts` nonce BillableConsumables attaches). Without this guard, every
+  // bills-list change (status filter clicks, Clear, etc.) would re-open the popup.
+  const autoOpenedNavRef = useRef(null);
   useEffect(() => {
     if (urlState?.openBillDetails && urlState?.highlightBill && bills.length > 0) {
+      const requestKey = String(urlState.ts ?? `legacy-${urlState.highlightBill}`);
+      if (autoOpenedNavRef.current === requestKey) return;
       const billToOpen = bills.find(b => b.id === Number(urlState.highlightBill));
       if (billToOpen) {
+        autoOpenedNavRef.current = requestKey;
         handleViewBill(billToOpen);
       }
     }
@@ -700,9 +718,13 @@ export default function AllBills({ onNavigate, urlState }) {
               Incomplete
             </button>
           </div>
-          <button onClick={fetchAllBills} className="btn btn-secondary btn-sm">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-            Refresh
+          <button
+            onClick={() => { setSelectedDate(''); setStatusFilter('All'); }}
+            className="btn btn-secondary btn-sm"
+            title="Clear date filter and show all bills"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            Clear
           </button>
         </div>
       </div>

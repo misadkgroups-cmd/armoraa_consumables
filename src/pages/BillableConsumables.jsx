@@ -1006,7 +1006,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       setTimeout(() => {
         if (onNavigate) {
           // Pass bill ID to show the specific bill details popup
-          onNavigate('all-bills', { refresh: true, highlightBill: validBillingLogId, openBillDetails: true });
+          onNavigate('all-bills', { refresh: true, highlightBill: validBillingLogId, openBillDetails: true, ts: Date.now() });
         } else {
           window.location.href = '/billing-log/all-bills?refresh=' + Date.now() + '&openBill=' + (validBillingLogId || '');
         }
@@ -1085,7 +1085,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
     if (onNavigate) {
       if (billingLogId) {
         // Pass a flag to force refresh + reopen the bill details popup
-        onNavigate('all-bills', { refresh: true, highlightBill: billingLogId, openBillDetails: true });
+        onNavigate('all-bills', { refresh: true, highlightBill: billingLogId, openBillDetails: true, ts: Date.now() });
       } else {
         // Pass a flag to force refresh
         onNavigate('all-bills', { refresh: true });

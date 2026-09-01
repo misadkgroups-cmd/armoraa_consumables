@@ -121,7 +121,7 @@ CREATE TABLE IF NOT EXISTS public.master_billable_consumables (
 CREATE TABLE IF NOT EXISTS public.master_non_billable_consumables (
   id BIGSERIAL PRIMARY KEY,
   product_name TEXT NOT NULL,
-  quantity_type TEXT NOT NULL DEFAULT 'packet',
+  quantity_type INTEGER NOT NULL DEFAULT 1,
   cost NUMERIC DEFAULT 0,
   minimum_stock INTEGER NOT NULL DEFAULT 10 CHECK (minimum_stock >= 0),
   branch_id BIGINT REFERENCES public.branches(id),

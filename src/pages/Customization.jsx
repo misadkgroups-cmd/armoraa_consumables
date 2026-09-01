@@ -166,11 +166,11 @@ const Customization = () => {
           .ilike('product_name', nbForm.product_name.trim())
           .eq('status', 'Active');
         if (existing && existing.length) return showToast('warning', 'An active consumable with this name already exists');
-        const { error } = await supabase.from('master_non_billable_consumables').insert({ product_name: nbForm.product_name.trim(), cost, status: nbForm.status || 'Active' });
+        const { error } = await supabase.from('master_non_billable_consumables').insert({ product_name: nbForm.product_name.trim(), quantity_type: 1, cost, status: nbForm.status || 'Active' });
         if (error) throw error;
         showToast('success', 'Consumable added');
       } else {
-        const { error } = await supabase.from('master_non_billable_consumables').update({ product_name: nbForm.product_name.trim(), cost, status: nbForm.status }).eq('id', nbModal.data.id);
+        const { error } = await supabase.from('master_non_billable_consumables').update({ product_name: nbForm.product_name.trim(), quantity_type: 1, cost, status: nbForm.status }).eq('id', nbModal.data.id);
         if (error) throw error;
         showToast('success', 'Consumable updated');
       }

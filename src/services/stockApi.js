@@ -846,6 +846,67 @@ export async function createMultiLocationTransferRequest(
         continue;
       }
 
+      // Branch → Corporate: auto-confirm immediately (no manual receipt needed).
+      // The stock is added back to corporate_stock right away and the transfer
+      // is marked 'Received' instead of sitting in 'Pending'.
+      if (isToCorporate) {
+        const { data: corpRow, error: corpFetchErr } = await withRetry(() =>
+          supabase
+            .from('corporate_stock')
+            .select('id, available_units, product_name')
+            .eq('product_id', productId)
+            .eq('stock_type', t.stock_type)
+            .single()
+        );
+
+        if (corpFetchErr || !corpRow) {
+          results.push({ success: false, productId, product_name: t.product_name, message: 'Corporate stock record not found for auto-confirm' });
+          continue;
+        }
+
+        const newCorpQty = Number(corpRow.available_units || 0) + qty;
+        const { error: corpUpdErr } = await withRetry(() =>
+          supabase
+            .from('corporate_stock')
+            .update({ available_units: newCorpQty, updated_at: new Date().toISOString(), updated_by: createdBy })
+            .eq('id', corpRow.id)
+        );
+        if (corpUpdErr) {
+          results.push({ success: false, productId, product_name: t.product_name, message: corpUpdErr.message });
+          continue;
+        }
+
+        // Mark the transfer as Received straight away
+        await supabase
+          .from('stock_transfers')
+          .update({ status: 'Received', received_by: createdBy, received_at: new Date().toISOString() })
+          .eq('id', stData.id);
+
+        // Corporate audit row (Inward from the branch)
+        await supabase.from('corporate_stock_transactions').insert({
+          product_id: productId,
+          product_name: t.product_name || corpRow.product_name || '',
+          stock_type: t.stock_type,
+          transaction_type: 'Inward',
+          quantity: qty,
+          balance_after: newCorpQty,
+          remarks: `Received from Branch ${fromBranchId}${remarks ? `: ${remarks}` : ''}`,
+          from_location: `Branch ${fromBranchId}`,
+          to_location: 'Corporate Warehouse',
+          created_by: createdBy,
+        });
+
+        results.push({
+          success: true,
+          transferId: stData.id,
+          productId,
+          product_name: t.product_name,
+          message: 'Branch → Corporate transfer auto-confirmed (Received)',
+          newCorporateQty: newCorpQty,
+        });
+        continue;
+      }
+
       // Create notification for destination
       if (!isToCorporate) {
         await supabase.from('stock_transfer_notifications').insert({

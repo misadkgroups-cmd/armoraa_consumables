@@ -5,6 +5,7 @@ import SearchableDropdown from '../components/SearchableDropdown';
 import * as auditApi from '../services/auditApi';
 import { prepareSavePayload } from '../utils/billableReportPayload';
 import { getTodayLocal, formatDateDisplay } from '../utils/dateUtils';
+import { withBase } from '../utils/navigation';
 
 const PARAM_KEYS = [
   'bill_no', 'uid', 'service_id', 'service_name',
@@ -1026,7 +1027,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
           // Pass bill ID to show the specific bill details popup
           onNavigate('all-bills', { refresh: true, highlightBill: validBillingLogId, openBillDetails: true, ts: Date.now() });
         } else {
-          window.location.href = '/billing-log/all-bills?refresh=' + Date.now() + '&openBill=' + (validBillingLogId || '');
+          window.location.href = withBase('/billing-log/all-bills?refresh=') + Date.now() + '&openBill=' + (validBillingLogId || '');
         }
       }, 800);
     } catch (e) {
@@ -1075,7 +1076,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
     if (onNavigate) {
       onNavigate('all-bills', { refresh: true });
     } else {
-      window.location.href = '/billing-log/all-bills?refresh=' + Date.now();
+      window.location.href = withBase('/billing-log/all-bills?refresh=') + Date.now();
     }
   };
 
@@ -1110,7 +1111,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       }
     } else {
       // Force page reload to see updated status
-      window.location.href = '/billing-log/all-bills?refresh=' + Date.now() + '&openBill=' + (billingLogId || '');
+      window.location.href = withBase('/billing-log/all-bills?refresh=') + Date.now() + '&openBill=' + (billingLogId || '');
     }
   };
 

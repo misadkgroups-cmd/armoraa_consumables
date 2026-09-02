@@ -7,6 +7,7 @@ import * as auditApi from '../services/auditApi';
 import AuditTimelineModal from '../components/AuditTimelineModal';
 import BillDetailsModal from '../components/BillDetailsModal';
 import { getTodayLocal, formatDateDisplay } from '../utils/dateUtils';
+import { withBase } from '../utils/navigation';
 
 const STATUS_BADGE = {
   Complete: { bg: '#D1FAE5', color: '#065F46', border: '#A7F3D0' },
@@ -294,7 +295,7 @@ export default function AllBills({ onNavigate, urlState }) {
       });
     } else {
       const url = `/billable-consumables?bill_no=${encodeURIComponent(bill.bill_no)}&uid=${encodeURIComponent(bill.uid || '')}&service_date=${bill.service_date}&billing_log_id=${bill.id}&bill_service_id=${bs.id}&service_id=${bs.service_id}&service_name=${encodeURIComponent(bs.service_name)}`;
-      window.history.pushState({}, '', url);
+      window.history.pushState({}, '', withBase(url));
       window.location.reload();
     }
   };
@@ -368,7 +369,7 @@ export default function AllBills({ onNavigate, urlState }) {
       onNavigate('billing-log', { edit_bill_id: String(bill.id), return_to: 'all-bills' });
     } else {
       // Standalone fallback: full reload directly onto Billing Log with the edit param
-      window.location.href = `/billing-log?edit_bill_id=${bill.id}&return_to=all-bills`;
+      window.location.href = withBase(`/billing-log?edit_bill_id=${bill.id}&return_to=all-bills`);
     }
   };
 

@@ -20,10 +20,28 @@ const pathToPage = (path) => {
   return 'overview';
 };
 
+// Deployment base captured in index.html before any URL rewriting
+// (e.g. '/' for a domain root, '/armoraa_consumables/' for a GitHub Pages
+// project site). All pushState/replaceState URLs and pathname parsing MUST
+// go through these helpers — absolute paths would escape the deploy folder
+// and produce 404/blank pages on reload.
+const APP_BASE = typeof window !== 'undefined' && window.__APP_BASE__ ? window.__APP_BASE__ : '/';
+
+const withBase = (path) => {
+  const base = APP_BASE.endsWith('/') ? APP_BASE : APP_BASE + '/';
+  return base === '/' ? path : base + path.slice(1);
+};
+
+const stripBase = (fullPath) => {
+  if (APP_BASE === '/') return fullPath;
+  if (fullPath.startsWith(APP_BASE)) return fullPath.slice(APP_BASE.length - 1) || '/';
+  return fullPath;
+};
+
 const AppContent = () => {
   // Start on the page matching the URL (supports reloads / shared links on
   // static hosts — index.html restores the deep-link before we get here).
-  const [currentPage, setCurrentPage] = useState(() => pathToPage(window.location.pathname));
+  const [currentPage, setCurrentPage] = useState(() => pathToPage(stripBase(window.location.pathname)));
   const [urlState, setUrlState] = useState({});
   const { branchId, switchBranch, loginMis, logout } = useBranch();
   const [showConflictModal, setShowConflictModal] = useState(false);
@@ -43,14 +61,14 @@ const AppContent = () => {
     else if (currentPage === 'staff-master') path = '/masters/staff';
     
     // Build URL with query params from urlState
-    const search = Object.keys(urlState).length > 0 
+    const search = Object.keys(urlState).length > 0
       ? '?' + new URLSearchParams(urlState).toString()
       : window.location.search;
-    const newUrl = path + search;
-    
+
     const currentPath = window.location.pathname;
-    if (currentPath !== path || window.location.search !== search) {
-      window.history.pushState({}, '', newUrl);
+    const newFullPath = withBase(path);
+    if (currentPath !== newFullPath || window.location.search !== search) {
+      window.history.pushState({}, '', newFullPath + search);
       // Dispatch custom event so useQueryParams can detect the URL change
       const event = new Event('pushstate');
       window.dispatchEvent(event);
@@ -60,7 +78,7 @@ const AppContent = () => {
   // Handle browser back/forward
   useEffect(() => {
     const onPop = () => {
-      const path = window.location.pathname;
+      const path = stripBase(window.location.pathname);
       // Map URL paths back to page IDs
       const pageId = pathToPage(path);
 

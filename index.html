@@ -5,6 +5,30 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>armoraa-clinic</title>
+    <script>
+      // --- SPA deep-link support on static hosts (GitHub Pages etc.) ---
+      // public/404.html stores the originally requested URL in
+      // sessionStorage and redirects here. We restore that URL with
+      // history.replaceState so the SPA picks up the correct route while
+      // all assets keep loading from the real document location.
+      // __APP_BASE__ is captured BEFORE restoring, so runtime fetches
+      // (version.json etc.) resolve against the true deployment root even
+      // when the visible URL is a deep link.
+      (function () {
+        var l = window.location;
+        window.__APP_BASE__ = l.pathname.replace(/[^/]*$/, '') || '/';
+        try {
+          var redirect = sessionStorage.getItem('spa-redirect');
+          if (redirect) {
+            sessionStorage.removeItem('spa-redirect');
+            var target = new URL(redirect);
+            if (target.origin === l.origin) {
+              window.history.replaceState(null, '', target.pathname + target.search + target.hash);
+            }
+          }
+        } catch (e) { /* ignore */ }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

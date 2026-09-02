@@ -27,7 +27,7 @@ export default function UpdatePrompt() {
 
     const checkForUpdate = async () => {
       try {
-        const res = await fetch(`/version.json?t=${Date.now()}`, { cache: 'no-store' });
+        const res = await fetch(`${window.__APP_BASE__ || '/'}version.json?t=${Date.now()}`, { cache: 'no-store' });
         if (!res.ok) return;
         const data = await res.json();
         if (!disposed && data && data.version && data.version !== __BUILD_ID__) {

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Redirecting…</title>
+    <script>
+      // Static-host SPA fallback: the server (e.g. GitHub Pages) serves this
+      // file for any deep link it can't find. Remember where the user wanted
+      // to go and bounce to the app's root document, which restores the route
+      // on load (see the snippet in index.html).
+      (function () {
+        try {
+          sessionStorage.setItem('spa-redirect', window.location.href);
+          // Root of the deployment = directory containing this 404 page.
+          var root = window.location.pathname.replace(/[^/]*$/, '/');
+          window.location.replace(root);
+        } catch (e) {
+          window.location.href = '/';
+        }
+      })();
+    </script>
+  </head>
+  <body></body>
+</html>

@@ -6,8 +6,24 @@ import { endSession } from './services/sessionApi';
 import UpdatePrompt from './components/UpdatePrompt';
 import './App.css';
 
+const pathToPage = (path) => {
+  if (path === '/' || path === '') return 'overview';
+  if (path === '/billing-log') return 'billing-log';
+  if (path === '/billing-log/all-bills') return 'all-bills';
+  if (path === '/billable-consumables') return 'billable';
+  if (path === '/non-billable-consumables') return 'non-billable';
+  if (path === '/reports') return 'reports';
+  if (path === '/customization') return 'customization';
+  if (path === '/stock-management') return 'stock-management';
+  if (path === '/masters/doctors') return 'doctors-master';
+  if (path === '/masters/staff') return 'staff-master';
+  return 'overview';
+};
+
 const AppContent = () => {
-  const [currentPage, setCurrentPage] = useState('overview');
+  // Start on the page matching the URL (supports reloads / shared links on
+  // static hosts — index.html restores the deep-link before we get here).
+  const [currentPage, setCurrentPage] = useState(() => pathToPage(window.location.pathname));
   const [urlState, setUrlState] = useState({});
   const { branchId, switchBranch, loginMis, logout } = useBranch();
   const [showConflictModal, setShowConflictModal] = useState(false);
@@ -46,18 +62,8 @@ const AppContent = () => {
     const onPop = () => {
       const path = window.location.pathname;
       // Map URL paths back to page IDs
-      let pageId = 'overview';
-      if (path === '/' || path === '') pageId = 'overview';
-      else if (path === '/billing-log') pageId = 'billing-log';
-      else if (path === '/billing-log/all-bills') pageId = 'all-bills';
-      else if (path === '/billable-consumables') pageId = 'billable';
-      else if (path === '/non-billable-consumables') pageId = 'non-billable';
-      else if (path === '/reports') pageId = 'reports';
-      else if (path === '/customization') pageId = 'customization';
-      else if (path === '/stock-management') pageId = 'stock-management';
-      else if (path === '/masters/doctors') pageId = 'doctors-master';
-      else if (path === '/masters/staff') pageId = 'staff-master';
-      
+      const pageId = pathToPage(path);
+
       if (pageId !== currentPage) {
         setCurrentPage(pageId);
       }

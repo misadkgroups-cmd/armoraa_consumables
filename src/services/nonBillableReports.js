@@ -231,8 +231,9 @@ export async function getDetailedNonBillableReport(filters = {}) {
 
 /**
  * Summary Report: aggregated consumption counts grouped by Consumable Name.
- * Shows Completed Qty, Incomplete Qty, Total Registry Count, Service Usage Count,
- * Opening Stock, Received, Used, and Closing Stock.
+ * Shows Completed Qty, Incomplete Qty, Total Registry Count, Opening Stock,
+ * Received, Used, Closing Stock, plus COMPLETE COST (completed qty * unit cost)
+ * and INCOMPLETE COST (incomplete qty * unit cost).
  */
 export async function getSummaryNonBillableReport(filters = {}) {
   // 1. Fetch all master products so product names and costs are always available
@@ -259,11 +260,9 @@ export async function getSummaryNonBillableReport(filters = {}) {
   const { data: allRegistry } = await withRetry(() => registryQuery);
 
   const registryStatusByProduct = {}; // productId -> { completed: 0, incomplete: 0, total: 0 }
-  const registryIdToProductId = {};
 
   (allRegistry || []).forEach((reg) => {
     const pid = reg.product_id;
-    registryIdToProductId[reg.id] = pid;
     if (!registryStatusByProduct[pid]) {
       registryStatusByProduct[pid] = { completed: 0, incomplete: 0, total: 0 };
     }
@@ -275,75 +274,7 @@ export async function getSummaryNonBillableReport(filters = {}) {
     }
   });
 
-  // 3. Fetch service usage counts from billable_report
-  const usageByProduct = {}; // productId -> service count
-  try {
-    let query = supabase
-      .from('billable_report')
-      .select(`
-        id,
-        billable_report_consumables!inner (
-          id,
-          product_type,
-          consumable_id,
-          is_non_billable,
-          registry_id
-        )
-      `);
-
-    if (filters.branchId) query = query.eq('branch_id', filters.branchId);
-    if (filters.startDate) query = query.gte('report_date', filters.startDate);
-    if (filters.endDate) query = query.lte('report_date', filters.endDate);
-
-    const { data: reports, error } = await withRetry(() => query);
-    if (error) throw error;
-
-    (reports || []).forEach((report) => {
-      (report.billable_report_consumables || []).forEach((item) => {
-        if (item.is_non_billable && item.registry_id) {
-          const pid = registryIdToProductId[item.registry_id] || item.consumable_id;
-          if (pid) {
-            usageByProduct[pid] = (usageByProduct[pid] || 0) + 1;
-          }
-        }
-      });
-    });
-  } catch (normalizedError) {
-    // Fallback: Query legacy 14-slot format
-    try {
-      const registryFields = [];
-      for (let i = 1; i <= 14; i++) {
-        registryFields.push(`non_billable_registry_id_${i}`);
-      }
-
-      let query = supabase
-        .from('billable_report')
-        .select(`id, ${registryFields.join(', ')}`);
-
-      if (filters.branchId) query = query.eq('branch_id', filters.branchId);
-      if (filters.startDate) query = query.gte('report_date', filters.startDate);
-      if (filters.endDate) query = query.lte('report_date', filters.endDate);
-
-      const { data: reports } = await withRetry(() => query);
-      if (reports) {
-        reports.forEach((report) => {
-          for (let i = 1; i <= 14; i++) {
-            const registryId = report[`non_billable_registry_id_${i}`];
-            if (registryId) {
-              const pid = registryIdToProductId[registryId];
-              if (pid) {
-                usageByProduct[pid] = (usageByProduct[pid] || 0) + 1;
-              }
-            }
-          }
-        });
-      }
-    } catch (legacyError) {
-      console.error('Error fetching summary usage from legacy columns:', legacyError);
-    }
-  }
-
-  // 4. Fetch current stock levels
+  // 3. Fetch current stock levels
   let stockQuery = supabase
     .from('non_billable_stock')
     .select('consumable_id, available_stock');
@@ -356,10 +287,9 @@ export async function getSummaryNonBillableReport(filters = {}) {
     stockMap[s.consumable_id] = Number(s.available_stock) || 0;
   });
 
-  // 5. Aggregate summary per product
+  // 4. Aggregate summary per product
   const allProductIds = new Set([
     ...Object.keys(registryStatusByProduct).map(Number),
-    ...Object.keys(usageByProduct).map(Number),
     ...Object.keys(stockMap).map(Number),
   ]);
 
@@ -371,24 +301,24 @@ export async function getSummaryNonBillableReport(filters = {}) {
 
     const productName = product.product_name;
     const regCounts = registryStatusByProduct[pid] || { completed: 0, incomplete: 0, total: 0 };
-    const serviceUsageCount = usageByProduct[pid] || 0;
     const closingStock = stockMap[pid] || 0;
     const openingStock = closingStock + regCounts.total;
     const unitCost = Number(product.cost) || 0;
-    const totalCost = serviceUsageCount * unitCost;
+    const completeCost = regCounts.completed * unitCost;
+    const incompleteCost = regCounts.incomplete * unitCost;
 
-    if (regCounts.total > 0 || serviceUsageCount > 0 || closingStock > 0) {
+    if (regCounts.total > 0 || closingStock > 0) {
       summaryGroup[productName] = {
         'NON-BILLABLE CONSUMABLE': productName,
         'COMPLETED QTY': regCounts.completed,
         'INCOMPLETE QTY': regCounts.incomplete,
         'TOTAL REGISTRY COUNT': regCounts.total,
-        'SERVICE USAGE COUNT': serviceUsageCount,
         'OPENING STOCK': openingStock,
         'RECEIVED': 0,
         'USED': regCounts.total,
         'CLOSING STOCK': closingStock,
-        'TOTAL COST': totalCost,
+        'COMPLETE COST': completeCost,
+        'INCOMPLETE COST': incompleteCost,
       };
     }
   });

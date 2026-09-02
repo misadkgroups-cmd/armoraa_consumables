@@ -551,24 +551,24 @@ const Reports = () => {
           'COMPLETED QTY',
           'INCOMPLETE QTY',
           'TOTAL REGISTRY COUNT',
-          'SERVICE USAGE COUNT',
           'OPENING STOCK',
           'RECEIVED',
           'USED',
           'CLOSING STOCK',
-          'TOTAL COST',
+          'COMPLETE COST',
+          'INCOMPLETE COST',
         ];
         rows = nbData.map((r) => [
           r['NON-BILLABLE CONSUMABLE'] || '-',
           r['COMPLETED QTY'] || 0,
           r['INCOMPLETE QTY'] || 0,
           r['TOTAL REGISTRY COUNT'] || 0,
-          r['SERVICE USAGE COUNT'] || 0,
           r['OPENING STOCK'] || 0,
           r['RECEIVED'] || 0,
           r['USED'] || 0,
           r['CLOSING STOCK'] || 0,
-          r['TOTAL COST'] || 0,
+          Number(r['COMPLETE COST'] || 0).toFixed(2),
+          Number(r['INCOMPLETE COST'] || 0).toFixed(2),
         ]);
       } else {
         headers = [
@@ -664,12 +664,12 @@ const Reports = () => {
           'COMPLETED QTY': r['COMPLETED QTY'] || 0,
           'INCOMPLETE QTY': r['INCOMPLETE QTY'] || 0,
           'TOTAL REGISTRY COUNT': r['TOTAL REGISTRY COUNT'] || 0,
-          'SERVICE USAGE COUNT': r['SERVICE USAGE COUNT'] || 0,
           'OPENING STOCK': r['OPENING STOCK'] || 0,
           'RECEIVED': r['RECEIVED'] || 0,
           'USED': r['USED'] || 0,
           'CLOSING STOCK': r['CLOSING STOCK'] || 0,
-          'TOTAL COST': r['TOTAL COST'] || 0,
+          'COMPLETE COST': Number(r['COMPLETE COST'] || 0).toFixed(2),
+          'INCOMPLETE COST': Number(r['INCOMPLETE COST'] || 0).toFixed(2),
         }));
       } else {
         rows = nbData.map((r) => ({
@@ -1211,12 +1211,12 @@ const Reports = () => {
                           <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Completed Qty</th>
                           <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Incomplete Qty</th>
                           <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Total Registry Count</th>
-                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Service Usage Count</th>
                           <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Opening Stock</th>
                           <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Received</th>
                           <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Used</th>
                           <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Closing Stock</th>
-                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-right">Total Cost</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-right">Complete Cost</th>
+                          <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-right">Incomplete Cost</th>
                         </>
                       ) : (
                         <>
@@ -1248,12 +1248,12 @@ const Reports = () => {
                             <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['COMPLETED QTY'] || 0}</td>
                             <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['INCOMPLETE QTY'] || 0}</td>
                             <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['TOTAL REGISTRY COUNT'] || 0}</td>
-                            <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['SERVICE USAGE COUNT'] || 0}</td>
                             <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['OPENING STOCK'] || 0}</td>
                             <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['RECEIVED'] || 0}</td>
                             <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['USED'] || 0}</td>
                             <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['CLOSING STOCK'] || 0}</td>
-                            <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row['TOTAL COST'] ? `$${row['TOTAL COST']}` : '$0.00'}</td>
+                            <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{`$${Number(row['COMPLETE COST'] || 0).toFixed(2)}`}</td>
+                            <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{`$${Number(row['INCOMPLETE COST'] || 0).toFixed(2)}`}</td>
                           </tr>
                         ) : (
                           <tr key={i} className="hover:bg-gray-50 transition-colors">

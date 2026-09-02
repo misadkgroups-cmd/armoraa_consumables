@@ -6,6 +6,7 @@ import SearchableDropdown from '../components/SearchableDropdown';
 import * as auditApi from '../services/auditApi';
 import AuditTimelineModal from '../components/AuditTimelineModal';
 import BillDetailsModal from '../components/BillDetailsModal';
+import { getTodayLocal } from '../utils/dateUtils';
 
 const STATUS_BADGE = {
   Complete: { bg: '#D1FAE5', color: '#065F46', border: '#A7F3D0' },
@@ -54,7 +55,7 @@ export default function AllBills({ onNavigate, urlState }) {
     patient_name: '',
     rendering_doctor_id: '',
     staff_id: '',
-    service_date: new Date().toISOString().split('T')[0],
+    service_date: getTodayLocal(),
   });
   const [formErrors, setFormErrors] = useState({});
   const [serviceRows, setServiceRows] = useState([]);
@@ -88,11 +89,18 @@ export default function AllBills({ onNavigate, urlState }) {
     }
   }, [serviceRows]);
 
+  // One-shot guard: never re-open edit mode for the same request. Without this,
+  // every bills-list refresh re-fires handleEditBill and resets the form,
+  // wiping the user's selected service date while they are mid-edit.
+  const editRequestHandledRef = useRef(null);
+
   // Check URL for edit parameter
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const editBillId = params.get('edit');
     if (editBillId && bills.length > 0) {
+      if (editRequestHandledRef.current === editBillId) return;
+      editRequestHandledRef.current = editBillId;
       const billToEdit = bills.find(b => b.id === Number(editBillId));
       if (billToEdit) {
         handleEditBill(billToEdit);
@@ -353,12 +361,14 @@ export default function AllBills({ onNavigate, urlState }) {
 
   // Edit must happen on the Billing Log entry page, NOT inline here in Detailed Log.
   // Navigate to Billing Log in edit mode for the selected bill.
+  // `return_to: 'all-bills'` tells BillingLog to send the user BACK here after
+  // they click Update Bill (filters survive via sessionStorage).
   const handleEditInBillingLog = (bill) => {
     if (onNavigate) {
-      onNavigate('billing-log', { edit_bill_id: String(bill.id) });
+      onNavigate('billing-log', { edit_bill_id: String(bill.id), return_to: 'all-bills' });
     } else {
       // Standalone fallback: full reload directly onto Billing Log with the edit param
-      window.location.href = `/billing-log?edit_bill_id=${bill.id}`;
+      window.location.href = `/billing-log?edit_bill_id=${bill.id}&return_to=all-bills`;
     }
   };
 
@@ -435,44 +445,57 @@ export default function AllBills({ onNavigate, urlState }) {
           .eq('id', editingBillId);
         if (updateError) throw updateError;
 
-        // Delete existing bill_services and recreate
-        // NOTE: The delete must succeed before inserting the new rows, otherwise
-        // the removed services would stay in the DB alongside the recreated ones
-        // (making each "remove service" edit INCREASE the service count).
-        // First remove child consumable rows so FK constraints cannot block the delete,
-        // then fail hard if either delete/insert fails.
+        // Sync bill_services with the form WITHOUT wiping existing data.
+        // Previously EVERY edit deleted all bill_services (and their child
+        // bill_service_consumables) and recreated them — so simply changing
+        // the date of service reset the bill to Incomplete and destroyed all
+        // saved consumables. Now we diff: reuse matching services (preserving
+        // consumables/status), remove deleted ones, insert new ones.
         const { data: existingServices, error: fetchSvcError } = await supabase
           .from('bill_services')
-          .select('id')
+          .select('id, service_id')
           .eq('bill_id', editingBillId);
         if (fetchSvcError) throw fetchSvcError;
 
-        const existingServiceIds = (existingServices || []).map(bs => bs.id);
-        if (existingServiceIds.length > 0) {
+        // Match each form row to an existing service with the same service_id
+        // (each existing row can only be reused once, to support duplicates).
+        const reusable = [...(existingServices || [])];
+        const usedExistingIds = new Set();
+        const addedRows = [];
+        serviceRows.forEach((row) => {
+          const match = reusable.find(bs => bs.service_id === parseInt(row.service_id) && !usedExistingIds.has(bs.id));
+          if (match) usedExistingIds.add(match.id);
+          else addedRows.push(row);
+        });
+
+        // Remove services deleted from the form (and their child consumables)
+        const removedIds = reusable.filter(bs => !usedExistingIds.has(bs.id)).map(bs => bs.id);
+        if (removedIds.length > 0) {
           const { error: bscDeleteError } = await supabase
             .from('bill_service_consumables')
             .delete()
-            .in('bill_service_id', existingServiceIds);
+            .in('bill_service_id', removedIds);
           if (bscDeleteError) throw bscDeleteError;
 
           const { error: servicesDeleteError } = await supabase
             .from('bill_services')
             .delete()
-            .in('id', existingServiceIds);
+            .in('id', removedIds);
           if (servicesDeleteError) throw servicesDeleteError;
         }
 
-        // Create new bill_services
-        const billServicesPayload = serviceRows.map(row => ({
-          bill_id: editingBillId,
-          service_id: parseInt(row.service_id),
-          service_name: row.service_name,
-          service_status: 'Pending',
-          consumable_completed: false,
-        }));
-
-        const { error: servicesError } = await supabase.from('bill_services').insert(billServicesPayload);
-        if (servicesError) throw servicesError;
+        // Insert only genuinely NEW services
+        if (addedRows.length > 0) {
+          const billServicesPayload = addedRows.map(row => ({
+            bill_id: editingBillId,
+            service_id: parseInt(row.service_id),
+            service_name: row.service_name,
+            service_status: 'Pending',
+            consumable_completed: false,
+          }));
+          const { error: servicesError } = await supabase.from('bill_services').insert(billServicesPayload);
+          if (servicesError) throw servicesError;
+        }
 
         const username = localStorage.getItem('username') || 'System';
         // Log activity for bill update (production activity_logs: username,
@@ -591,7 +614,7 @@ export default function AllBills({ onNavigate, urlState }) {
       patient_name: '',
       rendering_doctor_id: '',
       staff_id: '',
-      service_date: new Date().toISOString().split('T')[0],
+      service_date: getTodayLocal(),
     });
     setServiceRows([{ id: Date.now(), service_id: '', service_name: '' }]);
     setFormErrors({});

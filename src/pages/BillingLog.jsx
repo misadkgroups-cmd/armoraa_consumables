@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
 import SearchableDropdown from '../components/SearchableDropdown';
@@ -6,6 +6,7 @@ import { Eye, Pencil, Trash2 } from 'lucide-react';
 import * as auditApi from '../services/auditApi';
 import AuditTimelineModal from '../components/AuditTimelineModal';
 import BillDetailsModal from '../components/BillDetailsModal';
+import { getTodayLocal } from '../utils/dateUtils';
 
 const FIELD_LABEL = {
   fontSize: '11px',
@@ -50,7 +51,7 @@ export default function BillingLog({ onNavigate, urlState }) {
     patient_name: '',
     rendering_doctor_id: '',
     staff_id: '',
-    service_date: new Date().toISOString().split('T')[0],
+    service_date: getTodayLocal(),
   });
   const [formErrors, setFormErrors] = useState({});
   
@@ -72,9 +73,6 @@ export default function BillingLog({ onNavigate, urlState }) {
   // History modal state
   const [showHistoryModal, setShowHistoryModal] = useState(false);
 
-  useEffect(() => {
-    setFormData(prev => ({ ...prev, service_date: new Date().toISOString().split('T')[0] }));
-  }, []);
 
   useEffect(() => {
     if (branchId) {
@@ -290,44 +288,57 @@ export default function BillingLog({ onNavigate, urlState }) {
           .eq('id', editingBillId);
         if (updateError) throw updateError;
 
-        // Delete existing bill_services and recreate
-        // NOTE: The delete must succeed before inserting the new rows, otherwise
-        // the removed services would stay in the DB alongside the recreated ones
-        // (making each "remove service" edit INCREASE the service count).
-        // First remove child consumable rows so FK constraints cannot block the delete,
-        // then fail hard if either delete/insert fails.
+        // Sync bill_services with the form WITHOUT wiping existing data.
+        // Previously EVERY edit deleted all bill_services (and their child
+        // bill_service_consumables) and recreated them — so simply changing
+        // the date of service reset the bill to Incomplete and destroyed all
+        // saved consumables. Now we diff: reuse matching services (preserving
+        // consumables/status), remove deleted ones, insert new ones.
         const { data: existingServices, error: fetchSvcError } = await supabase
           .from('bill_services')
-          .select('id')
+          .select('id, service_id')
           .eq('bill_id', editingBillId);
         if (fetchSvcError) throw fetchSvcError;
 
-        const existingServiceIds = (existingServices || []).map(bs => bs.id);
-        if (existingServiceIds.length > 0) {
+        // Match each form row to an existing service with the same service_id
+        // (each existing row can only be reused once, to support duplicates).
+        const reusable = [...(existingServices || [])];
+        const usedExistingIds = new Set();
+        const addedRows = [];
+        serviceRows.forEach((row) => {
+          const match = reusable.find(bs => bs.service_id === parseInt(row.service_id) && !usedExistingIds.has(bs.id));
+          if (match) usedExistingIds.add(match.id);
+          else addedRows.push(row);
+        });
+
+        // Remove services deleted from the form (and their child consumables)
+        const removedIds = reusable.filter(bs => !usedExistingIds.has(bs.id)).map(bs => bs.id);
+        if (removedIds.length > 0) {
           const { error: bscDeleteError } = await supabase
             .from('bill_service_consumables')
             .delete()
-            .in('bill_service_id', existingServiceIds);
+            .in('bill_service_id', removedIds);
           if (bscDeleteError) throw bscDeleteError;
 
           const { error: servicesDeleteError } = await supabase
             .from('bill_services')
             .delete()
-            .in('id', existingServiceIds);
+            .in('id', removedIds);
           if (servicesDeleteError) throw servicesDeleteError;
         }
 
-        // Create new bill_services
-        const billServicesPayload = serviceRows.map(row => ({
-          bill_id: editingBillId,
-          service_id: parseInt(row.service_id),
-          service_name: row.service_name,
-          service_status: 'Pending',
-          consumable_completed: false,
-        }));
-
-        const { error: servicesError } = await supabase.from('bill_services').insert(billServicesPayload);
-        if (servicesError) throw servicesError;
+        // Insert only genuinely NEW services
+        if (addedRows.length > 0) {
+          const billServicesPayload = addedRows.map(row => ({
+            bill_id: editingBillId,
+            service_id: parseInt(row.service_id),
+            service_name: row.service_name,
+            service_status: 'Pending',
+            consumable_completed: false,
+          }));
+          const { error: servicesError } = await supabase.from('bill_services').insert(billServicesPayload);
+          if (servicesError) throw servicesError;
+        }
 
         const username = localStorage.getItem('username') || 'System';
         // Log activity for bill update (production activity_logs: username,
@@ -359,6 +370,18 @@ export default function BillingLog({ onNavigate, urlState }) {
         });
 
         showToast('success', 'Bill updated successfully');
+
+        // If this edit was started from the Detailed Log page, send the user
+        // straight back there. Their date/status filters are persisted in
+        // sessionStorage, so the view is exactly as they left it.
+        if (editReturnToRef.current === 'all-bills' && onNavigate) {
+          editReturnToRef.current = null;
+          editRequestHandledRef.current = null;
+          onNavigate('all-bills', {});
+          return;
+        }
+        editReturnToRef.current = null;
+
         setEditingBillId(null);
         resetForm();
         fetchBills();
@@ -451,7 +474,7 @@ export default function BillingLog({ onNavigate, urlState }) {
       patient_name: '',
       rendering_doctor_id: '',
       staff_id: '',
-      service_date: new Date().toISOString().split('T')[0],
+      service_date: getTodayLocal(),
     });
     setServiceRows([{ id: Date.now(), service_id: '', service_name: '' }]);
     setFormErrors({});
@@ -720,6 +743,15 @@ export default function BillingLog({ onNavigate, urlState }) {
     );
   };
 
+  // One-shot guard: never re-open edit mode for the same request. Without this,
+  // every bills-list refresh (save, filter change) re-fires handleEditBill and
+  // resets the form — wiping the user's selected service date back to the
+  // stored value while they are mid-edit.
+  const editRequestHandledRef = useRef(null);
+  // Where to navigate back to after the user updates the edited bill
+  // ('all-bills' when the edit was started from the Detailed Log page).
+  const editReturnToRef = useRef(null);
+
   // Check for an incoming "edit this bill" request AFTER handleEditBill is defined.
   // Sources:
   //   (a) SPA navigation from Detailed Log: onNavigate('billing-log', { edit_bill_id })
@@ -735,6 +767,9 @@ export default function BillingLog({ onNavigate, urlState }) {
     const paramId = params.get('edit_bill_id') ? Number(params.get('edit_bill_id')) : null;
     const legacyBillNo = params.get('edit'); // legacy: match by bill_no
     const editBillId = stateId || paramId;
+    // Where to return after a successful update (e.g. 'all-bills' when the edit
+    // was started from the Detailed Log page).
+    const returnTo = (urlState && urlState.return_to) || params.get('return_to') || null;
 
     if (!editBillId && !legacyBillNo) return;
     if (bills.length === 0 && !editBillId) return; // wait until list loads for bill_no lookup
@@ -750,6 +785,11 @@ export default function BillingLog({ onNavigate, urlState }) {
 
     const openEditor = async () => {
       try {
+        const requestKey = String(editBillId || `legacy-${legacyBillNo}`);
+        if (editRequestHandledRef.current === requestKey) return;
+        editRequestHandledRef.current = requestKey;
+        editReturnToRef.current = returnTo;
+
         let billToEdit = null;
 
         if (editBillId) {
@@ -783,6 +823,8 @@ export default function BillingLog({ onNavigate, urlState }) {
         clearRequest();
       } catch (error) {
         console.error('Error opening bill for editing:', error);
+        editRequestHandledRef.current = null; // allow retry on a genuine failure
+        editReturnToRef.current = null;
         if (!cancelled) {
           showToast('error', error.message || 'Could not open the bill for editing');
           clearRequest();

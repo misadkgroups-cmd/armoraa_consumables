@@ -3,6 +3,7 @@ import { BranchProvider, useBranch } from './context/BranchContext';
 import Welcome from './pages/Welcome';
 import Dashboard from './pages/Dashboard';
 import { endSession } from './services/sessionApi';
+import UpdatePrompt from './components/UpdatePrompt';
 import './App.css';
 
 const AppContent = () => {
@@ -146,12 +147,15 @@ const AppContent = () => {
   };
 
   return (
-    <Dashboard
-      currentPage={currentPage}
-      urlState={urlState}
-      onNavigate={navigateWithState}
-      onLogout={handleLogout}
-    />
+    <>
+      <Dashboard
+        currentPage={currentPage}
+        urlState={urlState}
+        onNavigate={navigateWithState}
+        onLogout={handleLogout}
+      />
+      <UpdatePrompt />
+    </>
   );
 };
 

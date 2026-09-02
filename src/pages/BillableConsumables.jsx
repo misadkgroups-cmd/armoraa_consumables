@@ -4,6 +4,7 @@ import { useBranch } from '../context/BranchContext';
 import SearchableDropdown from '../components/SearchableDropdown';
 import * as auditApi from '../services/auditApi';
 import { prepareSavePayload } from '../utils/billableReportPayload';
+import { getTodayLocal } from '../utils/dateUtils';
 
 const PARAM_KEYS = [
   'bill_no', 'uid', 'service_id', 'service_name',
@@ -86,7 +87,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
   const [billableStockMap, setBillableStockMap] = useState({});
   const [rows, setRows] = useState([]);
   const [toast, setToast] = useState(null);
-  const [reportDate, setReportDate] = useState(query.service_date || new Date().toISOString().split('T')[0]);
+  const [reportDate, setReportDate] = useState(query.service_date || getTodayLocal());
   const [machineryLocked, setMachineryLocked] = useState(false);
   const [noMachineryMapping, setNoMachineryMapping] = useState(false);
   const billIdRef = useRef(null);
@@ -1038,7 +1039,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
     // Clear all form state
     setBillId(''); setUid(''); setService(''); setMachinery(''); setMachines([]); 
     setMachineryLocked(false); setNoMachineryMapping(false); setRows([]);
-    setReportDate(new Date().toISOString().split('T')[0]);
+    setReportDate(getTodayLocal());
     // Also clear URL params so they don't re-populate the form
     if (window.location.search) {
       const clean = window.location.pathname;

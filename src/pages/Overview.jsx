@@ -3,6 +3,7 @@ import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
 import Chart from 'react-apexcharts';
 import { motion } from 'framer-motion';
+import { getTodayLocal, formatDateLocal } from '../utils/dateUtils';
 import {
   Calendar, Activity, FileText,
   TrendingUp, CheckCircle, Clock, ChevronDown
@@ -142,14 +143,14 @@ const Overview = () => {
     else if (dateRange === 'last30') start = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
     else if (dateRange === 'thisMonth') start = new Date(today.getFullYear(), today.getMonth(), 1);
     else if (dateRange === 'custom' && customStart && customEnd) { start = new Date(customStart); end = new Date(customEnd); }
-    return { preset: dateRange, start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0] };
+    return { preset: dateRange, start: formatDateLocal(start), end: formatDateLocal(end) };
   }, [dateRange, customStart, customEnd]);
 
   // Applied range — the ONLY thing that triggers a refetch (via Apply / Clear)
   const defaultRange = useMemo(() => {
     const today = new Date();
     const start = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-    return { preset: 'last7', start: start.toISOString().split('T')[0], end: today.toISOString().split('T')[0] };
+    return { preset: 'last7', start: formatDateLocal(start), end: formatDateLocal(today) };
   }, []);
   const [appliedRange, setAppliedRange] = useState(storedFilter
     ? { preset: storedFilter.preset, start: storedFilter.start, end: storedFilter.end }
@@ -215,8 +216,8 @@ const Overview = () => {
 
       // Stats — all counts are relative to the SELECTED date range (incl. custom),
       // so every card responds to the filter.
-      const rawWeekStart = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-      const rawMonthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+      const rawWeekStart = formatDateLocal(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
+      const rawMonthStart = formatDateLocal(new Date(new Date().getFullYear(), new Date().getMonth(), 1));
       const lastWeekStart = rawWeekStart > start ? rawWeekStart : start; // clamp inside range
       const thisMonthStart = rawMonthStart > start ? rawMonthStart : start;
       const lastWeekCount = billsArray.filter(b => b.report_date >= lastWeekStart && b.report_date <= end).length;
@@ -224,7 +225,7 @@ const Overview = () => {
       const overallCount = billsArray.length;
 
       // Today's sessions (bills created today) & procedures (distinct services today)
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = getTodayLocal();
       const todayBills = billsArray.filter(b => b.report_date === todayStr);
       const todaysSessions = todayBills.length;
       const todaysProcedures = new Set(todayBills.map(b => b.service_id).filter(Boolean)).size;

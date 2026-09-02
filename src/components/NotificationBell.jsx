@@ -4,15 +4,27 @@ import { useBranch } from '../context/BranchContext';
 import * as stockApi from '../services/stockApi';
 
 const NotificationBell = ({ userId }) => {
-  const { branchId } = useBranch();
+  const { branchId, misMode } = useBranch();
   const [branchName, setBranchName] = useState('');
   const [branches, setBranches] = useState([]);
   const [transferNots, setTransferNots] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showDropdown, setShowDropdown] = useState(false);
   const [closing, setClosing] = useState(false);
+  // Dashboard branch filter (MIS only): null = All Branches
+  const [filterBranchId, setFilterBranchId] = useState(null);
   const dropdownRef = useRef(null);
   const bellRef = useRef(null);
+
+  useEffect(() => {
+    const onFilter = (e) => setFilterBranchId(e.detail === undefined ? null : e.detail);
+    window.addEventListener('dashboard-branch-filter', onFilter);
+    return () => window.removeEventListener('dashboard-branch-filter', onFilter);
+  }, []);
+
+  // MIS login -> follow the dashboard branch filter (null = all branches).
+  // Branch login -> always its own branch.
+  const effectiveBranchId = misMode ? filterBranchId : branchId;
 
   useEffect(() => {
     const load = async () => {
@@ -58,18 +70,18 @@ const NotificationBell = ({ userId }) => {
   }, [userId]);
 
   useEffect(() => {
-    if (!branchId) return;
     const load = async () => {
-      const incoming = await stockApi.getIncomingTransfers(branchId);
+      // effectiveBranchId === null (MIS + All Branches) -> ALL pending transfers
+      const incoming = await stockApi.getIncomingTransfers(effectiveBranchId);
       setTransferNots(incoming || []);
-      setUnreadCount(await stockApi.getUnreadTransferNotificationCount(branchId));
+      setUnreadCount(await stockApi.getUnreadTransferNotificationCount(effectiveBranchId));
     };
     load();
     const interval = setInterval(load, 30000);
     const handleFocus = () => load();
     window.addEventListener('focus', handleFocus);
     return () => { clearInterval(interval); window.removeEventListener('focus', handleFocus); };
-  }, [branchId]);
+  }, [effectiveBranchId]);
 
   const hasTransferNot = unreadCount > 0 || transferNots.length > 0;
 
@@ -97,9 +109,9 @@ const NotificationBell = ({ userId }) => {
   const handleConfirmReceive = async (transfer) => {
     const result = await stockApi.receiveTransfer(transfer.id, branchName || 'Branch User');
     if (result.success) {
-      const incoming = await stockApi.getIncomingTransfers(branchId);
+      const incoming = await stockApi.getIncomingTransfers(effectiveBranchId);
       setTransferNots(incoming || []);
-      setUnreadCount(await stockApi.getUnreadTransferNotificationCount(branchId));
+      setUnreadCount(await stockApi.getUnreadTransferNotificationCount(effectiveBranchId));
       alert('Transfer received successfully!');
     } else {
       alert(result.message || 'Failed to receive transfer');
@@ -107,9 +119,9 @@ const NotificationBell = ({ userId }) => {
   };
 
   const markAllRead = async () => {
-    await stockApi.markTransferNotificationsRead(branchId);
+    await stockApi.markTransferNotificationsRead(effectiveBranchId);
     setUnreadCount(0);
-    setTransferNots(await stockApi.getIncomingTransfers(branchId));
+    setTransferNots(await stockApi.getIncomingTransfers(effectiveBranchId));
   };
 
   const getPositionStyle = () => {
@@ -144,7 +156,16 @@ const NotificationBell = ({ userId }) => {
           style={getPositionStyle()}
         >
           <div className="notif-panel-header">
-            <h3 className="notif-panel-title">Stock Transfer Notifications</h3>
+            <div>
+              <h3 className="notif-panel-title">Stock Transfer Notifications</h3>
+              {misMode && (
+                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+                  {effectiveBranchId === null
+                    ? 'All Branches'
+                    : branchNameById(effectiveBranchId)}
+                </div>
+              )}
+            </div>
             {transferNots.length > 0 && (
               <button onClick={markAllRead} className="notif-panel-mark-read">
                 Mark All Read

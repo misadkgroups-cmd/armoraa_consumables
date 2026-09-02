@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { format } from 'date-fns';
 import * as XLSX from 'xlsx';
 import { supabase } from '../config/supabase';
@@ -8,6 +8,7 @@ import {
   getDetailedNonBillableReport,
   getSummaryNonBillableReport,
 } from '../services/nonBillableReports';
+import { getTransactionReport } from '../services/transactionReports';
 import { Search, Download, FileText, FileSpreadsheet, Trash2, RotateCcw } from 'lucide-react';
 
 const Reports = () => {
@@ -47,6 +48,30 @@ const Reports = () => {
   const [nbData, setNbData] = useState([]);
   const [nbLoading, setNbLoading] = useState(false);
   const [nbHasReport, setNbHasReport] = useState(false);
+
+  // Transaction state
+  const [trStart, setTrStart] = useState(
+    format(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd')
+  );
+  const [trEnd, setTrEnd] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [trBranches, setTrBranches] = useState([]); // multi-select; empty = all branches
+  const [trData, setTrData] = useState([]);
+  const [trLoading, setTrLoading] = useState(false);
+  const [trHasReport, setTrHasReport] = useState(false);
+  const [trBranchOpen, setTrBranchOpen] = useState(false);
+  const trBranchRef = useRef(null);
+
+  // Close the branch multi-select only when clicking outside of it
+  useEffect(() => {
+    if (!trBranchOpen) return;
+    const handleOutside = (e) => {
+      if (trBranchRef.current && !trBranchRef.current.contains(e.target)) {
+        setTrBranchOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [trBranchOpen]);
 
   // UI state
   const [toast, setToast] = useState(null);
@@ -524,6 +549,57 @@ const Reports = () => {
     if (reportType === 'non-billable') reloadNonBillable();
   }, [reportType, reloadNonBillable]);
 
+  // ============ TRANSACTION REPORT ============
+  const reloadTransaction = useCallback(async () => {
+    setTrLoading(true);
+    try {
+      const filters = { branchIds: trBranches, startDate: trStart, endDate: trEnd };
+      const rows = await getTransactionReport(filters);
+      setTrData(rows || []);
+      setTrHasReport(true);
+    } catch (e) {
+      console.error('Transaction report error', e);
+      setTrData([]);
+      setTrHasReport(true);
+    } finally {
+      setTrLoading(false);
+    }
+  }, [trStart, trEnd, trBranches]);
+
+  useEffect(() => {
+    if (reportType === 'transaction') reloadTransaction();
+  }, [reportType, reloadTransaction]);
+
+  const trSummary = (() => {
+    const s = { billableQty: 0, billableCost: 0, nonBillableQty: 0, nonBillableCost: 0 };
+    (trData || []).forEach((r) => {
+      if (r.productType === 'Billable') {
+        s.billableQty += Number(r.quantity) || 0;
+        s.billableCost += Number(r.totalCost) || 0;
+      } else {
+        s.nonBillableQty += Number(r.quantity) || 0;
+        s.nonBillableCost += Number(r.totalCost) || 0;
+      }
+    });
+    return s;
+  })();
+
+  const toggleTrBranch = (id) => {
+    setTrBranches((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  const clearTrFilters = () => {
+    setTrStart(format(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd'));
+    setTrEnd(format(new Date(), 'yyyy-MM-dd'));
+    setTrBranches([]);
+  };
+
+  const trBranchLabel = trBranches.length === 0
+    ? 'All Branches'
+    : trBranches.length === 1
+      ? (branches.find((b) => b.id === trBranches[0]) || {}).branch_name || '1 branch'
+      : `${trBranches.length} branches selected`;
+
   const clearBillableFilters = () => {
     setDateRange({
       start: format(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd'),
@@ -544,7 +620,22 @@ const Reports = () => {
   // ============ EXPORTS ============
   const downloadCSV = () => {
     let headers, rows;
-    if (reportType === 'non-billable') {
+    if (reportType === 'transaction') {
+      headers = [
+        'PRODUCT TYPE',
+        'PRODUCT',
+        'QUANTITY',
+        'UNIT COST',
+        'TOTAL COST',
+      ];
+      rows = trData.map((r) => [
+        r.productType || '-',
+        r.productName || '-',
+        r.quantity || 0,
+        Number(r.unitCost || 0).toFixed(2),
+        Number(r.totalCost || 0).toFixed(2),
+      ]);
+    } else if (reportType === 'non-billable') {
       if (nbReportMode === 'summary') {
         headers = [
           'NON-BILLABLE CONSUMABLE',
@@ -657,7 +748,15 @@ const Reports = () => {
 
   const downloadExcel = () => {
     let rows;
-    if (reportType === 'non-billable') {
+    if (reportType === 'transaction') {
+      rows = trData.map((r) => ({
+        'PRODUCT TYPE': r.productType || '-',
+        PRODUCT: r.productName || '-',
+        QUANTITY: r.quantity || 0,
+        'UNIT COST': Number(r.unitCost || 0).toFixed(2),
+        'TOTAL COST': Number(r.totalCost || 0).toFixed(2),
+      }));
+    } else if (reportType === 'non-billable') {
       if (nbReportMode === 'summary') {
         rows = nbData.map((r) => ({
           'NON-BILLABLE CONSUMABLE': r['NON-BILLABLE CONSUMABLE'] || '-',
@@ -730,7 +829,7 @@ const Reports = () => {
     XLSX.utils.book_append_sheet(
       workbook,
       worksheet,
-      reportType === 'non-billable' ? 'Non-Billable Report' : 'Billable Report'
+      reportType === 'non-billable' ? 'Non-Billable Report' : reportType === 'transaction' ? 'Transaction Report' : 'Billable Report'
     );
     XLSX.writeFile(workbook, `${reportType}-${billableReportView}-report-${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
   };
@@ -824,6 +923,29 @@ const Reports = () => {
             onMouseLeave={(e) => { if (reportType !== 'non-billable') e.target.style.color = '#6B7280'; }}
           >
             Non-Billable Report
+          </button>
+          <button
+            onClick={() => {
+              setReportType('transaction');
+              setTrHasReport(false);
+              setTrData([]);
+            }}
+            style={{
+              padding: '12px 24px',
+              fontSize: '14px',
+              fontWeight: reportType === 'transaction' ? 600 : 500,
+              color: reportType === 'transaction' ? '#7C5CFC' : '#6B7280',
+              background: 'transparent',
+              border: 'none',
+              borderBottom: reportType === 'transaction' ? '2px solid #7C5CFC' : '2px solid transparent',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              marginBottom: '0',
+            }}
+            onMouseEnter={(e) => { if (reportType !== 'transaction') e.target.style.color = '#374151'; }}
+            onMouseLeave={(e) => { if (reportType !== 'transaction') e.target.style.color = '#6B7280'; }}
+          >
+            Transaction Report
           </button>
         </div>
       </div>
@@ -1090,6 +1212,154 @@ const Reports = () => {
                               <Trash2 size={14} />
                             </button>
                           </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
+      ) : reportType === 'transaction' ? (
+        /* ================= TRANSACTION VIEW ================= */
+        <>
+          {/* Summary Header */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '16px' }}>
+            <div style={{ background: '#FFFFFF', border: '1px solid #E5E7EB', borderRadius: '12px', padding: '18px 20px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Billable Quantity</div>
+              <div style={{ fontSize: '26px', fontWeight: 700, color: '#1F2937', marginTop: '6px' }}>{trSummary.billableQty}</div>
+            </div>
+            <div style={{ background: '#FFFFFF', border: '1px solid #E5E7EB', borderRadius: '12px', padding: '18px 20px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Billable Cost</div>
+              <div style={{ fontSize: '26px', fontWeight: 700, color: '#7C5CFC', marginTop: '6px' }}>${Number(trSummary.billableCost).toFixed(2)}</div>
+            </div>
+            <div style={{ background: '#FFFFFF', border: '1px solid #E5E7EB', borderRadius: '12px', padding: '18px 20px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Non-Billable Quantity</div>
+              <div style={{ fontSize: '26px', fontWeight: 700, color: '#1F2937', marginTop: '6px' }}>{trSummary.nonBillableQty}</div>
+            </div>
+            <div style={{ background: '#FFFFFF', border: '1px solid #E5E7EB', borderRadius: '12px', padding: '18px 20px' }}>
+              <div style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Non-Billable Cost</div>
+              <div style={{ fontSize: '26px', fontWeight: 700, color: '#7C5CFC', marginTop: '6px' }}>${Number(trSummary.nonBillableCost).toFixed(2)}</div>
+            </div>
+          </div>
+
+          {/* Transaction Filter Card */}
+          <div style={{ background: '#FFFFFF', border: '1px solid #E5E7EB', borderRadius: '12px', padding: '24px', width: '100%' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+              <h2 style={{ fontSize: '14px', fontWeight: 700, color: '#1F2937', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Transaction Reports</h2>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1.4fr auto', gap: '16px', alignItems: 'end' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>From Date</label>
+                <input
+                  type="date"
+                  value={trStart}
+                  onChange={(e) => { setTrStart(e.target.value); setTrHasReport(false); }}
+                  style={{ width: '100%', height: '42px', padding: '0 12px', fontSize: '14px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#1F2937', outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>To Date</label>
+                <input
+                  type="date"
+                  value={trEnd}
+                  onChange={(e) => { setTrEnd(e.target.value); setTrHasReport(false); }}
+                  style={{ width: '100%', height: '42px', padding: '0 12px', fontSize: '14px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#1F2937', outline: 'none', boxSizing: 'border-box' }}
+                />
+              </div>
+              <div ref={trBranchRef} style={{ display: 'flex', flexDirection: 'column', gap: '6px', position: 'relative' }}>
+                <label style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Branches (Multi-Select)</label>
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={() => setTrBranchOpen((o) => !o)}
+                  disabled={trLoading}
+                  style={{ width: '100%', height: '42px', padding: '0 12px', fontSize: '14px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#1F2937', cursor: trLoading ? 'not-allowed' : 'pointer', textAlign: 'left', display: 'flex', alignItems: 'center', justifyContent: 'space-between', boxSizing: 'border-box' }}
+                >
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{trBranchLabel}</span>
+                  <span style={{ fontSize: '10px', color: '#6B7280' }}>▼</span>
+                </button>
+                {trBranchOpen && (
+                  <div
+                    onMouseDown={(e) => e.stopPropagation()}
+                    style={{ position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 30, background: '#FFFFFF', border: '1px solid #E5E7EB', borderRadius: '8px', boxShadow: '0 8px 24px rgba(0,0,0,0.12)', maxHeight: '240px', overflowY: 'auto', marginTop: '4px' }}
+                  >
+                    {branches.length === 0 && (
+                      <div style={{ padding: '10px 12px', fontSize: '13px', color: '#9CA3AF' }}>No branches available</div>
+                    )}
+                    {branches.map((b) => (
+                      <label
+                        key={b.id}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        style={{ display: 'flex', alignItems: 'center', gap: '10px', padding: '9px 12px', cursor: 'pointer', fontSize: '13px', color: '#1F2937' }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={trBranches.includes(b.id)}
+                          onChange={() => toggleTrBranch(b.id)}
+                          style={{ width: '15px', height: '15px', accentColor: '#7C5CFC', cursor: 'pointer' }}
+                        />
+                        {b.branch_name}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px', visibility: 'hidden' }}>Action</div>
+                <button onClick={reloadTransaction} disabled={trLoading} style={{ width: '160px', height: '42px', padding: '0 16px', background: '#7C5CFC', color: '#FFFFFF', fontSize: '13px', fontWeight: 600, border: 'none', borderRadius: '8px', cursor: trLoading ? 'not-allowed' : 'pointer', opacity: trLoading ? 0.5 : 1, whiteSpace: 'nowrap' }}>
+                  {trLoading ? 'Loading...' : 'Generate Report'}
+                </button>
+              </div>
+            </div>
+            {/* Action Links */}
+            <div style={{ display: 'flex', gap: '16px', marginTop: '18px' }}>
+              <button onClick={downloadCSV} disabled={!trData.length} style={{ padding: '7px 16px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#374151', fontSize: '13px', fontWeight: 500, cursor: !trData.length ? 'not-allowed' : 'pointer', opacity: !trData.length ? 0.4 : 1 }}>
+                Export CSV
+              </button>
+              <button onClick={downloadExcel} disabled={!trData.length} style={{ padding: '7px 16px', border: '1px solid #D1D5DB', borderRadius: '8px', background: '#FFFFFF', color: '#374151', fontSize: '13px', fontWeight: 500, cursor: !trData.length ? 'not-allowed' : 'pointer', opacity: !trData.length ? 0.4 : 1 }}>
+                Export Excel
+              </button>
+              <button onClick={clearTrFilters} style={{ padding: '7px 0', border: 'none', background: 'transparent', color: '#7C5CFC', fontSize: '13px', fontWeight: 600, cursor: 'pointer', marginLeft: 'auto' }}>
+                Clear Filters
+              </button>
+            </div>
+          </div>
+
+          {/* Transaction Table Output */}
+          {trHasReport && (
+            <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden" style={{ marginTop: '16px' }}>
+              <div className="overflow-x-auto w-full">
+                <table className="w-full text-left border-collapse" style={{ minWidth: 750 }}>
+                  <thead>
+                    <tr className="bg-gray-50 border-b border-gray-200">
+                      <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Type</th>
+                      <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">Product</th>
+                      <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-center">Quantity</th>
+                      <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-right">Unit Cost</th>
+                      <th className="px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap text-right">Total Cost</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {trData.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-10 text-center text-sm text-gray-400">
+                          No matching records found. Try changing the selected filters.
+                        </td>
+                      </tr>
+                    ) : (
+                      trData.map((row) => (
+                        <tr key={row.id} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-4 py-3 text-sm whitespace-nowrap">
+                            <span style={{ padding: '3px 10px', borderRadius: '999px', fontSize: '11px', fontWeight: 600, background: row.productType === 'Billable' ? '#EEF2FF' : '#FDF2F8', color: row.productType === 'Billable' ? '#4F46E5' : '#DB2777' }}>
+                              {row.productType || '-'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.productName || '-'}</td>
+                          <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row.quantity || 0}</td>
+                          <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-right whitespace-nowrap">${Number(row.unitCost || 0).toFixed(2)}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">${Number(row.totalCost || 0).toFixed(2)}</td>
                         </tr>
                       ))
                     )}

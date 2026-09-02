@@ -1,7 +1,6 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
-import BranchSwitcher from '../components/BranchSwitcher';
 import Chart from 'react-apexcharts';
 import { motion } from 'framer-motion';
 import {
@@ -55,15 +54,87 @@ const Sparkline = ({ data, color }) => {
 };
 
 const Overview = () => {
-  const { branchId } = useBranch();
-  const [dateRange, setDateRange] = useState('last7');
-  const [customStart, setCustomStart] = useState('');
-  const [customEnd, setCustomEnd] = useState('');
+  const { branchId, misMode, updateBranch } = useBranch();
+  // Date filter — persisted so it STICKS across navigation/remounts,
+  // exactly like the branch selection. Only Apply/Clear updates it.
+  const loadStoredDateFilter = () => {
+    try { return JSON.parse(localStorage.getItem('dashboard-date-filter')) || null; } catch { return null; }
+  };
+  const saveDateFilter = (f) => {
+    try { localStorage.setItem('dashboard-date-filter', JSON.stringify(f)); } catch { /* ignore */ }
+  };
+  const storedFilter = loadStoredDateFilter();
+  const [dateRange, setDateRange] = useState(storedFilter?.preset || 'last7');
+  const [customStart, setCustomStart] = useState(storedFilter?.customStart || '');
+  const [customEnd, setCustomEnd] = useState(storedFilter?.customEnd || '');
   const [showDatePicker, setShowDatePicker] = useState(false);
+  const datePickerRef = useRef(null);
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const getDateRange = useMemo(() => {
+  // ---- Single-select branch filter ----
+  // Initialized from the global branch so it STICKS: navigating away and back
+  // to the dashboard keeps the branch the user selected (it only changes when
+  // the user picks another branch).
+  const [branches, setBranches] = useState([]);
+  const [selectedBranch, setSelectedBranch] = useState(misMode ? (branchId ?? null) : null);
+  const [showBranchFilter, setShowBranchFilter] = useState(false);
+  const branchFilterRef = useRef(null);
+
+  // Broadcast the dashboard branch filter so the notification bell follows it
+  const notifyBranchFilter = (id) => {
+    window.dispatchEvent(new CustomEvent('dashboard-branch-filter', { detail: id }));
+  };
+  useEffect(() => { notifyBranchFilter(selectedBranch); }, [selectedBranch]);
+
+  // The dashboard branch selection drives the GLOBAL branch context:
+  // picking a branch here changes the data on ALL pages (Bills, Billing Log,
+  // Stock, Reports, consumables, etc.) to that branch.
+  useEffect(() => {
+    if (!misMode) return;
+    if (selectedBranch !== null) {
+      const b = branches.find(x => x.id === selectedBranch);
+      updateBranch(selectedBranch, b ? b.branch_name : `Branch ${selectedBranch}`);
+    } else {
+      updateBranch(null, 'MIS');
+    }
+  }, [selectedBranch, misMode, branches]);
+
+  useEffect(() => {
+    const fetchBranches = async () => {
+      try {
+        const { data: br } = await supabase.from('branches').select('id, branch_name');
+        if (br && br.length > 0) {
+          const list = br.map(b => ({ id: b.id, branch_name: b.branch_name || `Branch ${b.id}` }));
+          setBranches(list);
+          // Always have a concrete branch selected — no "All Branches" mode
+          setSelectedBranch(prev => {
+            if (prev !== null && list.some(x => x.id === prev)) return prev; // keep user's selection
+            // fall back to the global branch first, then the first branch
+            const globalMatch = branchId && list.find(x => x.id === branchId);
+            return globalMatch ? globalMatch.id : list[0].id;
+          });
+        }
+      } catch { /* ignore */ }
+    };
+    if (misMode) fetchBranches();
+  }, [misMode]);
+
+  // Close date picker / branch filter on outside click
+  useEffect(() => {
+    if (!showDatePicker && !showBranchFilter) return;
+    const onDocClick = (e) => {
+      if (datePickerRef.current && !datePickerRef.current.contains(e.target)) setShowDatePicker(false);
+      if (branchFilterRef.current && !branchFilterRef.current.contains(e.target)) setShowBranchFilter(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [showDatePicker, showBranchFilter]);
+
+  const branchFilterLabel = (branches.find(b => b.id === selectedBranch) || {}).branch_name || 'Branch';
+
+  // Pending (draft) range edited in the picker — nothing refetches until Apply
+  const pendingRange = useMemo(() => {
     const today = new Date();
     let start = new Date();
     let end = today;
@@ -71,36 +142,55 @@ const Overview = () => {
     else if (dateRange === 'last30') start = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
     else if (dateRange === 'thisMonth') start = new Date(today.getFullYear(), today.getMonth(), 1);
     else if (dateRange === 'custom' && customStart && customEnd) { start = new Date(customStart); end = new Date(customEnd); }
-    return { start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0] };
+    return { preset: dateRange, start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0] };
   }, [dateRange, customStart, customEnd]);
 
-  const dateRangeLabel = useMemo(() => {
-    const { start, end } = getDateRange;
-    if (dateRange === 'last7') return 'Last 7 Days';
-    if (dateRange === 'last30') return 'Last 30 Days';
-    if (dateRange === 'thisMonth') return 'This Month';
-    if (dateRange === 'custom') return `${new Date(start).toLocaleDateString('en-GB')} - ${new Date(end).toLocaleDateString('en-GB')}`;
-    return 'Select Range';
-  }, [dateRange, getDateRange]);
+  // Applied range — the ONLY thing that triggers a refetch (via Apply / Clear)
+  const defaultRange = useMemo(() => {
+    const today = new Date();
+    const start = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+    return { preset: 'last7', start: start.toISOString().split('T')[0], end: today.toISOString().split('T')[0] };
+  }, []);
+  const [appliedRange, setAppliedRange] = useState(storedFilter
+    ? { preset: storedFilter.preset, start: storedFilter.start, end: storedFilter.end }
+    : defaultRange);
+
+  const pendingDirty = pendingRange.preset !== appliedRange.preset
+    || pendingRange.start !== appliedRange.start
+    || pendingRange.end !== appliedRange.end;
+
+  const appliedLabel = useMemo(() => {
+    if (appliedRange.preset === 'last7') return 'Last 7 Days';
+    if (appliedRange.preset === 'last30') return 'Last 30 Days';
+    if (appliedRange.preset === 'thisMonth') return 'This Month';
+    return `${new Date(appliedRange.start).toLocaleDateString('en-GB')} - ${new Date(appliedRange.end).toLocaleDateString('en-GB')}`;
+  }, [appliedRange]);
 
   useEffect(() => {
-    if (branchId) fetchDashboard();
-  }, [branchId, getDateRange]);
+    if (branchId || misMode) fetchDashboard();
+  }, [branchId, misMode, appliedRange, selectedBranch]);
 
   const fetchDashboard = async () => {
     setLoading(true);
     try {
-      const { start, end } = getDateRange;
-      let query = supabase.from('billable_report').select('*').gte('report_date', start).lte('report_date', end);
-      if (branchId) query = query.eq('branch_id', branchId);
+      const { start, end } = appliedRange;
+      const applyBranchFilter = (q) => {
+        if (selectedBranch !== null) return q.eq('branch_id', selectedBranch);
+        if (branchId) return q.eq('branch_id', branchId);
+        return q;
+      };
+      let query = applyBranchFilter(supabase.from('billable_report').select('*')).gte('report_date', start).lte('report_date', end);
       const { data: bills } = await query;
       const billsArray = bills || [];
 
       // Billing Log metrics
       let billingArray = [];
       try {
-        let billingQuery = supabase.from('billing_log').select('*');
-        if (branchId) billingQuery = billingQuery.eq('branch_id', branchId);
+        // Filter by BILL DATE (service_date), not created date
+        let billingQuery = supabase.from('billing_log').select('*')
+          .gte('service_date', start)
+          .lte('service_date', end);
+        billingQuery = applyBranchFilter(billingQuery);
         const { data: billingLogs } = await billingQuery;
         billingArray = billingLogs || [];
       } catch (e) {
@@ -123,11 +213,14 @@ const Overview = () => {
         billServicesArray = [];
       }
 
-      // Stats
-      const lastWeekStart = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-      const thisMonthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
-      const lastWeekCount = billsArray.filter(b => b.report_date >= lastWeekStart).length;
-      const thisMonthCount = billsArray.filter(b => b.report_date >= thisMonthStart).length;
+      // Stats — all counts are relative to the SELECTED date range (incl. custom),
+      // so every card responds to the filter.
+      const rawWeekStart = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const rawMonthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+      const lastWeekStart = rawWeekStart > start ? rawWeekStart : start; // clamp inside range
+      const thisMonthStart = rawMonthStart > start ? rawMonthStart : start;
+      const lastWeekCount = billsArray.filter(b => b.report_date >= lastWeekStart && b.report_date <= end).length;
+      const thisMonthCount = billsArray.filter(b => b.report_date >= thisMonthStart && b.report_date <= end).length;
       const overallCount = billsArray.length;
 
       // Today's sessions (bills created today) & procedures (distinct services today)
@@ -327,21 +420,40 @@ const Overview = () => {
           <p className="dash-header-sub"><span className="live-dot" /> Real-time clinic operations</p>
         </div>
         <div className="dash-header-actions">
-          {/* Date Range Picker */}
-          <div className="relative">
+          {/* Date Range Picker — dark glass theme, draft edits, refresh only on Apply */}
+          <div className="relative" ref={datePickerRef}>
             <button
-              onClick={() => setShowDatePicker(!showDatePicker)}
-              className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 hover:border-gray-300 transition-all shadow-sm"
+              onClick={() => setShowDatePicker(o => !o)}
+              className="flex items-center gap-2.5 rounded-xl border px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-violet-500/15"
+              style={{
+                borderColor: pendingDirty ? 'rgba(251,191,36,0.5)' : 'rgba(139,92,246,0.3)',
+                background: 'rgba(18,18,26,0.9)',
+                boxShadow: showDatePicker ? '0 0 20px rgba(139,92,246,0.2)' : 'none',
+              }}
+              title={pendingDirty ? 'Unapplied changes — click Apply' : ''}
             >
-              <Calendar size={16} className="text-gray-500" />
-              <span className="font-medium">{dateRangeLabel}</span>
-              <ChevronDown size={14} className={`text-gray-400 transition-transform ${showDatePicker ? 'rotate-180' : ''}`} />
+              <Calendar size={16} style={{ color: pendingDirty ? '#FBBF24' : '#a78bfa' }} />
+              <span>{appliedLabel}</span>
+              {pendingDirty && <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: '#FBBF24' }} />}
+              <svg className={`w-4 h-4 text-violet-400 transition-transform duration-200 ${showDatePicker ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
             </button>
 
             {showDatePicker && (
-              <div className="absolute right-0 top-full mt-2 bg-white border border-gray-200 rounded-xl shadow-xl z-50 p-4 min-w-[320px]">
-                {/* Preset Buttons */}
-                <div className="grid grid-cols-2 gap-2 mb-3">
+              <div
+                className="absolute right-0 top-full mt-2 rounded-2xl border z-50 p-4 min-w-[340px]"
+                style={{
+                  background: 'rgba(15,15,25,0.97)',
+                  backdropFilter: 'blur(16px)',
+                  WebkitBackdropFilter: 'blur(16px)',
+                  borderColor: 'rgba(139,92,246,0.25)',
+                  boxShadow: '0 0 60px rgba(139,92,246,0.15), 0 12px 40px rgba(0,0,0,0.5)',
+                }}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                {/* Preset Buttons (draft only — no refetch until Apply) */}
+                <div className="grid grid-cols-2 gap-2 mb-4">
                   {[
                     { key: 'last7', label: 'Last 7 Days' },
                     { key: 'last30', label: 'Last 30 Days' },
@@ -350,15 +462,13 @@ const Overview = () => {
                   ].map(preset => (
                     <button
                       key={preset.key}
-                      onClick={() => {
-                        setDateRange(preset.key);
-                        if (preset.key !== 'custom') setShowDatePicker(false);
-                      }}
-                      className={`px-3 py-2 text-sm font-medium rounded-lg transition-all ${
-                        dateRange === preset.key
-                          ? 'bg-[var(--color-primary)] text-white shadow-md'
-                          : 'bg-gray-50 text-gray-600 hover:bg-gray-100'
+                      onClick={() => setDateRange(preset.key)}
+                      className={`px-3 py-2.5 text-sm font-medium rounded-xl transition-all border ${
+                        dateRange === preset.key ? 'text-white' : 'text-gray-400 hover:text-white hover:bg-violet-500/10'
                       }`}
+                      style={dateRange === preset.key
+                        ? { background: 'linear-gradient(135deg,#7C5CFC,#A78BFA)', borderColor: 'transparent', boxShadow: '0 4px 16px rgba(124,92,252,0.35)' }
+                        : { background: 'rgba(255,255,255,0.04)', borderColor: 'rgba(139,92,246,0.15)' }}
                     >
                       {preset.label}
                     </button>
@@ -367,54 +477,144 @@ const Overview = () => {
 
                 {/* Custom Date Inputs */}
                 {dateRange === 'custom' && (
-                  <div className="space-y-3 pt-3 border-t border-gray-100">
+                  <div className="space-y-3 pt-4 border-t" style={{ borderColor: 'rgba(139,92,246,0.12)' }}>
                     <div className="flex items-center gap-3">
                       <div className="flex-1">
-                        <label className="text-xs font-semibold text-gray-500 block mb-1">From</label>
+                        <label className="text-[10px] font-semibold uppercase tracking-widest block mb-1.5" style={{ color: '#6c727f' }}>From</label>
                         <input
                           type="date"
                           value={customStart}
                           onChange={(e) => setCustomStart(e.target.value)}
-                          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20 focus:border-[var(--color-primary)]"
+                          className="w-full px-3 py-2.5 text-sm rounded-xl text-white focus:outline-none"
+                          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(139,92,246,0.25)', colorScheme: 'dark' }}
                         />
                       </div>
                       <div className="flex-1">
-                        <label className="text-xs font-semibold text-gray-500 block mb-1">To</label>
+                        <label className="text-[10px] font-semibold uppercase tracking-widest block mb-1.5" style={{ color: '#6c727f' }}>To</label>
                         <input
                           type="date"
                           value={customEnd}
                           onChange={(e) => setCustomEnd(e.target.value)}
-                          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/20 focus:border-[var(--color-primary)]"
+                          className="w-full px-3 py-2.5 text-sm rounded-xl text-white focus:outline-none"
+                          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(139,92,246,0.25)', colorScheme: 'dark' }}
                         />
                       </div>
                     </div>
-                    <div className="flex justify-end gap-2">
-                      <button
-                        onClick={() => setShowDatePicker(false)}
-                        className="px-4 py-2 text-sm text-gray-600 hover:text-gray-800"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={() => {
-                          if (customStart && customEnd) {
-                            setDateRange('custom');
-                            setShowDatePicker(false);
-                          }
-                        }}
-                        disabled={!customStart || !customEnd}
-                        className="px-4 py-2 text-sm font-medium text-white bg-[var(--color-primary)] rounded-lg hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        Apply
-                      </button>
-                    </div>
                   </div>
                 )}
+
+                {/* Preview of pending range */}
+                <div className="mt-4 pt-3 border-t flex items-center justify-between text-xs" style={{ borderColor: 'rgba(139,92,246,0.12)', color: '#8b8f9a' }}>
+                  <span>
+                    Selected:&nbsp;
+                    <b className="text-gray-200">
+                      {pendingRange.preset === 'last7' ? 'Last 7 Days'
+                        : pendingRange.preset === 'last30' ? 'Last 30 Days'
+                        : pendingRange.preset === 'thisMonth' ? 'This Month'
+                        : `${pendingRange.start} → ${pendingRange.end}`}
+                    </b>
+                  </span>
+                  {pendingDirty && <span className="font-semibold" style={{ color: '#FBBF24' }}>Not applied</span>}
+                </div>
+
+                {/* Apply / Clear actions */}
+                <div className="mt-3 flex items-center justify-end gap-2">
+                  <button
+                    onClick={() => {
+                      setDateRange('last7');
+                      setCustomStart('');
+                      setCustomEnd('');
+                      setAppliedRange(defaultRange);
+                      saveDateFilter({ preset: 'last7', ...defaultRange, customStart: '', customEnd: '' });
+                      setShowDatePicker(false);
+                    }}
+                    className="px-4 py-2.5 text-sm font-medium rounded-xl text-gray-300 transition-all hover:text-white hover:bg-violet-500/10"
+                    style={{ border: '1px solid rgba(139,92,246,0.2)' }}
+                  >
+                    Clear
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (dateRange === 'custom' && (!customStart || !customEnd)) return;
+                      setAppliedRange(pendingRange);
+                      saveDateFilter({ ...pendingRange, customStart, customEnd });
+                      setShowDatePicker(false);
+                    }}
+                    disabled={dateRange === 'custom' && (!customStart || !customEnd)}
+                    className="px-5 py-2.5 text-sm font-semibold text-white rounded-xl transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{ background: 'linear-gradient(135deg,#7C5CFC,#A78BFA)', boxShadow: '0 4px 16px rgba(124,92,252,0.35)' }}
+                  >
+                    Apply
+                  </button>
+                </div>
               </div>
             )}
           </div>
 
-          <BranchSwitcher />
+          {/* Multi-select Branch Filter (MIS mode) — dark glass theme, no branch names on the button */}
+          {misMode && (
+            <div className="relative" ref={branchFilterRef}>
+              <button
+                onClick={() => setShowBranchFilter(o => !o)}
+                className="flex items-center gap-2.5 rounded-xl border px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-violet-500/15"
+                style={{
+                  borderColor: selectedBranch !== null ? 'rgba(167,139,250,0.55)' : 'rgba(139,92,246,0.3)',
+                  background: 'rgba(18,18,26,0.9)',
+                  boxShadow: showBranchFilter ? '0 0 20px rgba(139,92,246,0.2)' : 'none',
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="2" y1="12" x2="22" y2="12" />
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                </svg>
+                <span>{branchFilterLabel}</span>
+                <svg className={`w-4 h-4 text-violet-400 transition-transform duration-200 ${showBranchFilter ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                  <polyline points="6 9 12 15 18 9" />
+                </svg>
+              </button>
+
+              {showBranchFilter && (
+                <div
+                  className="absolute right-0 top-full mt-2 rounded-2xl border z-50 py-2 min-w-[230px] max-h-[340px] overflow-y-auto"
+                  style={{
+                    background: 'rgba(15,15,25,0.97)',
+                    backdropFilter: 'blur(16px)',
+                    WebkitBackdropFilter: 'blur(16px)',
+                    borderColor: 'rgba(139,92,246,0.25)',
+                    boxShadow: '0 0 60px rgba(139,92,246,0.15), 0 12px 40px rgba(0,0,0,0.5)',
+                  }}
+                >
+                  <div className="px-4 py-2 text-[10px] font-semibold uppercase tracking-widest border-b" style={{ color: '#6c727f', borderColor: 'rgba(139,92,246,0.12)' }}>
+                    Select Branch
+                  </div>
+                  {branches.map((b) => {
+                    const active = selectedBranch === b.id;
+                    return (
+                      <button
+                        key={b.id}
+                        onClick={() => { setSelectedBranch(b.id); setShowBranchFilter(false); }}
+                        className={`flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm transition-all ${active ? 'text-violet-200 font-semibold bg-violet-500/10' : 'text-gray-300 hover:bg-violet-500/10 hover:text-white'}`}
+                      >
+                        <span
+                          className="flex items-center justify-center w-4 h-4 rounded-full border"
+                          style={active
+                            ? { borderColor: 'transparent', background: 'linear-gradient(135deg,#7C5CFC,#A78BFA)', boxShadow: '0 0 0 3px rgba(124,92,252,0.25)' }
+                            : { borderColor: 'rgba(139,92,246,0.4)' }}
+                        >
+                          {active && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
+                        </span>
+                        <span>{b.branch_name}</span>
+                      </button>
+                    );
+                  })}
+                  {branches.length === 0 && (
+                    <div className="px-4 py-3 text-sm" style={{ color: '#6c727f' }}>No branches found</div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </header>
 

@@ -1101,18 +1101,22 @@ export async function getTransfers(userBranchId, isMis = false, limit = 500, pro
   }
 }
 
-// Incoming Pending transfers for a specific branch (for the bell popup)
+// Incoming Pending transfers for a specific branch (for the bell popup).
+// branchId === null/undefined -> ALL pending transfers (MIS view).
 export async function getIncomingTransfers(branchId, limit = 50) {
   try {
-    const { data, error } = await withRetry(() =>
-      supabase
+    const { data, error } = await withRetry(() => {
+      let q = supabase
         .from('stock_transfers')
         .select('*')
-        .eq('to_branch_id', Number(branchId))
         .eq('status', 'Pending')
         .order('transferred_at', { ascending: false })
-        .limit(limit)
-    );
+        .limit(limit);
+      if (branchId !== null && branchId !== undefined && branchId !== '') {
+        q = q.eq('to_branch_id', Number(branchId));
+      }
+      return q;
+    });
     if (error) {
       console.warn('getIncomingTransfers:', error.message);
       return [];
@@ -1201,16 +1205,20 @@ export async function getIncomingTransfers(branchId, limit = 50) {
   }
 }
 
-// Unread stock-transfer notification count for the bell badge
+// Unread stock-transfer notification count for the bell badge.
+// branchId === null/undefined -> count across ALL branches (MIS view).
 export async function getUnreadTransferNotificationCount(branchId) {
   try {
-    const { count, error } = await withRetry(() =>
-      supabase
+    const { count, error } = await withRetry(() => {
+      let q = supabase
         .from('stock_transfer_notifications')
         .select('*', { count: 'exact', head: true })
-        .eq('user_branch_id', Number(branchId))
-        .eq('is_read', false)
-    );
+        .eq('is_read', false);
+      if (branchId !== null && branchId !== undefined && branchId !== '') {
+        q = q.eq('user_branch_id', Number(branchId));
+      }
+      return q;
+    });
     if (error) {
       console.warn('getUnreadTransferNotificationCount:', error.message);
       return 0;
@@ -1222,16 +1230,20 @@ export async function getUnreadTransferNotificationCount(branchId) {
   }
 }
 
-// Mark all unread transfer notifications for a branch as read
+// Mark all unread transfer notifications as read.
+// branchId === null/undefined -> mark ALL branches (MIS view).
 export async function markTransferNotificationsRead(branchId) {
   try {
-    const { error } = await withRetry(() =>
-      supabase
+    const { error } = await withRetry(() => {
+      let q = supabase
         .from('stock_transfer_notifications')
         .update({ is_read: true })
-        .eq('user_branch_id', Number(branchId))
-        .eq('is_read', false)
-    );
+        .eq('is_read', false);
+      if (branchId !== null && branchId !== undefined && branchId !== '') {
+        q = q.eq('user_branch_id', Number(branchId));
+      }
+      return q;
+    });
     if (error) console.warn('markTransferNotificationsRead:', error.message);
     return !error;
   } catch (e) {

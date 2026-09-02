@@ -717,6 +717,22 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
     if (!machinery) { showToast('error', 'No machinery mapped for selected service'); return; }
     if (rows.length === 0) { showToast('error', 'Please add at least one consumable'); return; }
 
+    // Validate: every selected consumable must have a positive numeric unit count
+    // (non-billable rows use the 'USED' sentinel and are exempt). A row with a
+    // consumable selected but blank / 0 units must NOT be saved — otherwise the
+    // service gets marked Complete while nothing was actually consumed.
+    const invalidRow = rows.find((row, idx) =>
+      row.consumableId &&
+      row.units !== 'USED' &&
+      (!row.units || Number(row.units) <= 0 || isNaN(Number(row.units)))
+    );
+    if (invalidRow) {
+      const name = invalidRow.consumableName ||
+        allConsumables.find(c => c.id === Number(invalidRow.consumableId))?.name || 'a consumable';
+      showToast('error', `Please enter units for "${name}" — units cannot be blank or 0`);
+      return;
+    }
+
     try {
       // Convert billing_log_id to number (URL params are strings)
       const numericBillingLogId = billingLogId ? Number(billingLogId) : null;
@@ -886,11 +902,12 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
             const isNb = opt.type === 'nonbillable';
             const actualConsumableId = opt.rawId;
             const productType = isNb ? 'Non-Billable' : 'Billable';
-            
-            // Create entry ONLY for the target bill_service.
-            // NOTE: used_quantity is an INTEGER column in bill_service_consumables,
-            // so round any decimal units (e.g. 1.5 -> 2) to avoid Postgres error 22P02.
+
+            // Skip billable rows with no positive units — a 0/blank-unit billable
+            // row must never become a 'Used' consumable record (it would let the
+            // DB trigger allow the service to be marked Complete).
             const usedQty = isNb ? 1 : Math.round(Number(row.units) || 0);
+            if (!isNb && usedQty <= 0) continue;
             billServiceConsumableInserts.push({
               bill_service_id: targetBillServiceId,
               product_type: productType,

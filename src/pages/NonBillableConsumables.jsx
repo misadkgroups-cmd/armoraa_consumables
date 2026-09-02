@@ -3,6 +3,7 @@ import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
 import { Search, Plus, Edit2, Trash2, Archive, X } from 'lucide-react';
 import SearchableDropdown from '../components/SearchableDropdown';
+import { formatDateDisplay } from '../utils/dateUtils';
 
 const NonBillableConsumables = () => {
   const { branchId } = useBranch();
@@ -276,7 +277,7 @@ const NonBillableConsumables = () => {
                 <tr key={item.id}>
                   <td className="rpt-wrap">{item.product_name}</td>
                   <td className="rpt-nowrap" style={{ textAlign: 'center' }}>{item.batch_id || '-'}</td>
-                  <td className="rpt-nowrap"><span className="rpt-date">{item.opening_date ? new Date(item.opening_date).toLocaleDateString('en-GB') : '-'}</span></td>
+                  <td className="rpt-nowrap"><span className="rpt-date">{formatDateDisplay(item.opening_date)}</span></td>
                   <td className="rpt-wrap" style={{ color: 'var(--color-primary)' }}>{usageText(item.batch_id)}</td>
                   <td className="rpt-nowrap"><span className={`sbadge ${item.status === 'completed' ? 'inactive' : 'active'}`}><span className={`status-dot ${item.status === 'completed' ? 'orange' : 'green'}`} /> {item.status || 'active'}</span></td>
                   <td className="rpt-actions-cell">

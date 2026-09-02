@@ -1,4 +1,5 @@
 import { useState, useMemo, useCallback, Fragment } from 'react';
+import { formatDateDisplay } from '../utils/dateUtils';
 import BillableConsumables from '../pages/BillableConsumables';
 
 const BillDetailsModal = ({ bill, billServices, consumableCounts, onClose, onRefreshServices, onViewConsumables }) => {
@@ -145,7 +146,7 @@ const BillDetailsModal = ({ bill, billServices, consumableCounts, onClose, onRef
                   </div>
                   <div>
                     <div style={{ fontSize: 11, color: 'var(--color-muted)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em' }}>Date</div>
-                    <div style={{ fontWeight: 600, marginTop: 2 }}>{bill.service_date}</div>
+                    <div style={{ fontWeight: 600, marginTop: 2 }}>{formatDateDisplay(bill.service_date)}</div>
                   </div>
                   <div>
                     <div style={{ fontSize: 11, color: 'var(--color-muted)', textTransform: 'uppercase', fontWeight: 600, letterSpacing: '0.05em' }}>Doctor</div>

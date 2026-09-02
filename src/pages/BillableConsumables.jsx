@@ -4,7 +4,7 @@ import { useBranch } from '../context/BranchContext';
 import SearchableDropdown from '../components/SearchableDropdown';
 import * as auditApi from '../services/auditApi';
 import { prepareSavePayload } from '../utils/billableReportPayload';
-import { getTodayLocal } from '../utils/dateUtils';
+import { getTodayLocal, formatDateDisplay } from '../utils/dateUtils';
 
 const PARAM_KEYS = [
   'bill_no', 'uid', 'service_id', 'service_name',
@@ -1135,7 +1135,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
               {query.service_name ? `Consumables — ${query.service_name}` : 'Consumables'}
             </h3>
             <p style={{ margin: 0, fontSize: 12, color: 'var(--color-muted)' }}>
-              Bill #{query.bill_no} · Date: {query.service_date || '-'}
+              Bill #{query.bill_no} · Date: {formatDateDisplay(query.service_date)}
             </p>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>

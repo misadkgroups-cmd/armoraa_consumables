@@ -164,7 +164,7 @@ const Overview = () => {
     if (appliedRange.preset === 'last7') return 'Last 7 Days';
     if (appliedRange.preset === 'last30') return 'Last 30 Days';
     if (appliedRange.preset === 'thisMonth') return 'This Month';
-    return `${new Date(appliedRange.start).toLocaleDateString('en-GB')} - ${new Date(appliedRange.end).toLocaleDateString('en-GB')}`;
+    return `${formatDateDisplay(new Date(appliedRange.start))} - ${formatDateDisplay(new Date(appliedRange.end))}`;
   }, [appliedRange]);
 
   useEffect(() => {

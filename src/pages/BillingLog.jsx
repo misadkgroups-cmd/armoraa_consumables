@@ -6,7 +6,7 @@ import { Eye, Pencil, Trash2 } from 'lucide-react';
 import * as auditApi from '../services/auditApi';
 import AuditTimelineModal from '../components/AuditTimelineModal';
 import BillDetailsModal from '../components/BillDetailsModal';
-import { getTodayLocal } from '../utils/dateUtils';
+import { getTodayLocal, formatDateDisplay } from '../utils/dateUtils';
 
 const FIELD_LABEL = {
   fontSize: '11px',
@@ -626,8 +626,12 @@ export default function BillingLog({ onNavigate, urlState }) {
   };
 
   const cancelEdit = () => {
+    const wasFromDetailedLog = editReturnToRef.current === 'all-bills';
     setEditingBillId(null);
     resetForm();
+    editReturnToRef.current = null;
+    // Returning to the page the edit was started from (Detailed Log)
+    if (wasFromDetailedLog && onNavigate) onNavigate('all-bills', {});
   };
 
   // View history for a bill
@@ -1032,7 +1036,7 @@ export default function BillingLog({ onNavigate, urlState }) {
                        </td>
                        <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', fontSize: 13 }}>{bill.uid || '-'}</td>
                        <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle' }}>{bill.patient_name || '-'}</td>
-                       <td style={{ fontSize: 13 }}>{bill.service_date || '-'}</td>
+                       <td style={{ fontSize: 13 }}>{formatDateDisplay(bill.service_date)}</td>
                        <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', fontSize: 13 }}>{bill.master_doctors?.doctor_name || '-'}</td>
                        <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', fontSize: 13 }}>{bill.master_staff?.staff_name || '-'}</td>
                        <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', textAlign: 'center', fontSize: 13, fontWeight: 600 }}>

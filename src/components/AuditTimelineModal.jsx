@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getBillTimeline } from '../services/auditApi';
+import { formatDateDisplay, formatDateTimeDisplay } from '../utils/dateUtils';
 
 const ACTIVITY_COLORS = {
   created: '#10B981', // green
@@ -99,7 +100,7 @@ export default function AuditTimelineModal({ isOpen, onClose, recordId, tableNam
   const formatDate = (dateString) => {
     const date = new Date(dateString);
     return {
-      date: date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+      date: formatDateDisplay(date),
       time: date.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: true }),
     };
   };

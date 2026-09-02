@@ -6,6 +6,7 @@ import SearchableDropdown from '../components/SearchableDropdown';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import * as stockApi from '../services/stockApi';
+import { formatDateDisplay, formatDateTimeDisplay } from '../utils/dateUtils';
 
 // MIS operations are recorded against this user
 const CURRENT_USER = 'Admin';
@@ -875,7 +876,7 @@ const StockManagement = () => {
         'Type': item.stock_type,
         'Available Units': item.available_units,
         'Minimum Units': item.minimum_units || 10,
-        'Last Updated': item.updated_at ? new Date(item.updated_at).toLocaleDateString('en-GB') : '-',
+        'Last Updated': formatDateDisplay(item.updated_at),
       }));
       return { title: 'Corporate Stock Report', headers: ['Product Name', 'Type', 'Available Units', 'Minimum Units', 'Last Updated'], rows };
     }
@@ -883,7 +884,7 @@ const StockManagement = () => {
     if (activeTab === 'history') {
       const isConsumedTab = historySubTab === 'consumed';
       const rows = filteredHistory.map(item => ({
-        'Date': item.transferred_at ? new Date(item.transferred_at).toLocaleString('en-GB') : '-',
+        'Date': formatDateTimeDisplay(item.transferred_at),
         'Product': item.product_name || `Product ${item.product_id || ''}`,
         'Qty': isConsumedTab ? `-${Math.abs(Number(item.quantity) || 0)}` : item.quantity,
         'From': item.fromLabel || (item.transaction_type === 'Inward' ? 'Stock Added' : item.transaction_type === 'Adjustment' ? 'Manual Correction' : branchNameById(item.from_branch_id)),
@@ -904,7 +905,7 @@ const StockManagement = () => {
         'Type': item.product_type,
         'Available Units': item.current_stock,
         'Minimum Units': product?.minimum_stock || 10,
-        'Last Updated': item.updated_at ? new Date(item.updated_at).toLocaleDateString('en-GB') : '-',
+        'Last Updated': formatDateDisplay(item.updated_at),
       };
     });
     const tabLabel = activeTab === 'billable' ? 'Billable' : 'Non-Billable';
@@ -964,7 +965,7 @@ const StockManagement = () => {
 
     doc.setFontSize(9);
     doc.setTextColor(128);
-    doc.text(`Generated: ${new Date().toLocaleString('en-GB')}`, pageWidth - marginLeft, 34, { align: 'right' });
+    doc.text(`Generated: ${formatDateTimeDisplay(new Date())}`, pageWidth - marginLeft, 34, { align: 'right' });
     doc.setTextColor(0);
 
     const drawTableHeader = (yy) => {
@@ -1275,7 +1276,7 @@ const StockManagement = () => {
                       <span className="font-medium">{item.minimum_units || 10}</span>
                     </td>
                     <td className="rpt-nowrap">
-                      <span className="rpt-date">{item.updated_at ? new Date(item.updated_at).toLocaleDateString('en-GB') : '-'}</span>
+                      <span className="rpt-date">{formatDateDisplay(item.updated_at)}</span>
                     </td>
                     <td className="rpt-actions-cell">
                       <div className="flex items-center justify-center gap-1.5">
@@ -1357,7 +1358,7 @@ const StockManagement = () => {
                       <span className="font-medium">{product?.minimum_stock || 10}</span>
                     </td>
                     <td className="rpt-nowrap">
-                      <span className="rpt-date">{item.updated_at ? new Date(item.updated_at).toLocaleDateString('en-GB') : '-'}</span>
+                      <span className="rpt-date">{formatDateDisplay(item.updated_at)}</span>
                     </td>
                     <td className="rpt-actions-cell">
                       <div className="flex items-center justify-center gap-1.5">
@@ -1495,7 +1496,7 @@ const StockManagement = () => {
                       <tr key={item.id}>
                         <td className="rpt-nowrap">
                           <span className="rpt-date">
-                            {item.transferred_at ? new Date(item.transferred_at).toLocaleString('en-GB') : '-'}
+                            {formatDateTimeDisplay(item.transferred_at)}
                           </span>
                         </td>
                         <td className="rpt-wrap font-medium">{item.product_name || `Product ${item.product_id || ''}`}</td>
@@ -1529,7 +1530,7 @@ const StockManagement = () => {
                     <tr key={item.id}>
                       <td className="rpt-nowrap">
                         <span className="rpt-date">
-                          {item.transferred_at ? new Date(item.transferred_at).toLocaleString('en-GB') : '-'}
+                          {formatDateTimeDisplay(item.transferred_at)}
                         </span>
                       </td>
                       <td className="rpt-wrap font-medium">{item.product_name || `Product ${item.product_id || ''}`}</td>

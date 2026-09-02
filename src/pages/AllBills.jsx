@@ -6,7 +6,7 @@ import SearchableDropdown from '../components/SearchableDropdown';
 import * as auditApi from '../services/auditApi';
 import AuditTimelineModal from '../components/AuditTimelineModal';
 import BillDetailsModal from '../components/BillDetailsModal';
-import { getTodayLocal } from '../utils/dateUtils';
+import { getTodayLocal, formatDateDisplay } from '../utils/dateUtils';
 
 const STATUS_BADGE = {
   Complete: { bg: '#D1FAE5', color: '#065F46', border: '#A7F3D0' },
@@ -935,7 +935,7 @@ export default function AllBills({ onNavigate, urlState }) {
                     </td>
                     <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', fontSize: 13 }}>{bill.uid || '-'}</td>
                     <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle' }}>{bill.patient_name || '-'}</td>
-                    <td style={{ fontSize: 13 }}>{bill.service_date || '-'}</td>
+                    <td style={{ fontSize: 13 }}>{formatDateDisplay(bill.service_date)}</td>
                     <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', fontSize: 13 }}>{bill.master_doctors?.doctor_name || '-'}</td>
                     <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', fontSize: 13 }}>{bill.master_staff?.staff_name || '-'}</td>
                     <td style={{ whiteSpace: 'nowrap', verticalAlign: 'middle', textAlign: 'center', fontSize: 13, fontWeight: 600 }}>

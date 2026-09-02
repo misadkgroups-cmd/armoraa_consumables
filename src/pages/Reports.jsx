@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { format } from 'date-fns';
+import { formatDateDisplay } from '../utils/dateUtils';
 import * as XLSX from 'xlsx';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
@@ -854,7 +855,7 @@ const Reports = () => {
   const fmtDate = (d) => {
     if (!d || d === '-') return '-';
     try {
-      return format(new Date(d), 'dd MMM yyyy');
+      return formatDateDisplay(d);
     } catch {
       return d;
     }
@@ -1170,7 +1171,7 @@ const Reports = () => {
                         <tr key={row.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-4 py-3 text-sm font-semibold text-gray-900 whitespace-nowrap">{row.serviceName || '-'}</td>
                           <td className="px-4 py-3 text-sm font-semibold text-gray-900 text-center whitespace-nowrap">{row.serviceCount || 0}</td>
-                          <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row.totalCost ? `$${Number(row.totalCost).toFixed(2)}` : '$0.00'}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row.totalCost ? `{Number(row.totalCost).toFixed(2)}` : '0.00'}</td>
                         </tr>
                       ))
                     ) : billableReportView === 'machinery-wise' ? (
@@ -1178,7 +1179,7 @@ const Reports = () => {
                         <tr key={row.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-4 py-3 text-sm font-semibold text-gray-900 whitespace-nowrap">{row.machineName || '-'}</td>
                           <td className="px-4 py-3 text-sm font-semibold text-gray-900 text-center whitespace-nowrap">{row.serviceCount || 0}</td>
-                          <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row.totalCost ? `$${Number(row.totalCost).toFixed(2)}` : '$0.00'}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row.totalCost ? `{Number(row.totalCost).toFixed(2)}` : '0.00'}</td>
                         </tr>
                       ))
                     ) : (
@@ -1201,12 +1202,12 @@ const Reports = () => {
                               <React.Fragment key={`csm-${i}`}>
                                 <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{c ? c.name : '-'}</td>
                                 <td className="px-4 py-3 text-sm text-gray-700 text-center whitespace-nowrap">{c ? c.units : 0}</td>
-                                <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-right whitespace-nowrap">{c && c.cost ? `$${c.cost.toFixed(2)}` : '$0.00'}</td>
+                                <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-right whitespace-nowrap">{c && c.cost ? `{c.cost.toFixed(2)}` : '0.00'}</td>
                               </React.Fragment>
                             );
                           })}
                           <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-right whitespace-nowrap">{row.totalUnits || 0}</td>
-                          <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row.totalCost ? `$${row.totalCost.toFixed(2)}` : '$0.00'}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row.totalCost ? `{row.totalCost.toFixed(2)}` : '0.00'}</td>
                           <td className="px-4 py-3 text-center whitespace-nowrap">
                             <button onClick={() => deleteBill(row.id)} className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-gray-200 bg-white hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-all text-gray-400" title="Delete">
                               <Trash2 size={14} />
@@ -1522,8 +1523,8 @@ const Reports = () => {
                             <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['RECEIVED'] || 0}</td>
                             <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['USED'] || 0}</td>
                             <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['CLOSING STOCK'] || 0}</td>
-                            <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{`$${Number(row['COMPLETE COST'] || 0).toFixed(2)}`}</td>
-                            <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{`$${Number(row['INCOMPLETE COST'] || 0).toFixed(2)}`}</td>
+                            <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{`{Number(row['COMPLETE COST'] || 0).toFixed(2)}`}</td>
+                            <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{`{Number(row['INCOMPLETE COST'] || 0).toFixed(2)}`}</td>
                           </tr>
                         ) : (
                           <tr key={i} className="hover:bg-gray-50 transition-colors">

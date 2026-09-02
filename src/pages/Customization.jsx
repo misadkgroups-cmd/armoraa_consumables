@@ -3,6 +3,7 @@ import { supabase } from '../config/supabase';
 import { Search, Plus, Edit2, Trash2, X, Package, Settings, Cog, Boxes } from 'lucide-react';
 import SearchableDropdown from '../components/SearchableDropdown';
 import * as auditApi from '../services/auditApi';
+import { round2 } from '../utils/numUtils';
 
 // These MUST be defined OUTSIDE the component to prevent remount on every render
 const TABS = [
@@ -314,7 +315,7 @@ const Customization = () => {
         <table className="dt"><thead><tr><th style={{ width: 260 }}>Consumable Name</th><th style={{ width: 100 }}>Default Unit</th><th style={{ width: 120 }}>Cost</th><th style={{ width: 100 }}>Actions</th></tr></thead>
         <tbody>
           {filteredB.length === 0 && (<tr><td colSpan="4"><div className="prem-empty"><div className="ico"><Package size={24} /></div><h3>No consumables found</h3><p>Add your first billable consumable to get started.</p><button onClick={() => openBModal('add')} className="btn btn-primary"><Plus size={16} /> Add Consumable</button></div></td></tr>)}
-          {filteredB.map(c => (<tr key={c.id}><td className="font-medium">{c.product_name}</td><td>{c.unit || '-'}</td><td style={{ textAlign: 'right' }}>{c.cost_unit || 0}</td><td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}><div style={{ display: 'inline-flex', gap: 6 }}><button className="ia" title="Edit" onClick={() => openBModal('edit', c)}><Edit2 size={14} /></button><button className="ia danger" title="Delete" onClick={() => deleteB(c.id)}><Trash2 size={14} /></button></div></td></tr>))}
+          {filteredB.map(c => (<tr key={c.id}><td className="font-medium">{c.product_name}</td><td>{c.unit || '-'}</td><td style={{ textAlign: 'right' }}>{round2(c.cost_unit) || 0}</td><td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}><div style={{ display: 'inline-flex', gap: 6 }}><button className="ia" title="Edit" onClick={() => openBModal('edit', c)}><Edit2 size={14} /></button><button className="ia danger" title="Delete" onClick={() => deleteB(c.id)}><Trash2 size={14} /></button></div></td></tr>))}
         </tbody>
       </table>
     </div>
@@ -348,7 +349,7 @@ const Customization = () => {
             {filteredNb.length === 0 && (<tr><td colSpan="4"><div className="prem-empty"><div className="ico"><Boxes size={24} /></div><h3>No consumables found</h3><p>Add your first non-billable consumable to get started.</p><button onClick={() => openNbModal('add')} className="btn btn-primary"><Plus size={16} /> Add Non-Billable Consumable</button></div></td></tr>)}
             {filteredNb.map(item => (<tr key={item.id}>
               <td className="font-medium">{item.product_name}</td>
-              <td style={{ textAlign: 'right' }}>{item.cost || 0}</td>
+              <td style={{ textAlign: 'right' }}>{round2(item.cost) || 0}</td>
               <td><span className={`sbadge ${item.status === 'Inactive' ? 'inactive' : 'active'}`}><span className={`status-dot ${item.status === 'Inactive' ? 'orange' : 'green'}`} /> {item.status || 'Active'}</span></td>
               <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}><div style={{ display: 'inline-flex', gap: 6 }}>
                 <button className="ia" title="Edit" onClick={() => openNbModal('edit', item)}><Edit2 size={14} /></button>

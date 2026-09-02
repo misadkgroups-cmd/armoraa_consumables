@@ -1,5 +1,6 @@
 import { supabase } from '../config/supabase';
 import { withRetry } from '../utils/supabaseRetry';
+import { round2 } from '../utils/numUtils';
 
 // Get current stock for a product
 // billable_stock / non_billable_stock are the SOURCE OF TRUTH.
@@ -92,7 +93,7 @@ export async function updateStock({
   try {
     const table = productType === 'Non-Billable' ? 'non_billable_stock' : 'billable_stock';
     const currentStock = await getStock(productType, consumableId, branchId);
-    const newStock = (currentStock?.current_stock || 0) + quantity;
+    const newStock = round2((currentStock?.current_stock || 0) + quantity);
     
     if (newStock < 0) {
       return { success: false, message: 'Insufficient stock' };
@@ -366,7 +367,7 @@ export async function adjustStock(productType, consumableId, branchId, newStockL
   try {
     const currentStock = await getStock(productType, consumableId, branchId);
     const currentLevel = currentStock?.current_stock || 0;
-    const adjustment = newStockLevel - currentLevel;
+    const adjustment = round2(newStockLevel - currentLevel);
     
     if (adjustment === 0) return { success: true, message: 'No adjustment needed' };
     
@@ -399,7 +400,7 @@ export async function addInwardStock(productType, consumableId, branchId, quanti
     }
 
     const currentStock = await getStock(productType, consumableId, branchId);
-    const newStock = (currentStock?.current_stock || 0) + qty;
+    const newStock = round2((currentStock?.current_stock || 0) + qty);
 
     const table = productType === 'Non-Billable' ? 'non_billable_stock' : 'billable_stock';
 
@@ -463,7 +464,7 @@ export async function addCorporateInwardStock(productId, stockType, productName,
     if (error) throw error;
     if (!data) return { success: false, message: 'Corporate stock record not found for this product' };
 
-    const newQty = (data.available_units || 0) + qty;
+    const newQty = round2((data.available_units || 0) + qty);
 
     const { error: updError } = await withRetry(() =>
       supabase
@@ -579,7 +580,7 @@ export async function transferFromCorporateBulk(transfers, toBranchId, toBranchN
         continue;
       }
 
-      const newCorpQty = Number(corp.available_units) - qty;
+      const newCorpQty = round2(Number(corp.available_units) - qty);
 
       const { error: corpUpdError } = await withRetry(() =>
         supabase
@@ -775,7 +776,7 @@ export async function createMultiLocationTransferRequest(
       const currentStock = existing?.available_stock || 0;
       if (currentStock < qty) return { success: false, message: `Available stock is only ${currentStock} units.` };
 
-      const newStock = currentStock - qty;
+      const newStock = round2(currentStock - qty);
       const { error: updErr } = await withRetry(() =>
         supabase
           .from(table)
@@ -864,7 +865,7 @@ export async function createMultiLocationTransferRequest(
           continue;
         }
 
-        const newCorpQty = Number(corpRow.available_units || 0) + qty;
+        const newCorpQty = round2(Number(corpRow.available_units || 0) + qty);
         const { error: corpUpdErr } = await withRetry(() =>
           supabase
             .from('corporate_stock')
@@ -982,7 +983,7 @@ export async function createTransferRequest(transfers, toBranchId, toBranchName,
         continue;
       }
 
-      const newCorpQty = Number(corp.available_units) - qty;
+      const newCorpQty = round2(Number(corp.available_units) - qty);
 
       // 1. Deduct from the Corporate Warehouse (the goods ship out now)
       const { error: updErr } = await withRetry(() =>

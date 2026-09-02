@@ -7,6 +7,7 @@ import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import * as stockApi from '../services/stockApi';
 import { formatDateDisplay, formatDateTimeDisplay } from '../utils/dateUtils';
+import { round2 } from '../utils/numUtils';
 
 // MIS operations are recorded against this user
 const CURRENT_USER = 'Admin';
@@ -286,7 +287,7 @@ const StockManagement = () => {
 
   // Branch user confirms receipt -> stock moves into the destination branch
   const handleReceive = async (transfer) => {
-    if (!window.confirm(`Confirm receipt of ${transfer.quantity} ${transfer.product_name || 'units'}?`)) return;
+    if (!window.confirm(`Confirm receipt of ${round2(transfer.quantity)} ${transfer.product_name || 'units'}?`)) return;
     setLoading(true);
     try {
       const result = await stockApi.receiveTransfer(transfer.id, CURRENT_USER);
@@ -886,7 +887,7 @@ const StockManagement = () => {
       const rows = filteredHistory.map(item => ({
         'Date': formatDateTimeDisplay(item.transferred_at),
         'Product': item.product_name || `Product ${item.product_id || ''}`,
-        'Qty': isConsumedTab ? `-${Math.abs(Number(item.quantity) || 0)}` : item.quantity,
+        'Qty': isConsumedTab ? `-${round2(Math.abs(Number(item.quantity) || 0))}` : round2(item.quantity),
         'From': item.fromLabel || (item.transaction_type === 'Inward' ? 'Stock Added' : item.transaction_type === 'Adjustment' ? 'Manual Correction' : branchNameById(item.from_branch_id)),
         'To': item.toLabel || (item.transaction_type === 'Outward' ? 'Consumed' : branchNameById(item.to_branch_id)),
         'Status': item.status || '-',
@@ -1268,8 +1269,8 @@ const StockManagement = () => {
                       </span>
                     </td>
                     <td className="rpt-nowrap" style={{ textAlign: 'center' }}>
-                       <span className={`font-semibold ${item.available_units <= (item.minimum_units || 10) && item.available_units !== 0 ? 'text-red-600' : 'text-green-600'}`}>
-                        {item.available_units}
+                       <span className={`font-semibold ${round2(item.available_units) <= (item.minimum_units || 10) && item.available_units !== 0 ? 'text-red-600' : 'text-green-600'}`}>
+                        {round2(item.available_units)}
                       </span>
                     </td>
                     <td className="rpt-nowrap" style={{ textAlign: 'center' }}>
@@ -1500,7 +1501,7 @@ const StockManagement = () => {
                           </span>
                         </td>
                         <td className="rpt-wrap font-medium">{item.product_name || `Product ${item.product_id || ''}`}</td>
-                        <td className="rpt-nowrap" style={{ textAlign: 'center' }}><span className="font-semibold">{item.quantity}</span></td>
+                        <td className="rpt-nowrap" style={{ textAlign: 'center' }}><span className="font-semibold">{round2(item.quantity)}</span></td>
                         <td className="rpt-nowrap">
                           {item.fromLabel || (item.transaction_type === 'Inward' ? 'Stock Added' : item.transaction_type === 'Adjustment' ? 'Manual Correction' : branchNameById(item.from_branch_id))}
                         </td>
@@ -1535,7 +1536,7 @@ const StockManagement = () => {
                       </td>
                       <td className="rpt-wrap font-medium">{item.product_name || `Product ${item.product_id || ''}`}</td>
                       <td className="rpt-nowrap" style={{ textAlign: 'center' }}>
-                        <span className="font-semibold text-red-600">-{Math.abs(Number(item.quantity) || 0)}</span>
+                        <span className="font-semibold text-red-600">-{round2(Math.abs(Number(item.quantity) || 0))}</span>
                       </td>
                       <td className="rpt-nowrap">
                         {item.toLabel === 'Consumed' ? (item.fromLabel || branchNameById(item.branch_id)) : branchNameById(item.branch_id)}
@@ -1620,7 +1621,7 @@ const StockManagement = () => {
                       />
                       {adjustForm.add_units && Number(adjustForm.add_units) > 0 && (
                         <div style={{ fontSize: 11, color: '#059669', marginTop: 4 }}>
-                          New total: {adjustForm.current_stock + Number(adjustForm.add_units)}
+                          New total: {round2(adjustForm.current_stock + Number(adjustForm.add_units))}
                         </div>
                       )}
                     </div>
@@ -1639,7 +1640,7 @@ const StockManagement = () => {
                       />
                       {adjustForm.reduce_units && Number(adjustForm.reduce_units) > 0 && (
                         <div style={{ fontSize: 11, color: adjustForm.reduce_units > adjustForm.current_stock ? '#DC2626' : '#6366f1', marginTop: 4 }}>
-                          New total: {Math.max(0, adjustForm.current_stock - Number(adjustForm.reduce_units))}
+                          New total: {round2(Math.max(0, adjustForm.current_stock - Number(adjustForm.reduce_units)))}
                         </div>
                       )}
                     </div>
@@ -1749,7 +1750,7 @@ const StockManagement = () => {
                 <SearchableDropdown
                   value={corpAddStockForm.product_id}
                   onChange={(val) => setCorpAddStockForm({ ...corpAddStockForm, product_id: val })}
-                  options={corporateStock.map(x => ({ value: String(x.id), label: `${x.product_name || 'Product ' + x.product_id} [${x.stock_type}] • Avail: ${x.available_units}` }))}
+                  options={corporateStock.map(x => ({ value: String(x.id), label: `${x.product_name || 'Product ' + x.product_id} [${x.stock_type}] • Avail: ${round2(x.available_units)}` }))}
                   placeholder="Select corporate product"
                   displayKey="label"
                   valueKey="value"

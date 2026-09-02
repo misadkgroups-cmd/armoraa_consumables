@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { format } from 'date-fns';
 import { formatDateDisplay } from '../utils/dateUtils';
+import { round2 } from '../utils/numUtils';
 import * as XLSX from 'xlsx';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
@@ -191,7 +192,7 @@ const Reports = () => {
         }
         const item = summaryMap.get(key);
         item.serviceCount += 1;
-        item.totalCost += Number(row.totalCost || 0);
+        item.totalCost = round2(item.totalCost + Number(row.totalCost || 0));
       });
 
       const processed = Array.from(summaryMap.values())
@@ -277,8 +278,8 @@ const Reports = () => {
       if (group.servicesList.length > globalMaxServices) globalMaxServices = group.servicesList.length;
       if (combinedConsumables.length > globalMaxConsumables) globalMaxConsumables = combinedConsumables.length;
 
-      const groupTotalUnits = combinedConsumables.reduce((acc, cur) => acc + cur.units, 0);
-      const groupTotalCost = combinedConsumables.reduce((acc, cur) => acc + cur.units * cur.cost, 0);
+      const groupTotalUnits = round2(combinedConsumables.reduce((acc, cur) => acc + cur.units, 0));
+      const groupTotalCost = round2(combinedConsumables.reduce((acc, cur) => acc + cur.units * cur.cost, 0));
 
       return {
         id: group.id,
@@ -490,8 +491,8 @@ const Reports = () => {
               cost: product.cost,
             });
 
-            totalUnits += units;
-            totalCost += units * product.cost;
+            totalUnits = round2(totalUnits + units);
+            totalCost = round2(totalCost + units * product.cost);
           }
         }
 
@@ -1206,7 +1207,7 @@ const Reports = () => {
                               </React.Fragment>
                             );
                           })}
-                          <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-right whitespace-nowrap">{row.totalUnits || 0}</td>
+                          <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-right whitespace-nowrap">{round2(row.totalUnits) || 0}</td>
                           <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row.totalCost ? `{row.totalCost.toFixed(2)}` : '0.00'}</td>
                           <td className="px-4 py-3 text-center whitespace-nowrap">
                             <button onClick={() => deleteBill(row.id)} className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-gray-200 bg-white hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-all text-gray-400" title="Delete">

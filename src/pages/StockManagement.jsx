@@ -1270,7 +1270,7 @@ const StockManagement = () => {
                     </td>
                     <td className="rpt-nowrap" style={{ textAlign: 'center' }}>
                        <span className={`font-semibold ${round2(item.available_units) <= (item.minimum_units || 10) && item.available_units !== 0 ? 'text-red-600' : 'text-green-600'}`}>
-                        {round2(item.available_units)}
+                        {Number(item.available_units || 0).toFixed(2)}
                       </span>
                     </td>
                     <td className="rpt-nowrap" style={{ textAlign: 'center' }}>
@@ -1501,7 +1501,7 @@ const StockManagement = () => {
                           </span>
                         </td>
                         <td className="rpt-wrap font-medium">{item.product_name || `Product ${item.product_id || ''}`}</td>
-                        <td className="rpt-nowrap" style={{ textAlign: 'center' }}><span className="font-semibold">{round2(item.quantity)}</span></td>
+                        <td className="rpt-nowrap" style={{ textAlign: 'center' }}><span className="font-semibold">{Number(item.quantity || 0).toFixed(2)}</span></td>
                         <td className="rpt-nowrap">
                           {item.fromLabel || (item.transaction_type === 'Inward' ? 'Stock Added' : item.transaction_type === 'Adjustment' ? 'Manual Correction' : branchNameById(item.from_branch_id))}
                         </td>
@@ -1536,7 +1536,7 @@ const StockManagement = () => {
                       </td>
                       <td className="rpt-wrap font-medium">{item.product_name || `Product ${item.product_id || ''}`}</td>
                       <td className="rpt-nowrap" style={{ textAlign: 'center' }}>
-                        <span className="font-semibold text-red-600">-{round2(Math.abs(Number(item.quantity) || 0))}</span>
+                        <span className="font-semibold text-red-600">-{Number(Math.abs(Number(item.quantity) || 0)).toFixed(2)}</span>
                       </td>
                       <td className="rpt-nowrap">
                         {item.toLabel === 'Consumed' ? (item.fromLabel || branchNameById(item.branch_id)) : branchNameById(item.branch_id)}
@@ -1621,7 +1621,7 @@ const StockManagement = () => {
                       />
                       {adjustForm.add_units && Number(adjustForm.add_units) > 0 && (
                         <div style={{ fontSize: 11, color: '#059669', marginTop: 4 }}>
-                          New total: {round2(adjustForm.current_stock + Number(adjustForm.add_units))}
+                          New total: {Number(round2(adjustForm.current_stock + Number(adjustForm.add_units))).toFixed(2)}
                         </div>
                       )}
                     </div>
@@ -1640,7 +1640,7 @@ const StockManagement = () => {
                       />
                       {adjustForm.reduce_units && Number(adjustForm.reduce_units) > 0 && (
                         <div style={{ fontSize: 11, color: adjustForm.reduce_units > adjustForm.current_stock ? '#DC2626' : '#6366f1', marginTop: 4 }}>
-                          New total: {round2(Math.max(0, adjustForm.current_stock - Number(adjustForm.reduce_units)))}
+                          New total: {Number(round2(Math.max(0, adjustForm.current_stock - Number(adjustForm.reduce_units)))).toFixed(2)}
                         </div>
                       )}
                     </div>
@@ -1750,7 +1750,7 @@ const StockManagement = () => {
                 <SearchableDropdown
                   value={corpAddStockForm.product_id}
                   onChange={(val) => setCorpAddStockForm({ ...corpAddStockForm, product_id: val })}
-                  options={corporateStock.map(x => ({ value: String(x.id), label: `${x.product_name || 'Product ' + x.product_id} [${x.stock_type}] • Avail: ${round2(x.available_units)}` }))}
+                  options={corporateStock.map(x => ({ value: String(x.id), label: `${x.product_name || 'Product ' + x.product_id} [${x.stock_type}] • Avail: ${Number(round2(x.available_units)).toFixed(2)}` }))}
                   placeholder="Select corporate product"
                   displayKey="label"
                   valueKey="value"

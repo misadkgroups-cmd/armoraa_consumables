@@ -3,6 +3,7 @@ import { BranchProvider, useBranch } from './context/BranchContext';
 import Welcome from './pages/Welcome';
 import Dashboard from './pages/Dashboard';
 import { endSession } from './services/sessionApi';
+import { syncCurrencyFromDb } from './utils/currency';
 import UpdatePrompt from './components/UpdatePrompt';
 import './App.css';
 
@@ -46,6 +47,12 @@ const AppContent = () => {
   const { branchId, switchBranch, loginMis, logout } = useBranch();
   const [showConflictModal, setShowConflictModal] = useState(false);
   const [conflictMessage, setConflictMessage] = useState('');
+
+  // Sync base currency from system_settings so every page renders amounts
+  // with the currency selected in Customization → General Settings.
+  useEffect(() => {
+    syncCurrencyFromDb();
+  }, []);
 
   // Handle browser back/forward and sync URL state
   useEffect(() => {

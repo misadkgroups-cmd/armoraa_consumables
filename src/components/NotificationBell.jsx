@@ -185,7 +185,7 @@ const NotificationBell = ({ userId }) => {
                     </div>
                     <div className="notif-card-row">
                       <span className="notif-card-row-label">Qty</span>
-                      <span className="notif-card-row-value">{t.quantity} Units</span>
+                      <span className="notif-card-row-value">{Number(t.quantity || 0).toFixed(2)} Units</span>
                     </div>
                     <div className="notif-card-row">
                       <span className="notif-card-row-label">From</span>

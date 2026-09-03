@@ -4,6 +4,8 @@ import { Search, Plus, Edit2, Trash2, X, Package, Settings, Cog, Boxes } from 'l
 import SearchableDropdown from '../components/SearchableDropdown';
 import * as auditApi from '../services/auditApi';
 import { round2 } from '../utils/numUtils';
+import { getCurrencySymbol, setCurrencyCode, syncCurrencyFromDb } from '../utils/currency';
+import { supabase as supabaseCfg } from '../config/supabase';
 
 // These MUST be defined OUTSIDE the component to prevent remount on every render
 const TABS = [
@@ -32,6 +34,54 @@ const Customization = () => {
     language: 'en',
     notifications: true,
   });
+
+  // Load persisted General Settings (base currency is what drives all amount
+  // rendering app-wide via src/utils/currency.js)
+  useEffect(() => {
+    const loadGeneral = async () => {
+      try {
+        const { data } = await supabaseCfg
+          .from('system_settings')
+          .select('setting_key, setting_value')
+          .in('setting_key', ['clinic_name', 'date_format', 'base_currency', 'language', 'notifications']);
+        const map = {};
+        (data || []).forEach((r) => { map[r.setting_key] = r.setting_value; });
+        setSettings((prev) => ({
+          ...prev,
+          clinicName: map.clinic_name || prev.clinicName,
+          dateFormat: map.date_format || prev.dateFormat,
+          currency: map.base_currency || prev.currency,
+          language: map.language || prev.language,
+          notifications: map.notifications !== undefined ? map.notifications === 'true' : prev.notifications,
+        }));
+      } catch (e) { console.error(e); }
+      syncCurrencyFromDb();
+    };
+    loadGeneral();
+  }, []);
+
+  const [savingSettings, setSavingSettings] = useState(false);
+  const saveGeneralSettings = async () => {
+    setSavingSettings(true);
+    try {
+      const rows = [
+        { setting_key: 'clinic_name', setting_value: settings.clinicName },
+        { setting_key: 'date_format', setting_value: settings.dateFormat },
+        { setting_key: 'base_currency', setting_value: settings.currency },
+        { setting_key: 'language', setting_value: settings.language },
+        { setting_key: 'notifications', setting_value: String(settings.notifications) },
+      ];
+      const { error } = await supabaseCfg
+        .from('system_settings')
+        .upsert(rows, { onConflict: 'setting_key' });
+      if (error) throw error;
+      setCurrencyCode(settings.currency);
+      showToast('success', 'Settings saved');
+    } catch (e) {
+      showToast('error', e.message || 'Failed to save settings');
+    }
+    setSavingSettings(false);
+  };
 
   /* =================== BILLABLE =================== */
   const [billable, setBillable] = useState([]);
@@ -306,7 +356,7 @@ const Customization = () => {
   }, [fetchBillable, fetchNonBillable, fetchServices, fetchMachines, loadServicesForMach]);
 
   const renderContent = () => {
-    if (tab === 'general') return (<div className="set-card"><h4>Organization & Preferences</h4><div className="set-row"><div className="space-y-1"><label className="text-xs font-semibold text-muted block">Clinic Name</label><input className="form-input" value={settings.clinicName} onChange={(e) => setSettings({ ...settings, clinicName: e.target.value })} /></div><div className="space-y-1"><label className="text-xs font-semibold text-muted block">Date Format</label><SearchableDropdown value={settings.dateFormat} onChange={(val) => setSettings({ ...settings, dateFormat: val })} options={[{value:'dd MMM yyyy',label:'dd MMM yyyy'},{value:'MM-dd-yyyy',label:'MM-dd-yyyy'},{value:'yyyy-MM-dd',label:'yyyy-MM-dd'}]} placeholder="Select date format" displayKey="label" valueKey="value" /></div><div className="space-y-1"><label className="text-xs font-semibold text-muted block">Base Currency</label><SearchableDropdown value={settings.currency} onChange={(val) => setSettings({ ...settings, currency: val })} options={[{value:'INR',label:'INR'},{value:'USD',label:'USD'},{value:'EUR',label:'EUR'}]} placeholder="Select currency" displayKey="label" valueKey="value" /></div><div className="space-y-1"><label className="text-xs font-semibold text-muted block">Language</label><SearchableDropdown value={settings.language} onChange={(val) => setSettings({ ...settings, language: val })} options={[{value:'en',label:'English'}]} placeholder="Select language" displayKey="label" valueKey="value" /></div></div><div className="flex items-center justify-between mt-4 p-4 bg-[var(--color-tint-2)] rounded-xl border border-[var(--color-line)]"><div><div className="text-sm font-semibold text-ink">Enable Notifications</div><div className="text-xs text-muted mt-0.5">Alerts for system events</div></div><div className={`sw ${settings.notifications ? 'on' : ''}`} onClick={() => setSettings({ ...settings, notifications: !settings.notifications })} /></div><div className="flex justify-end mt-6"><button onClick={() => showToast('success', 'Settings saved')} className="btn btn-primary">Save Changes</button></div></div>);
+    if (tab === 'general') return (<div className="set-card"><h4>Organization & Preferences</h4><div className="set-row"><div className="space-y-1"><label className="text-xs font-semibold text-muted block">Clinic Name</label><input className="form-input" value={settings.clinicName} onChange={(e) => setSettings({ ...settings, clinicName: e.target.value })} /></div><div className="space-y-1"><label className="text-xs font-semibold text-muted block">Date Format</label><SearchableDropdown value={settings.dateFormat} onChange={(val) => setSettings({ ...settings, dateFormat: val })} options={[{value:'dd MMM yyyy',label:'dd MMM yyyy'},{value:'MM-dd-yyyy',label:'MM-dd-yyyy'},{value:'yyyy-MM-dd',label:'yyyy-MM-dd'}]} placeholder="Select date format" displayKey="label" valueKey="value" /></div><div className="space-y-1"><label className="text-xs font-semibold text-muted block">Base Currency</label><SearchableDropdown value={settings.currency} onChange={(val) => setSettings({ ...settings, currency: val })} options={[{value:'INR',label:'INR'},{value:'USD',label:'USD'},{value:'EUR',label:'EUR'}]} placeholder="Select currency" displayKey="label" valueKey="value" /></div><div className="space-y-1"><label className="text-xs font-semibold text-muted block">Language</label><SearchableDropdown value={settings.language} onChange={(val) => setSettings({ ...settings, language: val })} options={[{value:'en',label:'English'}]} placeholder="Select language" displayKey="label" valueKey="value" /></div></div><div className="flex items-center justify-between mt-4 p-4 bg-[var(--color-tint-2)] rounded-xl border border-[var(--color-line)]"><div><div className="text-sm font-semibold text-ink">Enable Notifications</div><div className="text-xs text-muted mt-0.5">Alerts for system events</div></div><div className={`sw ${settings.notifications ? 'on' : ''}`} onClick={() => setSettings({ ...settings, notifications: !settings.notifications })} /></div><div className="flex justify-end mt-6"><button onClick={saveGeneralSettings} disabled={savingSettings} className="btn btn-primary">{savingSettings ? 'Saving…' : 'Save Changes'}</button></div></div>);
 
     if (tab === 'billable') return (<>
       <SectionHeader title="Billable Consumables" subtitle={`${billable.length} items configured`} action={<div className="cust-actions"><div className="search-box"><Search size={15} /><input placeholder="Search consumable…" value={bSearch} onChange={(e) => setBSearch(e.target.value)} /></div><button onClick={() => openBModal('add')} className="btn btn-primary"><Plus size={16} /> Add Consumable</button></div>} />
@@ -315,7 +365,7 @@ const Customization = () => {
         <table className="dt"><thead><tr><th style={{ width: 260 }}>Consumable Name</th><th style={{ width: 100 }}>Default Unit</th><th style={{ width: 120 }}>Cost</th><th style={{ width: 100 }}>Actions</th></tr></thead>
         <tbody>
           {filteredB.length === 0 && (<tr><td colSpan="4"><div className="prem-empty"><div className="ico"><Package size={24} /></div><h3>No consumables found</h3><p>Add your first billable consumable to get started.</p><button onClick={() => openBModal('add')} className="btn btn-primary"><Plus size={16} /> Add Consumable</button></div></td></tr>)}
-          {filteredB.map(c => (<tr key={c.id}><td className="font-medium">{c.product_name}</td><td>{c.unit || '-'}</td><td style={{ textAlign: 'right' }}>{round2(c.cost_unit) || 0}</td><td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}><div style={{ display: 'inline-flex', gap: 6 }}><button className="ia" title="Edit" onClick={() => openBModal('edit', c)}><Edit2 size={14} /></button><button className="ia danger" title="Delete" onClick={() => deleteB(c.id)}><Trash2 size={14} /></button></div></td></tr>))}
+          {filteredB.map(c => (<tr key={c.id}><td className="font-medium">{c.product_name}</td><td>{c.unit || '-'}</td><td style={{ textAlign: 'right' }}>{getCurrencySymbol()}{(Number(c.cost_unit) || 0).toFixed(2)}</td><td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}><div style={{ display: 'inline-flex', gap: 6 }}><button className="ia" title="Edit" onClick={() => openBModal('edit', c)}><Edit2 size={14} /></button><button className="ia danger" title="Delete" onClick={() => deleteB(c.id)}><Trash2 size={14} /></button></div></td></tr>))}
         </tbody>
       </table>
     </div>
@@ -349,7 +399,7 @@ const Customization = () => {
             {filteredNb.length === 0 && (<tr><td colSpan="4"><div className="prem-empty"><div className="ico"><Boxes size={24} /></div><h3>No consumables found</h3><p>Add your first non-billable consumable to get started.</p><button onClick={() => openNbModal('add')} className="btn btn-primary"><Plus size={16} /> Add Non-Billable Consumable</button></div></td></tr>)}
             {filteredNb.map(item => (<tr key={item.id}>
               <td className="font-medium">{item.product_name}</td>
-              <td style={{ textAlign: 'right' }}>{round2(item.cost) || 0}</td>
+              <td style={{ textAlign: 'right' }}>{getCurrencySymbol()}{(Number(item.cost) || 0).toFixed(2)}</td>
               <td><span className={`sbadge ${item.status === 'Inactive' ? 'inactive' : 'active'}`}><span className={`status-dot ${item.status === 'Inactive' ? 'orange' : 'green'}`} /> {item.status || 'Active'}</span></td>
               <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}><div style={{ display: 'inline-flex', gap: 6 }}>
                 <button className="ia" title="Edit" onClick={() => openNbModal('edit', item)}><Edit2 size={14} /></button>

@@ -684,7 +684,7 @@ const Overview = () => {
                 <span className="mod-idx">{i + 1}</span>
                 <span className="mod-name">{item.name}</span>
                 <span className="mod-bar-track"><span className="mod-bar-fill" style={{ width: `${(item.units / maxBillable) * 100}%` }} /></span>
-                <span className="mod-val">{item.units}</span>
+                <span className="mod-val">{Number(item.units || 0).toFixed(2)}</span>
               </div>
             ))}
             {billableTop.length === 0 && <div className="flex-1 flex items-center justify-center text-sm text-[var(--color-muted)]">No data</div>}

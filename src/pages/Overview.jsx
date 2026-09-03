@@ -3,7 +3,7 @@ import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
 import Chart from 'react-apexcharts';
 import { motion } from 'framer-motion';
-import { getTodayLocal, formatDateLocal } from '../utils/dateUtils';
+import { getTodayLocal, formatDateLocal, formatDateDisplay } from '../utils/dateUtils';
 import {
   Calendar, Activity, FileText,
   TrendingUp, CheckCircle, Clock, ChevronDown

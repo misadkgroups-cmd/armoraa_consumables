@@ -36,6 +36,24 @@ export default function AllBills({ onNavigate, urlState }) {
   // when navigating to Billable Consumables and back (Complete/Exit flow).
   const [selectedDate, setSelectedDate] = useState(() => sessionStorage.getItem('allBillsSelectedDate') || '');
   const [statusFilter, setStatusFilter] = useState(() => sessionStorage.getItem('allBillsStatusFilter') || 'All');
+  // Advanced search filters (Bill ID / UID / Patient Name). Persisted in
+  // sessionStorage like the date/status filters so they survive the unmount
+  // that happens during the Billable Consumables round-trip.
+  const [searchBillNo, setSearchBillNo] = useState(() => sessionStorage.getItem('allBillsSearchBillNo') || '');
+  const [searchUid, setSearchUid] = useState(() => sessionStorage.getItem('allBillsSearchUid') || '');
+  const [searchPatient, setSearchPatient] = useState(() => sessionStorage.getItem('allBillsSearchPatient') || '');
+
+  useEffect(() => {
+    sessionStorage.setItem('allBillsSearchBillNo', searchBillNo);
+  }, [searchBillNo]);
+
+  useEffect(() => {
+    sessionStorage.setItem('allBillsSearchUid', searchUid);
+  }, [searchUid]);
+
+  useEffect(() => {
+    sessionStorage.setItem('allBillsSearchPatient', searchPatient);
+  }, [searchPatient]);
 
   useEffect(() => {
     sessionStorage.setItem('allBillsSelectedDate', selectedDate);
@@ -234,6 +252,40 @@ export default function AllBills({ onNavigate, urlState }) {
     } finally {
       setLoading(false);
     }
+  };
+
+  // ===== Advanced search (client-side, combined with the existing status filter) =====
+  // Bill ID: partial/exact, case-insensitive. Accepts "1001", "77" or "BILL-1001"
+  // (a leading "bill-" / "bill " prefix is stripped before matching).
+  // UID: partial/exact, case-insensitive substring match.
+  // Patient Name: case-insensitive partial match.
+  const matchesSearch = (bill) => {
+    if (searchBillNo.trim()) {
+      const term = searchBillNo.trim().toLowerCase().replace(/^bill[\s-]*/, '');
+      const billNo = String(bill.bill_no || '').toLowerCase();
+      if (!billNo.includes(term)) return false;
+    }
+    if (searchUid.trim()) {
+      const uid = String(bill.uid || '').toLowerCase();
+      if (!uid.includes(searchUid.trim().toLowerCase())) return false;
+    }
+    if (searchPatient.trim()) {
+      const name = String(bill.patient_name || '').toLowerCase();
+      if (!name.includes(searchPatient.trim().toLowerCase())) return false;
+    }
+    return true;
+  };
+
+  const displayedBills = bills.filter(matchesSearch);
+
+  const hasActiveSearch = searchBillNo.trim() || searchUid.trim() || searchPatient.trim();
+
+  // Clear Filters resets ALL search fields (existing date/status clearing is
+  // handled by the header Clear button; this handles the search card).
+  const clearSearchFilters = () => {
+    setSearchBillNo('');
+    setSearchUid('');
+    setSearchPatient('');
   };
 
   const handleViewBill = (bill) => {
@@ -743,7 +795,7 @@ export default function AllBills({ onNavigate, urlState }) {
             </button>
           </div>
           <button
-            onClick={() => { setSelectedDate(''); setStatusFilter('All'); }}
+            onClick={() => { setSelectedDate(''); setStatusFilter('All'); clearSearchFilters(); }}
             className="btn btn-secondary btn-sm"
             title="Clear date filter and show all bills"
           >
@@ -751,6 +803,57 @@ export default function AllBills({ onNavigate, urlState }) {
             Clear
           </button>
         </div>
+      </div>
+
+      {/* ===== Advanced Search Filters ===== */}
+      <div style={{ background: '#ffffff', borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 1px 2px rgba(0,0,0,0.05)', marginBottom: 20, padding: '12px 16px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
+        <input
+          type="text"
+          value={searchBillNo}
+          onChange={(e) => setSearchBillNo(e.target.value)}
+          placeholder="Enter Bill ID"
+          className="form-input"
+          style={{ height: 36, flex: '1 1 160px', minWidth: 140 }}
+        />
+        <input
+          type="text"
+          value={searchUid}
+          onChange={(e) => setSearchUid(e.target.value)}
+          placeholder="Enter UID"
+          className="form-input"
+          style={{ height: 36, flex: '1 1 160px', minWidth: 140 }}
+        />
+        <input
+          type="text"
+          value={searchPatient}
+          onChange={(e) => setSearchPatient(e.target.value)}
+          placeholder="Enter Patient Name"
+          className="form-input"
+          style={{ height: 36, flex: '1.4 1 220px', minWidth: 180 }}
+        />
+        <button
+          onClick={() => setRefreshToken(Date.now())}
+          className="btn btn-primary btn-sm"
+          style={{ height: 36 }}
+          title="Re-apply all filters and refresh results"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          Search
+        </button>
+        <button
+          onClick={() => { clearSearchFilters(); setSelectedDate(''); setStatusFilter('All'); }}
+          className="btn btn-secondary btn-sm"
+          style={{ height: 36 }}
+          title="Reset all search and filter fields"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          Clear
+        </button>
+        {hasActiveSearch && (
+          <span style={{ fontSize: 12, color: 'var(--color-muted)', whiteSpace: 'nowrap' }}>
+            {displayedBills.length} of {bills.length} match
+          </span>
+        )}
       </div>
 
       {/* Bill Form - New or Edit Mode */}
@@ -918,14 +1021,14 @@ export default function AllBills({ onNavigate, urlState }) {
                   <div className="animate-pulse">Loading bills...</div>
                 </td>
               </tr>
-            ) : bills.length === 0 ? (
+            ) : displayedBills.length === 0 ? (
               <tr>
                 <td colSpan="11" style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--color-muted)' }}>
-                  No bills found
+                  {hasActiveSearch ? 'No bills match the current search filters' : 'No bills found'}
                 </td>
               </tr>
             ) : (
-              bills.map((bill) => {
+              displayedBills.map((bill) => {
                 const counts = bill.serviceCounts || { total: 0, completed: 0, pending: 0, percentage: 0 };
                 const status = bill.calculatedStatus;
                 

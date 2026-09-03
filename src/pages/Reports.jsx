@@ -13,6 +13,18 @@ import {
 import { getTransactionReport } from '../services/transactionReports';
 import { Search, Download, FileText, FileSpreadsheet, Trash2, RotateCcw } from 'lucide-react';
 
+// Reusable KPI summary card — matches the Transaction Report card design exactly
+const KpiCard = ({ label, value, isCurrency = false }) => (
+  <div style={{ background: '#FFFFFF', border: '1px solid #E5E7EB', borderRadius: '12px', padding: '18px 20px' }}>
+    <div style={{ fontSize: '12px', fontWeight: 600, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+      {label}
+    </div>
+    <div style={{ fontSize: '26px', fontWeight: 700, marginTop: '6px', color: isCurrency ? '#7C5CFC' : '#1F2937' }}>
+      {isCurrency ? '$' + Number(value || 0).toFixed(2) : (value || 0)}
+    </div>
+  </div>
+);
+
 const Reports = () => {
   const { branchId: ctxBranch } = useBranch();
 
@@ -584,6 +596,79 @@ const Reports = () => {
       }
     });
     return s;
+    })();
+
+  // ============ BILLABLE KPI SUMMARY (computed from already-generated report data) ===========
+  // No new database queries — uses reportData / rawReportData which are already in state.
+  const billableSummary = (() => {
+    const data = reportData || [];
+    const raw = rawReportData || [];
+
+    if (billableReportView === 'bill-wise') {
+      return {
+        totalBills: data.length,
+        totalServices: data.reduce((acc, r) => acc + ((r.servicesList || []).length), 0),
+        totalConsumables: data.reduce((acc, r) => acc + (r.consumableCount || 0), 0),
+        totalCost: round2(data.reduce((acc, r) => acc + Number(r.totalCost || 0), 0)),
+      };
+    }
+
+    if (billableReportView === 'service-wise') {
+      return {
+        totalServices: data.length,
+        totalConsumables: data.reduce((acc, r) => acc + (r.consumableCount || 0), 0),
+        totalQuantity: round2(data.reduce((acc, r) => acc + Number(r.totalUnits || 0), 0)),
+        totalCost: round2(data.reduce((acc, r) => acc + Number(r.totalCost || 0), 0)),
+      };
+    }
+
+    if (billableReportView === 'service-wise-summary') {
+      return {
+        totalServices: data.length,
+        totalTreatments: data.reduce((acc, r) => acc + (r.serviceCount || 0), 0),
+        totalConsumables: raw.reduce((acc, r) => acc + (r.consumableCount || 0), 0),
+        totalCost: round2(data.reduce((acc, r) => acc + Number(r.totalCost || 0), 0)),
+      };
+    }
+
+    if (billableReportView === 'machinery-wise') {
+      return {
+        totalMachinery: data.length,
+        totalServiceCount: data.reduce((acc, r) => acc + (r.serviceCount || 0), 0),
+        totalConsumables: raw.reduce((acc, r) => acc + (r.consumableCount || 0), 0),
+        totalCost: round2(data.reduce((acc, r) => acc + Number(r.totalCost || 0), 0)),
+      };
+    }
+
+    return {};
+  })();
+
+  // ============ NON-BILLABLE KPI SUMMARY (computed from already-generated report data) ===========
+  // No new database queries — uses nbData which is already in state.
+  const nbSummary = (() => {
+    const data = nbData || [];
+
+    if (nbReportMode === 'detailed') {
+      return {
+        totalRegistryCount: data.length,
+        completeCount: data.filter((r) => r.status === 'completed').length,
+        incompleteCount: data.filter((r) => r.status !== 'completed').length,
+        totalConsumablesUsed: data.reduce((acc, r) => acc + Number(r.serviceUsedCount || 0), 0),
+      };
+    }
+
+    if (nbReportMode === 'summary') {
+      return {
+        totalProducts: data.length,
+        openingStock: data.reduce((acc, r) => acc + Number(r['OPENING STOCK'] || 0), 0),
+        usedQuantity: data.reduce((acc, r) => acc + Number(r['USED'] || 0), 0),
+        closingStock: data.reduce((acc, r) => acc + Number(r['CLOSING STOCK'] || 0), 0),
+        completeCost: round2(data.reduce((acc, r) => acc + Number(r['COMPLETE COST'] || 0), 0)),
+        incompleteCost: round2(data.reduce((acc, r) => acc + Number(r['INCOMPLETE COST'] || 0), 0)),
+      };
+    }
+
+    return {};
   })();
 
   const toggleTrBranch = (id) => {
@@ -955,6 +1040,42 @@ const Reports = () => {
       {/* ================= BILLABLE VIEW ================= */}
       {reportType === 'billable' ? (
         <>
+          {/* KPI Summary Cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '16px' }}>
+            {billableReportView === 'bill-wise' && (
+              <>
+                <KpiCard label="Total Bills" value={billableSummary.totalBills} />
+                <KpiCard label="Total Services" value={billableSummary.totalServices} />
+                <KpiCard label="Total Consumables Used" value={billableSummary.totalConsumables} />
+                <KpiCard label="Total Consumable Cost" value={billableSummary.totalCost} isCurrency />
+              </>
+            )}
+            {billableReportView === 'service-wise' && (
+              <>
+                <KpiCard label="Total Services" value={billableSummary.totalServices} />
+                <KpiCard label="Total Consumables Used" value={billableSummary.totalConsumables} />
+                <KpiCard label="Total Quantity Used" value={billableSummary.totalQuantity} />
+                <KpiCard label="Total Cost" value={billableSummary.totalCost} isCurrency />
+              </>
+            )}
+            {billableReportView === 'service-wise-summary' && (
+              <>
+                <KpiCard label="Total Services" value={billableSummary.totalServices} />
+                <KpiCard label="Total Treatments" value={billableSummary.totalTreatments} />
+                <KpiCard label="Total Consumables Used" value={billableSummary.totalConsumables} />
+                <KpiCard label="Total Cost" value={billableSummary.totalCost} isCurrency />
+              </>
+            )}
+            {billableReportView === 'machinery-wise' && (
+              <>
+                <KpiCard label="Total Machinery" value={billableSummary.totalMachinery} />
+                <KpiCard label="Total Service Count" value={billableSummary.totalServiceCount} />
+                <KpiCard label="Total Consumables Used" value={billableSummary.totalConsumables} />
+                <KpiCard label="Total Consumable Cost" value={billableSummary.totalCost} isCurrency />
+              </>
+            )}
+          </div>
+
           {/* Main Filter Card */}
           <div style={{ background: '#FFFFFF', border: '1px solid #E5E7EB', borderRadius: '12px', padding: '24px', width: '100%' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
@@ -1172,7 +1293,7 @@ const Reports = () => {
                         <tr key={row.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-4 py-3 text-sm font-semibold text-gray-900 whitespace-nowrap">{row.serviceName || '-'}</td>
                           <td className="px-4 py-3 text-sm font-semibold text-gray-900 text-center whitespace-nowrap">{row.serviceCount || 0}</td>
-                          <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row.totalCost ? `{Number(row.totalCost).toFixed(2)}` : '0.00'}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row.totalCost ? Number(row.totalCost).toFixed(2) : '0.00'}</td>
                         </tr>
                       ))
                     ) : billableReportView === 'machinery-wise' ? (
@@ -1180,7 +1301,7 @@ const Reports = () => {
                         <tr key={row.id} className="hover:bg-gray-50 transition-colors">
                           <td className="px-4 py-3 text-sm font-semibold text-gray-900 whitespace-nowrap">{row.machineName || '-'}</td>
                           <td className="px-4 py-3 text-sm font-semibold text-gray-900 text-center whitespace-nowrap">{row.serviceCount || 0}</td>
-                          <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row.totalCost ? `{Number(row.totalCost).toFixed(2)}` : '0.00'}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row.totalCost ? Number(row.totalCost).toFixed(2) : '0.00'}</td>
                         </tr>
                       ))
                     ) : (
@@ -1203,12 +1324,12 @@ const Reports = () => {
                               <React.Fragment key={`csm-${i}`}>
                                 <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap">{c ? c.name : '-'}</td>
                                 <td className="px-4 py-3 text-sm text-gray-700 text-center whitespace-nowrap">{c ? c.units : 0}</td>
-                                <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-right whitespace-nowrap">{c && c.cost ? `{c.cost.toFixed(2)}` : '0.00'}</td>
+                                <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-right whitespace-nowrap">{c && c.cost ? c.cost.toFixed(2) : '0.00'}</td>
                               </React.Fragment>
                             );
                           })}
                           <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-right whitespace-nowrap">{round2(row.totalUnits) || 0}</td>
-                          <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row.totalCost ? `{row.totalCost.toFixed(2)}` : '0.00'}</td>
+                          <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{row.totalCost ? row.totalCost.toFixed(2) : '0.00'}</td>
                           <td className="px-4 py-3 text-center whitespace-nowrap">
                             <button onClick={() => deleteBill(row.id)} className="inline-flex items-center justify-center w-8 h-8 rounded-lg border border-gray-200 bg-white hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-all text-gray-400" title="Delete">
                               <Trash2 size={14} />
@@ -1374,6 +1495,28 @@ const Reports = () => {
       ) : (
         /* ================= NON-BILLABLE VIEW ================= */
         <>
+          {/* KPI Summary Cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: nbReportMode === 'summary' ? 'repeat(auto-fit, minmax(160px, 1fr))' : 'repeat(4, 1fr)', gap: '16px', marginBottom: '16px' }}>
+            {nbReportMode === 'detailed' && (
+              <>
+                <KpiCard label="Total Registry Count" value={nbSummary.totalRegistryCount} />
+                <KpiCard label="Complete Count" value={nbSummary.completeCount} />
+                <KpiCard label="Incomplete Count" value={nbSummary.incompleteCount} />
+                <KpiCard label="Total Consumables Used" value={nbSummary.totalConsumablesUsed} />
+              </>
+            )}
+            {nbReportMode === 'summary' && (
+              <>
+                <KpiCard label="Total Products" value={nbSummary.totalProducts} />
+                <KpiCard label="Opening Stock" value={nbSummary.openingStock} />
+                <KpiCard label="Used Quantity" value={nbSummary.usedQuantity} />
+                <KpiCard label="Closing Stock" value={nbSummary.closingStock} />
+                <KpiCard label="Complete Cost" value={nbSummary.completeCost} isCurrency />
+                <KpiCard label="Incomplete Cost" value={nbSummary.incompleteCost} isCurrency />
+              </>
+            )}
+          </div>
+
           {/* Non-Billable Filter Card */}
           <div style={{ background: '#FFFFFF', border: '1px solid #E5E7EB', borderRadius: '12px', padding: '24px', width: '100%' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
@@ -1524,8 +1667,8 @@ const Reports = () => {
                             <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['RECEIVED'] || 0}</td>
                             <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['USED'] || 0}</td>
                             <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['CLOSING STOCK'] || 0}</td>
-                            <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{`{Number(row['COMPLETE COST'] || 0).toFixed(2)}`}</td>
-                            <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{`{Number(row['INCOMPLETE COST'] || 0).toFixed(2)}`}</td>
+                            <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{Number(row['COMPLETE COST'] || 0).toFixed(2)}</td>
+                            <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{Number(row['INCOMPLETE COST'] || 0).toFixed(2)}</td>
                           </tr>
                         ) : (
                           <tr key={i} className="hover:bg-gray-50 transition-colors">

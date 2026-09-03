@@ -357,7 +357,7 @@ const Overview = () => {
           <div><div className="h-6 w-48 bg-slate-200 rounded-lg animate-pulse" /><div className="h-4 w-40 bg-slate-100 rounded-lg animate-pulse mt-2" /></div>
           <div className="h-9 w-64 bg-slate-100 rounded-xl animate-pulse" />
         </div>
-        <div className="kpi-row">{[1,2,3,4,5,6].map(i => <div key={i} className="h-[118px] bg-white/60 rounded-2xl animate-pulse" />)}</div>
+        <div className="kpi-row">{[1,2,3,4].map(i => <div key={i} className="h-[118px] bg-white/60 rounded-2xl animate-pulse" />)}</div>
         <div className="dash-grid-2">{[1,2].map(i => <div key={i} className="bg-white rounded-2xl animate-pulse" />)}</div>
         <div className="dash-grid-3">{[1,2,3].map(i => <div key={i} className="h-44 bg-white rounded-2xl animate-pulse" />)}</div>
       </div>
@@ -401,12 +401,10 @@ const Overview = () => {
 
   // Updated KPI cards with service completion stats
   const kpiCards = [
-    { label: 'This Week', value: kpi.week, icon: Calendar, grad: 'linear-gradient(135deg,#7C5CFC,#A78BFA)', spark: spark.week },
-    { label: 'This Month', value: kpi.month, icon: Activity, grad: 'linear-gradient(135deg,#6366F1,#8B7FFF)', spark: spark.month },
     { label: 'Total Bills', value: kpi.totalBills, icon: FileText, grad: 'linear-gradient(135deg,#0EA5E9,#38BDF8)', spark: spark.total },
-    { label: 'Completed Bills', value: kpi.completedBills, icon: CheckCircle, grad: 'linear-gradient(135deg,#10B981,#34D399)', spark: spark.completedConsumables },
-    { label: 'Pending Services', value: kpi.pendingServices, icon: Clock, grad: 'linear-gradient(135deg,#F59E0B,#FBBF24)', spark: spark.pendingConsumables },
-    { label: 'Completed Services', value: kpi.completedServices, icon: CheckCircle, grad: 'linear-gradient(135deg,#8B5CF6,#A78BFA)', spark: spark.completedConsumables },
+    { label: 'Incomplete Bills', value: kpi.incompleteBills, icon: Clock, grad: 'linear-gradient(135deg,#F59E0B,#FBBF24)', spark: spark.pendingConsumables },
+    { label: 'Total Services', value: kpi.totalServices, icon: CheckCircle, grad: 'linear-gradient(135deg,#8B5CF6,#A78BFA)', spark: spark.completedConsumables },
+    { label: 'Incomplete Services', value: kpi.pendingServices, icon: Clock, grad: 'linear-gradient(135deg,#6366F1,#8B7FFF)', spark: spark.pendingConsumables },
   ];
 
   const maxBillable = Math.max(...billableTop.map(b => b.units), 1);

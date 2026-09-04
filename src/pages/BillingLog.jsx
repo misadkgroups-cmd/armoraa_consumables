@@ -216,6 +216,53 @@ export default function BillingLog({ onNavigate, urlState }) {
     setTimeout(() => setToast(null), 3000);
   };
 
+  // --- UID auto-fill: when an existing UID is entered, fetch the patient's
+  // name and most recent services from billing_log and pre-fill the form. ---
+  const lastUidLookupRef = useRef('');
+  const uidLookupInProgressRef = useRef(false);
+
+  const handleUidLookup = async (uidRaw) => {
+    const uid = (uidRaw || '').trim();
+    if (!uid || editingBillId || !branchId) return;
+    if (lastUidLookupRef.current === uid || uidLookupInProgressRef.current) return;
+    lastUidLookupRef.current = uid;
+    uidLookupInProgressRef.current = true;
+    try {
+      const { data, error } = await supabase
+        .from('billing_log')
+        .select(`
+          id, patient_name,
+          bill_services(service_id, service_name)
+        `)
+        .eq('uid', uid)
+        .eq('branch_id', branchId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+
+      if (data) {
+        setFormData(prev => ({
+          ...prev,
+          patient_name: data.patient_name || prev.patient_name,
+        }));
+
+        if (data.bill_services && data.bill_services.length > 0) {
+          setServiceRows(data.bill_services.map((bs, i) => ({
+            id: Date.now() + i,
+            service_id: String(bs.service_id),
+            service_name: bs.service_name || '',
+          })));
+        }
+
+      }
+    } catch (e) {
+      console.error('UID lookup failed:', e);
+    } finally {
+      uidLookupInProgressRef.current = false;
+    }
+  };
+
   const validateForm = () => {
     const errors = {};
     if (!formData.bill_no.trim()) errors.bill_no = 'Bill Number is required';
@@ -477,8 +524,16 @@ export default function BillingLog({ onNavigate, urlState }) {
       staff_id: '',
       service_date: getTodayLocal(),
     });
+    lastUidLookupRef.current = '';
     setServiceRows([{ id: Date.now(), service_id: '', service_name: '' }]);
     setFormErrors({});
+  };
+
+  // Clear button: instantly wipe the bill form (exits edit mode too)
+  const handleClearForm = () => {
+    setEditingBillId(null);
+    resetForm();
+    showToast('success', 'Form cleared');
   };
 
 
@@ -864,6 +919,10 @@ export default function BillingLog({ onNavigate, urlState }) {
                 Cancel
               </button>
             )}
+            <button onClick={handleClearForm} className="btn btn-secondary">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+              Clear
+            </button>
             <button onClick={handleSaveBill} className="btn btn-primary">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><polyline points="20 6 9 17 4 12"/></svg>
               {editingBillId ? 'Update Bill' : 'Save Bill'}
@@ -889,7 +948,18 @@ export default function BillingLog({ onNavigate, urlState }) {
             <input
               type="text"
               value={formData.uid}
-              onChange={(e) => setFormData({ ...formData, uid: e.target.value })}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (!val.trim()) lastUidLookupRef.current = ''; // allow re-lookup after clearing
+                setFormData({ ...formData, uid: val });
+              }}
+              onBlur={(e) => handleUidLookup(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleUidLookup(e.target.value);
+                }
+              }}
               placeholder="Enter UID"
               className="form-input"
             />

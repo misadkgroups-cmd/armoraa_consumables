@@ -659,58 +659,86 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       );
   };
 
-  // Log stock movement records and adjust stock on UPDATE.
-  // NOTE: On INSERT, billable stock is ALREADY deducted by the DB trigger
-  // (trg_deduct_billable_stock) when billable_report is inserted, so we do NOT
-  // adjust stock here for new records.
-  // On UPDATE, the trigger does NOT fire, so we must adjust stock by the
-  // difference between old and new units (and handle consumable changes).
+  // Single source of truth for billable stock deduction (client-side):
+  //   INSERT (new report): deduct the FULL units for every billable product.
+  //   UPDATE (re-save):    deduct only the DIFFERENCE per product
+  //                        (negative difference = add stock back).
+  // Units are aggregated PER CONSUMABLE ID across all 14 slots so slot
+  // re-ordering, re-entered products and duplicates are handled correctly.
+  // The DB trigger trg_deduct_billable_stock has been dropped
+  // (see supabase/migrations/20260904_drop_billable_deduct_trigger.sql)
+  // so deduction happens ONLY here — no double deduction.
   const deductInventory = async (reportPayload, savedReportId, isUpdate = false, oldReport = null) => {
     try {
       const username = localStorage.getItem('username') || 'System';
-      
-      for (let i = 1; i <= 14; i++) {
-        const newId = reportPayload[`consumable_${i}_id`];
-        const newUnits = Number(reportPayload[`consumable_${i}_units`]) || 0;
-        const isNonBillable = reportPayload[`is_non_billable_${i}`];
-        
-        // SKIP non-billable items: stock deduction already happened when
-        // the batch was registered/opened in Non-Billable Consumables page.
-        if (isNonBillable) continue;
-        
-        // On UPDATE, adjust stock by the difference between old and new values.
-        if (isUpdate && oldReport) {
-          const oldId = oldReport[`consumable_${i}_id`];
-          const oldUnits = Number(oldReport[`consumable_${i}_units`]) || 0;
-          
-          if (oldId && oldId !== newId) {
-            // Consumable changed: add back old units, reduce new units.
-            if (oldUnits > 0) await adjustBillableStock(oldId, oldUnits);
-            if (newId && newUnits > 0) await adjustBillableStock(newId, -newUnits);
-          } else if (oldId === newId && newId) {
-            // Same consumable: adjust by the difference (new - old).
-            const difference = newUnits - oldUnits;
-            if (difference !== 0) await adjustBillableStock(newId, -difference);
+
+      // Aggregate billable units per product ID across all 14 slots.
+      const aggregateUnits = (source) => {
+        const totals = {};
+        for (let i = 1; i <= 14; i++) {
+          const id = source[`consumable_${i}_id`];
+          const units = Number(source[`consumable_${i}_units`]) || 0;
+          const isNonBillable = !!source[`is_non_billable_${i}`];
+
+          // SKIP non-billable items: stock deduction already happened when
+          // the batch was registered/opened in Non-Billable Consumables page.
+          if (isNonBillable) continue;
+          if (!id || units <= 0) continue;
+
+          totals[id] = (totals[id] || 0) + units;
+        }
+        return totals;
+      };
+
+      const newTotals = aggregateUnits(reportPayload);
+
+      // Per-product delta to apply to stock, and matching history remarks.
+      // On INSERT every product's full units are consumed.
+      // On UPDATE only the difference vs the previously saved report.
+      const deltas = {};   // { [consumableId]: signed delta (negative = consumed) }
+      const remarks = {};  // { [consumableId]: remark text }
+
+      if (isUpdate && oldReport) {
+        const oldTotals = aggregateUnits(oldReport);
+        const allIds = new Set([...Object.keys(oldTotals), ...Object.keys(newTotals)]);
+
+        for (const idStr of allIds) {
+          const oldUnits = oldTotals[idStr] || 0;
+          const newUnits = newTotals[idStr] || 0;
+          const difference = newUnits - oldUnits;
+          if (difference !== 0) {
+            deltas[idStr] = -difference;
+            remarks[idStr] = `Consumed for bill: ${billId || 'N/A'} (adjusted ${difference > 0 ? '+' : ''}${-difference})`;
           }
         }
-        
-        // Log stock movement record (history) for billable items with units.
-        if (newId && newUnits > 0) {
-          await supabase
-            .from('stock_transactions')
-            .insert({
-              transaction_type: 'Outward',
-              product_type: 'Billable',
-              consumable_id: newId,
-              branch_id: branchId,
-              quantity: -newUnits, // Negative for outward
-              remarks: `Consumed for bill: ${billId || 'N/A'}`,
-              created_by: username
-            });
+      } else {
+        for (const [idStr, units] of Object.entries(newTotals)) {
+          deltas[idStr] = -units;
+          remarks[idStr] = `Consumed for bill: ${billId || 'N/A'}`;
         }
       }
+
+      for (const [idStr, delta] of Object.entries(deltas)) {
+        const id = Number(idStr);
+
+        // Adjust the stock level (negative delta = reduce, positive = add back).
+        await adjustBillableStock(id, delta);
+
+        // Log a single stock movement record for the actual change.
+        await supabase
+          .from('stock_transactions')
+          .insert({
+            transaction_type: 'Outward',
+            product_type: 'Billable',
+            consumable_id: id,
+            branch_id: branchId,
+            quantity: delta, // Negative for outward / positive for add-back
+            remarks: remarks[idStr],
+            created_by: username
+          });
+      }
     } catch (e) {
-      console.error('Failed to log stock movement:', e);
+      console.error('Failed to deduct stock / log stock movement:', e);
     }
   };
 

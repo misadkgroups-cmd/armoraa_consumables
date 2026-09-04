@@ -847,8 +847,6 @@ export default function BillingLog({ onNavigate, urlState }) {
       try {
         const requestKey = String(editBillId || `legacy-${legacyBillNo}`);
         if (editRequestHandledRef.current === requestKey) return;
-        editRequestHandledRef.current = requestKey;
-        editReturnToRef.current = returnTo;
 
         let billToEdit = null;
 
@@ -867,7 +865,7 @@ export default function BillingLog({ onNavigate, urlState }) {
             .maybeSingle();
           if (error) throw error;
           if (!data) throw new Error(`Bill #${editBillId} not found`);
-          if (cancelled) return;
+          if (cancelled) return; // effect re-ran (e.g. bills loaded) — retry happens there
           billToEdit = data;
         } else {
           billToEdit = bills.find(b => b.bill_no === legacyBillNo);
@@ -879,6 +877,11 @@ export default function BillingLog({ onNavigate, urlState }) {
         }
 
         handleEditBill(billToEdit);
+        // Mark handled ONLY after the form is actually populated, so a run
+        // cancelled mid-fetch (bills list refresh racing the navigation) is
+        // retried on the next effect run instead of being silently skipped.
+        editRequestHandledRef.current = requestKey;
+        editReturnToRef.current = returnTo;
         showToast('info', 'Editing in Billing Log. Make changes and click Update Bill.');
         clearRequest();
       } catch (error) {

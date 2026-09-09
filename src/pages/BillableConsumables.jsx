@@ -4,8 +4,10 @@ import { useBranch } from '../context/BranchContext';
 import SearchableDropdown from '../components/SearchableDropdown';
 import * as auditApi from '../services/auditApi';
 import { prepareSavePayload } from '../utils/billableReportPayload';
+import { NON_BILLABLE_UNITS } from '../utils/nonBillableDefaults';
 import { getTodayLocal, formatDateDisplay } from '../utils/dateUtils';
 import { withBase } from '../utils/navigation';
+import { fmtQty2, round2 } from '../utils/numUtils';
 
 // Dependency arrays kept intentionally minimal (loaders recreated each render).
 /* eslint-disable react-hooks/exhaustive-deps */
@@ -461,7 +463,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
   const getConsumableLabel = (c) => {
     if (c.type === 'nonbillable') return c.name;
     const stock = billableStockMap[c.rawId] ?? 0;
-    return stock > 0 ? `${c.name} (Available: ${stock})` : c.name;
+    return stock > 0 ? `${c.name} (Available: ${fmtQty2(stock)})` : c.name;
   };
 
 
@@ -657,7 +659,9 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       .eq('branch_id', branchId)
       .maybeSingle();
 
-    const newStock = Math.max(0, (currentStock?.available_stock || 0) + delta);
+    // round2 kills floating-point artifacts from decimal consumption deltas
+    // (e.g. 54.3 - 2.6 - 0.1 would otherwise store 54.110000000000056).
+    const newStock = round2(Math.max(0, (currentStock?.available_stock || 0) + delta));
 
     await supabase
       .from('billable_stock')

@@ -494,12 +494,19 @@ const Reports = () => {
 
           if (isNB) {
             const product = nonBillableProducts[regId] || { name: `Non-Billable Item #${regId || i}`, cost: 0 };
+            // Non-Billable invariants (see src/utils/nonBillableDefaults.js):
+            // units = 1 (USED), price = 0.00, amount = 0.00 — never derived
+            // from the master product cost / stock price.
             consumables.push({
               slot: i,
               name: product.name,
-              units: 0,
+              units: 1,
+              price: 0,
+              amount: 0,
               cost: 0,
+              isNonBillable: true,
             });
+            totalUnits = round2(totalUnits + 1);
           } else if (cId) {
             const product = billableProducts[cId] || { name: `Billable Item #${cId}`, cost: 0 };
             const units = Number(row[`consumable_${i}_units`] || 0);

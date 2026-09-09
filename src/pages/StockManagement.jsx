@@ -11,7 +11,7 @@ import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import * as stockApi from '../services/stockApi';
 import { formatDateDisplay, formatDateTimeDisplay } from '../utils/dateUtils';
-import { round2, fmtQty1 } from '../utils/numUtils';
+import { round2, fmtQty1, fmtQty2 } from '../utils/numUtils';
 
 // MIS operations are recorded against this user
 const CURRENT_USER = 'Admin';
@@ -342,7 +342,8 @@ const StockManagement = () => {
       return;
     }
 
-    const newStock = addUnits > 0 ? currentStock + addUnits : currentStock - reduceUnits;
+    // round2 kills floating-point artifacts from decimal adjustments.
+    const newStock = round2(addUnits > 0 ? currentStock + addUnits : currentStock - reduceUnits);
 
     if (newStock < 0) {
       alert('Stock cannot be negative');
@@ -362,7 +363,7 @@ const StockManagement = () => {
       );
 
       if (result.success) {
-        setSuccessMsg(`Stock adjusted successfully. New stock: ${newStock}`);
+        setSuccessMsg(`Stock adjusted successfully. New stock: ${fmtQty2(newStock)}`);
         setShowAdjustModal(false);
         setAdjustForm({ product_id: '', product_type: 'Billable', current_stock: 0, add_units: '', reduce_units: '', remarks: '' });
         fetchStock();
@@ -1270,7 +1271,7 @@ const StockManagement = () => {
                     </td>
                     <td className="rpt-nowrap" style={{ textAlign: 'center' }}>
                        <span className={`font-semibold ${round2(item.available_units) <= (item.minimum_units || 10) && item.available_units !== 0 ? 'text-red-600' : 'text-green-600'}`}>
-                        {fmtQty1(item.available_units)}
+                        {fmtQty2(item.available_units)}
                       </span>
                     </td>
                     <td className="rpt-nowrap" style={{ textAlign: 'center' }}>
@@ -1621,7 +1622,7 @@ const StockManagement = () => {
                       />
                       {adjustForm.add_units && Number(adjustForm.add_units) > 0 && (
                         <div style={{ fontSize: 11, color: '#059669', marginTop: 4 }}>
-                          New total: {fmtQty1(adjustForm.current_stock + Number(adjustForm.add_units))}
+                          New total: {fmtQty2(adjustForm.current_stock + Number(adjustForm.add_units))}
                         </div>
                       )}
                     </div>
@@ -1641,7 +1642,7 @@ const StockManagement = () => {
                       />
                       {adjustForm.reduce_units && Number(adjustForm.reduce_units) > 0 && (
                         <div style={{ fontSize: 11, color: adjustForm.reduce_units > adjustForm.current_stock ? '#DC2626' : '#6366f1', marginTop: 4 }}>
-                          New total: {fmtQty1(Math.max(0, adjustForm.current_stock - Number(adjustForm.reduce_units)))}
+                          New total: {fmtQty2(Math.max(0, adjustForm.current_stock - Number(adjustForm.reduce_units)))}
                         </div>
                       )}
                     </div>
@@ -1751,7 +1752,7 @@ const StockManagement = () => {
                 <SearchableDropdown
                   value={corpAddStockForm.product_id}
                   onChange={(val) => setCorpAddStockForm({ ...corpAddStockForm, product_id: val })}
-                  options={corporateStock.map(x => ({ value: String(x.id), label: `${x.product_name || 'Product ' + x.product_id} [${x.stock_type}] • Avail: ${fmtQty1(x.available_units)}` }))}
+                  options={corporateStock.map(x => ({ value: String(x.id), label: `${x.product_name || 'Product ' + x.product_id} [${x.stock_type}] • Avail: ${fmtQty2(x.available_units)}` }))}
                   placeholder="Select corporate product"
                   displayKey="label"
                   valueKey="value"
@@ -1951,7 +1952,7 @@ const StockManagement = () => {
                       />
                       <div className="flex-1" style={{ minWidth: 0 }}>
                         <div className="font-medium text-sm" style={{ lineHeight: 1.4 }}>{r.product_name || `Product ${r.product_id}`}</div>
-                        <div className="text-xs text-muted">Available: {r.available} units</div>
+                        <div className="text-xs text-muted">Available: {fmtQty2(r.available)} units</div>
                       </div>
                       {r.selected && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>

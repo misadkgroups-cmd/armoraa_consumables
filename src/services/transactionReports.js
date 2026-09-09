@@ -45,7 +45,10 @@ export async function getTransactionReport(filters = {}) {
     const productId = t.product_id;
     const master = isNb ? (nonBillableMaster && nonBillableMaster.data) || [] : (billableMaster && billableMaster.data) || [];
     const product = master.find((p) => Number(p.id) === Number(productId));
-    const unitCost = Number(isNb ? (product && product.cost) : (product && product.cost_unit)) || 0;
+    // Non-Billable items are ALWAYS priced at 0.00 (amount = 0.00) regardless
+    // of any cost recorded on the master product / stock. See
+    // src/utils/nonBillableDefaults.js and the 20260909 DB migration.
+    const unitCost = isNb ? 0 : (Number(product && product.cost_unit) || 0);
     const key = `${isNb ? 'nb' : 'b'}-${productId}`;
 
     if (!grouped[key]) {

@@ -1,4 +1,5 @@
 // Utility for mapping raw UI rows to the billable_report wide-format schema.
+import { applyNonBillableDefaults, NON_BILLABLE_UNITS } from './nonBillableDefaults';
 //
 // The billable_report table stores up to MAX_SLOTS consumable slots, each with:
 //   consumable_X_id             INT8 FK -> master_consumables (billable items only)
@@ -83,19 +84,22 @@ export function prepareSavePayload({ rows = [], allConsumables = [], getRegistry
       payload[`consumable_${slot}_id`] = null;
       payload[`is_non_billable_${slot}`] = true;
       payload[`non_billable_registry_id_${slot}`] = resolvedRegistryId;
-      payload[`consumable_${slot}_units`] = 1; // USED (numeric column, so 1 represents one USED unit)
+      payload[`consumable_${slot}_units`] = NON_BILLABLE_UNITS; // FORCED to 1 (USED) regardless of any entered value
       payload[`consumable_${slot}_batch_id`] = row.batchId || null;
 
-      // Normalized child table entry
-      consumableItems.push({
-        product_type: 'Non-Billable',
-        consumable_id: opt.rawId,
-        units: 1,
-        is_non_billable: true,
-        registry_id: resolvedRegistryId,
-        batch_id: row.batchId || null,
-        slot_number: slot,
-      });
+      // Normalized child table entry — Non-Billable invariants are forced here:
+      // units = 1, price = 0, amount = 0 (never derived from stock price).
+      // See src/utils/nonBillableDefaults.js and the 20260909 DB trigger.
+      consumableItems.push(
+        applyNonBillableDefaults({
+          product_type: 'Non-Billable',
+          consumable_id: opt.rawId,
+          is_non_billable: true,
+          registry_id: resolvedRegistryId,
+          batch_id: row.batchId || null,
+          slot_number: slot,
+        })
+      );
     } else {
       // Path A: Master (billable) item logic.
       const rawId = opt.rawId ? Number(opt.rawId) : null;

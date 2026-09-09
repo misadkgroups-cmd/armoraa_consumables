@@ -24,3 +24,12 @@ export function trunc1(n) {
 export function fmtQty1(n) {
   return trunc1(n).toFixed(1);
 }
+
+/**
+ * Stock storage/display standard: round to 2 decimal places, killing
+ * floating-point artifacts from decimal quantity arithmetic
+ * (e.g. 54.3 - 0.1 - 0.09 -> 54.110000000000056 -> 54.11).
+ */
+export function fmtQty2(n) {
+  return round2(n).toFixed(2);
+}

@@ -1,6 +1,6 @@
 import { supabase } from '../config/supabase';
 import { withRetry } from '../utils/supabaseRetry';
-import { round2 } from '../utils/numUtils';
+import { round2, fmtQty2 } from '../utils/numUtils';
 
 // Get current stock for a product
 // billable_stock / non_billable_stock are the SOURCE OF TRUTH.
@@ -298,7 +298,7 @@ export async function transferStock({
     }
     
     if (sourceCurrentStock < quantity) {
-      return { success: false, message: `Insufficient stock. Available: ${sourceCurrentStock}` };
+      return { success: false, message: `Insufficient stock. Available: ${fmtQty2(sourceCurrentStock)}` };
     }
 
     // Deduct from source branch
@@ -574,7 +574,7 @@ export async function transferFromCorporateBulk(transfers, toBranchId, toBranchN
           success: false,
           productId,
           product_name: t.product_name,
-          message: `Available stock is only ${corp.available_units} units.`,
+          message: `Available stock is only ${fmtQty2(corp.available_units)} units.`,
           available: corp.available_units,
         });
         continue;
@@ -604,7 +604,9 @@ export async function transferFromCorporateBulk(transfers, toBranchId, toBranchN
         .eq('branch_id', Number(toBranchId))
         .maybeSingle();
 
-      const newBranchStock = (existing?.available_stock || 0) + qty;
+      // round2 kills floating-point artifacts from decimal quantity math
+      // (e.g. 17.3 - 0.1 -> 17.199999999999996 would otherwise be stored).
+      const newBranchStock = round2((existing?.available_stock || 0) + qty);
 
       const { error: branchErr } = await withRetry(() =>
         supabase.from(table).upsert(
@@ -814,7 +816,7 @@ export async function createMultiLocationTransferRequest(
           success: false,
           productId,
           product_name: t.product_name,
-          message: `Insufficient stock. Available: ${sourceStock?.current_stock || 0}`,
+          message: `Insufficient stock. Available: ${fmtQty2(sourceStock?.current_stock || 0)}`,
         });
         continue;
       }
@@ -972,12 +974,13 @@ export async function createTransferRequest(transfers, toBranchId, toBranchName,
       }
 
       // Pre-validate sufficient stock (prevents transfer when insufficient)
+      // (branch-to-corporate transfer path)
       if (corp.available_units < qty) {
         results.push({
           success: false,
           productId,
           product_name: t.product_name,
-          message: `Available stock is only ${corp.available_units} units.`,
+          message: `Available stock is only ${fmtQty2(corp.available_units)} units.`,
           available: corp.available_units,
         });
         continue;
@@ -1160,7 +1163,8 @@ export async function getIncomingTransfers(branchId, limit = 50) {
       .eq('branch_id', toBranchId)
       .maybeSingle();
 
-    const newBranchStock = (existing?.available_stock || 0) + qty;
+    // round2 kills floating-point artifacts from decimal quantity math.
+    const newBranchStock = round2((existing?.available_stock || 0) + qty);
 
     // Increment branch stock only on confirmed receipt
     const { error: branchErr } = await withRetry(() =>

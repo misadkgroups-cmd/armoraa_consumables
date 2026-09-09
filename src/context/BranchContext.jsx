@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { supabase } from '../config/supabase';
-import { validateSession, endSession, startHeartbeat, clearHeartbeat, getCurrentSession } from '../services/sessionApi';
+import { validateSession, endSession, startHeartbeat, clearHeartbeat } from '../services/sessionApi';
 
 const BranchContext = createContext(null);
 
@@ -158,6 +157,11 @@ export const BranchProvider = ({ children }) => {
   );
 };
 
+// useBranch is a hook exported alongside the BranchProvider component. This file
+// intentionally mixes a component and a hook, which trips Vite's fast-refresh
+// rule; the hook is stable and relied upon, so the HMR boundary stays on the
+// provider component only.
+// eslint-disable-next-line react/only-export-components
 export const useBranch = () => {
   const context = useContext(BranchContext);
   if (!context) {

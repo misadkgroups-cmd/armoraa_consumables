@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
-import { writeFileSync, readFileSync } from 'fs'
+import { writeFileSync } from 'fs'
 
 // Unique ID generated per build. The running app compares this against the
 // version.json emitted into dist/ — if they differ, a new deploy is live and

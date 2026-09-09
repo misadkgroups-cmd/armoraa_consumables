@@ -7,6 +7,9 @@ import { prepareSavePayload } from '../utils/billableReportPayload';
 import { getTodayLocal, formatDateDisplay } from '../utils/dateUtils';
 import { withBase } from '../utils/navigation';
 
+// Dependency arrays kept intentionally minimal (loaders recreated each render).
+/* eslint-disable react-hooks/exhaustive-deps */
+
 const PARAM_KEYS = [
   'bill_no', 'uid', 'service_id', 'service_name',
   'service_date', 'billing_log_id', 'bill_service_id',
@@ -126,6 +129,9 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
     fetchServicesAndMachinery(sid);
   }, [branchId, query.service_id]);
 
+  // Date-load fetchers are recreated each render, so they're intentionally
+  // omitted from the dependency array to keep this a mount-on-branch effect.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (branchId) {
       fetchServices();
@@ -137,6 +143,8 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
   }, [branchId]);
 
   // Load existing consumables when editing - check by bill_service_id first, then billing_log_id
+  // Loaders are recreated each render — omitted from deps on purpose.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!branchId || allConsumables.length === 0) return;
     if (billServiceId) {
@@ -202,7 +210,11 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
         const productId = item.consumable_id;
         const compositeId = isNb ? `nbproduct-${productId}` : `billable-${productId}`;
         const batchInfo = registryBatchMap[productId];
-        
+
+        // Debug: confirm the exact value coming from the DB. If this prints 3,
+        // the rounding is in the stored data (historical), not in the UI.
+        console.log('Loaded consumable:', item.consumable_id, 'used_quantity =', item.used_quantity);
+
         loadedRows.push({
           id: Date.now() + index,
           consumableId: compositeId,
@@ -291,6 +303,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
     }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const onFocus = () => { if (branchId) { fetchAllConsumables(); fetchBillableStock(); } };
     window.addEventListener('focus', onFocus);
@@ -331,7 +344,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
 
   const fetchMachines = async () => {
     try {
-      const { data, error } = await supabase.from('master_machinery').select('id, machine_name').eq('branch_id', branchId).order('machine_name');
+      const { data } = await supabase.from('master_machinery').select('id, machine_name').eq('branch_id', branchId).order('machine_name');
       if (data) {
         const seen = new Set();
         const uniq = data.filter(m => { const k = m.machine_name.toLowerCase().trim(); if (seen.has(k)) return false; seen.add(k); return true; });
@@ -742,6 +755,122 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
     }
   };
 
+// Append-only audit trail for the consumables on this bill service.
+  // Writes one consumable_history row per changed consumable so the Detailed
+  // Log "History" modal can answer who/when/what changed. Diff logic:
+  //   - NEW report (isUpdate=false)   -> every saved row is 'Added'
+  //   - UPDATE (isUpdate=true)        -> rows kept with different units are
+  //                                      'Updated' (old_units captured); rows in
+  //                                      the old report no longer present are 'Deleted'
+  const writeConsumableHistory = async (savedReport, isUpdate, oldReport) => {
+    try {
+      const username = localStorage.getItem('username') || 'System';
+      const numericBillId = Number(billingLogId) || null;
+      const numericServiceId = Number(service) || null;
+      const bsId = billServiceId ? Number(billServiceId) : null;
+      const serviceName = query.service_name || '';
+
+      // Map non-billable registry row id -> product id so old non-billable
+      // slots can be compared with the current rows by the same raw id.
+      const regIdToRaw = {};
+      (registry || []).forEach((r) => { regIdToRaw[r.id] = r.product_id; });
+
+      const resolveOpt = (type, rawId) =>
+        (allConsumables || []).find(
+          (c) => c.type === type && Number(c.rawId) === Number(rawId)
+        );
+
+      // Build the OLD state (from the previously saved report) keyed by type:rawId
+      const oldMap = {};
+      const oldUnits = {};
+      if (isUpdate && oldReport) {
+        for (let i = 1; i <= 14; i++) {
+          const isNb = !!oldReport[`is_non_billable_${i}`];
+          const batchId = oldReport[`consumable_${i}_batch_id`] || null;
+          if (isNb) {
+            const reg = oldReport[`non_billable_registry_id_${i}`];
+            const rawId = regIdToRaw[reg];
+            if (!rawId) continue;
+            const key = `nb:${rawId}`;
+            oldMap[key] = { rawId, isNb, batchId };
+            oldUnits[key] = 1; // USED
+          } else {
+            const cId = oldReport[`consumable_${i}_id`];
+            if (!cId) continue;
+            const key = `b:${cId}`;
+            oldMap[key] = { rawId: cId, isNb: false, batchId };
+            oldUnits[key] = Number(oldReport[`consumable_${i}_units`]) || 0;
+          }
+        }
+      }
+
+      // Build the NEW state from the current rows.
+      const newKeys = new Set();
+      const entries = [];
+      for (const row of rows) {
+        if (!row.consumableId) continue;
+        const opt = allConsumables.find((c) => c.id === row.consumableId);
+        if (!opt) continue;
+        const isNb = opt.type === 'nonbillable';
+        const key = `${isNb ? 'nb' : 'b'}:${opt.rawId}`;
+        newKeys.add(key);
+        // Preserve exact decimal quantities — never round units to whole numbers.
+        const unitsNum = isNb ? 1 : Number(row.units) || 0;
+        const wasPresent = Object.prototype.hasOwnProperty.call(oldMap, key);
+        const oldQty = wasPresent ? (oldUnits[key] || 0) : null;
+        const action = !isUpdate ? 'Added' : (wasPresent ? 'Updated' : 'Added');
+        entries.push({
+          bill_id: numericBillId,
+          bill_service_id: bsId,
+          service_id: numericServiceId,
+          service_name: serviceName,
+          consumable_id: Number(opt.rawId),
+          consumable_name: opt.name,
+          product_type: isNb ? 'Non-Billable' : 'Billable',
+          batch_id: row.batchId || null,
+          units: unitsNum,
+          old_units: action === 'Updated' ? oldQty : null,
+          action_type: action,
+          branch_id: branchId,
+          entered_by: username,
+        });
+      }
+
+      // Deleted: keys in the old report that are no longer in the new state.
+      for (const key of Object.keys(oldMap)) {
+        if (newKeys.has(key)) continue;
+        const [type, rawId] = key.split(':');
+        const isNb = type === 'nb';
+        const opt = resolveOpt(isNb ? 'nonbillable' : 'billable', rawId);
+        entries.push({
+          bill_id: numericBillId,
+          bill_service_id: bsId,
+          service_id: numericServiceId,
+          service_name: serviceName,
+          consumable_id: Number(rawId),
+          consumable_name: opt ? opt.name : `Item #${rawId}`,
+          product_type: isNb ? 'Non-Billable' : 'Billable',
+          batch_id: oldMap[key].batchId || null,
+          units: 0,
+          old_units: oldUnits[key] || 0,
+          action_type: 'Deleted',
+          branch_id: branchId,
+          entered_by: username,
+        });
+      }
+
+      if (entries.length > 0) {
+        // Records only apply when a bill service context exists; otherwise skip
+        // quietly so a standalone save never fails because of the audit log.
+        await supabase.from('consumable_history').insert(entries);
+      }
+      return savedReport ? savedReport.id : null;
+    } catch (e) {
+      console.error('Failed to write consumable history:', e);
+      return savedReport ? savedReport.id : null;
+    }
+  };
+
   const handleSave = async () => {
     if (!service) { showToast('error', 'Please select a service'); return; }
     if (!machinery) { showToast('error', 'No machinery mapped for selected service'); return; }
@@ -751,7 +880,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
     // (non-billable rows use the 'USED' sentinel and are exempt). A row with a
     // consumable selected but blank / 0 units must NOT be saved — otherwise the
     // service gets marked Complete while nothing was actually consumed.
-    const invalidRow = rows.find((row, idx) =>
+    const invalidRow = rows.find((row) =>
       row.consumableId &&
       row.units !== 'USED' &&
       (!row.units || Number(row.units) <= 0 || isNaN(Number(row.units)))
@@ -760,6 +889,23 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       const name = invalidRow.consumableName ||
         allConsumables.find(c => c.id === Number(invalidRow.consumableId))?.name || 'a consumable';
       showToast('error', `Please enter units for "${name}" — units cannot be blank or 0`);
+      return;
+    }
+
+    // Validate: every non-billable consumable requires a Batch ID. Units are
+    // fixed at 1 ('USED'), so batch selection is the only input required from
+    // the user for non-billable items. Without a batch the registry FK and
+    // batch_id would be saved as NULL, defeating the consumption record.
+    const missingBatchRow = rows.find((row) =>
+      row.consumableId && row.consumableType === 'nonbillable' && !row.batchId
+    );
+    if (missingBatchRow) {
+      const opt = allConsumables.find((c) => c.id === Number(missingBatchRow.consumableId));
+      const name = missingBatchRow.consumableName || opt?.name || 'a non-billable consumable';
+      const noActiveBatch = !opt?.batches || opt.batches.length === 0;
+      showToast('error', noActiveBatch
+        ? `"${name}" has no active batches — please register a batch in Non-Billable Consumables first`
+        : `Please select a Batch ID for "${name}"`);
       return;
     }
 
@@ -793,10 +939,13 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
         },
       });
       
-      // Add validated billing_log_id to establish the foreign key relationship
+      // Add validated billing_log_id to establish the foreign key relationship.
+      // Always stamp the acting user so the audit/history UI can show "Updated By"
+      // even before the consumable_history table is consulted.
       const payloadWithRelationship = {
         ...reportPayload,
         billing_log_id: validBillingLogId,
+        updated_by: localStorage.getItem('username') || 'System',
       };
       
       // Store consumable items for later billable_report_consumables insert
@@ -936,7 +1085,9 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
             // Skip billable rows with no positive units — a 0/blank-unit billable
             // row must never become a 'Used' consumable record (it would let the
             // DB trigger allow the service to be marked Complete).
-            const usedQty = isNb ? 1 : Math.round(Number(row.units) || 0);
+            // Decimal quantities are supported and must be saved exactly as
+            // entered (e.g. 2.6 ml) — no Math.round/parseInt on units.
+            const usedQty = isNb ? 1 : Number(row.units) || 0;
             if (!isNb && usedQty <= 0) continue;
             billServiceConsumableInserts.push({
               bill_service_id: targetBillServiceId,
@@ -1030,6 +1181,9 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       // Auto-deduct inventory after successful save.
       // On UPDATE, pass the old report so stock is adjusted by the difference.
       if (savedReport) {
+        // Append audit rows to consumable_history BEFORE deducting stock so the
+        // (Added/Updated/Deleted) trail is captured on every save.
+        await writeConsumableHistory(savedReport, isUpdate, oldReport);
         await deductInventory(reportPayload, savedReport.id, isUpdate, oldReport);
       }
 
@@ -1140,18 +1294,6 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
     } else {
       // Force page reload to see updated status
       window.location.href = withBase('/billing-log/all-bills?refresh=') + Date.now() + '&openBill=' + (billingLogId || '');
-    }
-  };
-
-  const handleClose = () => {
-    if (embedded) {
-      if (onCancel) onCancel();
-      return;
-    }
-    // Best-effort cleanup: remove query params so returning to this page is clean
-    if (window.location.search) {
-      const clean = window.location.pathname;
-      window.history.replaceState({}, '', clean);
     }
   };
 

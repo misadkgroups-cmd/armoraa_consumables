@@ -1,13 +1,17 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
-import { Search, Plus, Edit2, Package, TrendingUp, TrendingDown, ArrowLeftRight, History, FileText, FileSpreadsheet, Send, Printer } from 'lucide-react';
+import { Search, Plus, Edit2, Package, TrendingDown, ArrowLeftRight, History, FileText, FileSpreadsheet, Send, Printer } from 'lucide-react';
 import SearchableDropdown from '../components/SearchableDropdown';
 import * as XLSX from 'xlsx';
+
+// Dependency arrays kept intentionally minimal (helpers recreated each render;
+// filteredHistory depends on `history` which is already narrowed). Deliberate.
+/* eslint-disable react-hooks/exhaustive-deps */
 import { jsPDF } from 'jspdf';
 import * as stockApi from '../services/stockApi';
 import { formatDateDisplay, formatDateTimeDisplay } from '../utils/dateUtils';
-import { round2 } from '../utils/numUtils';
+import { round2, fmtQty1 } from '../utils/numUtils';
 
 // MIS operations are recorded against this user
 const CURRENT_USER = 'Admin';
@@ -418,8 +422,9 @@ const StockManagement = () => {
     setLoading(true);
     try {
       const productIdInt = parseInt(corporateForm.product_id);
-      const availableUnitsInt = parseInt(corporateForm.available_units);
-      const minimumUnitsInt = parseInt(corporateForm.minimum_units) || 10;
+      // Stock units support decimals (e.g. 10.5 ml) — never parseInt them.
+      const availableUnitsInt = parseFloat(corporateForm.available_units);
+      const minimumUnitsInt = parseFloat(corporateForm.minimum_units) || 10;
       const productName = products.find(p => String(p.id) === corporateForm.product_id)?.product_name || '';
 
       if (!editingCorporateId) {
@@ -616,6 +621,7 @@ const StockManagement = () => {
 
   // Sync transfer rows when from_branch_id or product_type changes
   // NOTE: Do NOT include transfer_type here - it causes race condition with handleTransferTypeChange
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (showTransferModal && transferForm.from_branch_id) {
       const rows = initTransferRows(transferForm.product_type, transferForm.from_branch_id);
@@ -658,7 +664,7 @@ const StockManagement = () => {
   };
 
   const handleTransferAll = async () => {
-    const { transfer_type, from_branch_id, to_branch_id, product_type, remarks } = transferForm;
+    const { transfer_type, from_branch_id, to_branch_id, remarks } = transferForm;
 
     if (!to_branch_id) {
       alert('Please select a destination');
@@ -763,17 +769,6 @@ const StockManagement = () => {
     return products.find(p => p.id === id && p.type === type) || null;
   };
 
-
-  const getTransactionIcon = (type) => {
-    switch (type) {
-      case 'Inward': return <TrendingUp size={16} className="text-green-600" />;
-      case 'Outward': return <TrendingDown size={16} className="text-red-600" />;
-      case 'Transfer': return <ArrowLeftRight size={16} className="text-blue-600" />;
-      case 'Adjustment': return <Edit2 size={16} className="text-orange-600" />;
-      default: return <Package size={16} className="text-gray-600" />;
-    }
-  };
-
   // ---- Filtering (search) ----
   const filteredStock = useMemo(() => {
     return stock.filter(item => {
@@ -831,6 +826,10 @@ const StockManagement = () => {
     });
   }, [history]);
 
+  // Filtering depends on `history` (already narrowed by branch/date elsewhere)
+  // rather than the raw branch/date flags; helper fns are recreated each render,
+  // so the effect list is intentionally kept minimal.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const filteredHistory = useMemo(() => {
     const s = (search || '').toLowerCase().trim();
     let result = history;
@@ -870,6 +869,7 @@ const StockManagement = () => {
   }, [history, search, branches, historyProductFilter, activeTab, historySubTab, transferHistory, consumedHistory, historyBranchFilter, historyDateFrom, historyDateTo]);
 
   // ---- Unified export data (works for every tab) ----
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   const buildExportData = useMemo(() => {
     if (activeTab === 'corporate') {
       const rows = filteredCorporateStock.map(item => ({
@@ -1270,7 +1270,7 @@ const StockManagement = () => {
                     </td>
                     <td className="rpt-nowrap" style={{ textAlign: 'center' }}>
                        <span className={`font-semibold ${round2(item.available_units) <= (item.minimum_units || 10) && item.available_units !== 0 ? 'text-red-600' : 'text-green-600'}`}>
-                        {Number(item.available_units || 0).toFixed(2)}
+                        {fmtQty1(item.available_units)}
                       </span>
                     </td>
                     <td className="rpt-nowrap" style={{ textAlign: 'center' }}>
@@ -1488,7 +1488,6 @@ const StockManagement = () => {
                   </tr>
                 )}
                 {filteredHistory.map((item) => {
-                  const t = (item.transaction_type || '').toLowerCase();
                   const statusColor = item.status === 'Received' ? 'text-green-600' : item.status === 'Pending' ? 'text-amber-600' : 'text-gray-600';
                   const canReceive = !misMode && branchId && String(item.to_branch_id) === String(branchId) && item.status === 'Pending';
 
@@ -1501,7 +1500,7 @@ const StockManagement = () => {
                           </span>
                         </td>
                         <td className="rpt-wrap font-medium">{item.product_name || `Product ${item.product_id || ''}`}</td>
-                        <td className="rpt-nowrap" style={{ textAlign: 'center' }}><span className="font-semibold">{Number(item.quantity || 0).toFixed(2)}</span></td>
+                        <td className="rpt-nowrap" style={{ textAlign: 'center' }}><span className="font-semibold">{fmtQty1(item.quantity)}</span></td>
                         <td className="rpt-nowrap">
                           {item.fromLabel || (item.transaction_type === 'Inward' ? 'Stock Added' : item.transaction_type === 'Adjustment' ? 'Manual Correction' : branchNameById(item.from_branch_id))}
                         </td>
@@ -1536,7 +1535,7 @@ const StockManagement = () => {
                       </td>
                       <td className="rpt-wrap font-medium">{item.product_name || `Product ${item.product_id || ''}`}</td>
                       <td className="rpt-nowrap" style={{ textAlign: 'center' }}>
-                        <span className="font-semibold text-red-600">-{Number(Math.abs(Number(item.quantity) || 0)).toFixed(2)}</span>
+                        <span className="font-semibold text-red-600">-{fmtQty1(Math.abs(Number(item.quantity) || 0))}</span>
                       </td>
                       <td className="rpt-nowrap">
                         {item.toLabel === 'Consumed' ? (item.fromLabel || branchNameById(item.branch_id)) : branchNameById(item.branch_id)}
@@ -1617,11 +1616,12 @@ const StockManagement = () => {
                         onChange={(e) => setAdjustForm({ ...adjustForm, add_units: e.target.value, reduce_units: '' })}
                         placeholder="Enter units to add"
                         min="0"
+                        step="0.1"
                         style={{ borderColor: adjustForm.add_units ? '#059669' : undefined }}
                       />
                       {adjustForm.add_units && Number(adjustForm.add_units) > 0 && (
                         <div style={{ fontSize: 11, color: '#059669', marginTop: 4 }}>
-                          New total: {Number(round2(adjustForm.current_stock + Number(adjustForm.add_units))).toFixed(2)}
+                          New total: {fmtQty1(adjustForm.current_stock + Number(adjustForm.add_units))}
                         </div>
                       )}
                     </div>
@@ -1635,12 +1635,13 @@ const StockManagement = () => {
                         onChange={(e) => setAdjustForm({ ...adjustForm, reduce_units: e.target.value, add_units: '' })}
                         placeholder="Enter units to reduce"
                         min="0"
+                        step="0.1"
                         max={adjustForm.current_stock}
                         style={{ borderColor: adjustForm.reduce_units ? '#DC2626' : undefined }}
                       />
                       {adjustForm.reduce_units && Number(adjustForm.reduce_units) > 0 && (
                         <div style={{ fontSize: 11, color: adjustForm.reduce_units > adjustForm.current_stock ? '#DC2626' : '#6366f1', marginTop: 4 }}>
-                          New total: {Number(round2(Math.max(0, adjustForm.current_stock - Number(adjustForm.reduce_units)))).toFixed(2)}
+                          New total: {fmtQty1(Math.max(0, adjustForm.current_stock - Number(adjustForm.reduce_units)))}
                         </div>
                       )}
                     </div>
@@ -1715,11 +1716,11 @@ const StockManagement = () => {
                 <>
                   <div className="space-y-1">
                     <label className="text-xs font-semibold text-muted block">Available Units <span style={{ color: '#EF4444' }}>*</span></label>
-                    <input type="number" className="form-input" value={corporateForm.available_units} onChange={(e) => setCorporateForm({ ...corporateForm, available_units: e.target.value })} placeholder="Enter units" min="0" />
+                    <input type="number" className="form-input" value={corporateForm.available_units} onChange={(e) => setCorporateForm({ ...corporateForm, available_units: e.target.value })} placeholder="Enter units" min="0" step="0.1" />
                   </div>
                   <div className="space-y-1">
                     <label className="text-xs font-semibold text-muted block">Minimum Units</label>
-                    <input type="number" className="form-input" value={corporateForm.minimum_units} onChange={(e) => setCorporateForm({ ...corporateForm, minimum_units: e.target.value })} placeholder="Minimum stock level" min="0" />
+                    <input type="number" className="form-input" value={corporateForm.minimum_units} onChange={(e) => setCorporateForm({ ...corporateForm, minimum_units: e.target.value })} placeholder="Minimum stock level" min="0" step="0.1" />
                   </div>
                   <div className="space-y-1">
                     <label className="text-xs font-semibold text-muted block">Remarks</label>
@@ -1750,7 +1751,7 @@ const StockManagement = () => {
                 <SearchableDropdown
                   value={corpAddStockForm.product_id}
                   onChange={(val) => setCorpAddStockForm({ ...corpAddStockForm, product_id: val })}
-                  options={corporateStock.map(x => ({ value: String(x.id), label: `${x.product_name || 'Product ' + x.product_id} [${x.stock_type}] • Avail: ${Number(round2(x.available_units)).toFixed(2)}` }))}
+                  options={corporateStock.map(x => ({ value: String(x.id), label: `${x.product_name || 'Product ' + x.product_id} [${x.stock_type}] • Avail: ${fmtQty1(x.available_units)}` }))}
                   placeholder="Select corporate product"
                   displayKey="label"
                   valueKey="value"
@@ -1760,7 +1761,7 @@ const StockManagement = () => {
                 <>
                   <div className="space-y-1">
                     <label className="text-xs font-semibold text-muted block">Quantity to Add <span style={{ color: '#EF4444' }}>*</span></label>
-                    <input type="number" className="form-input" value={corpAddStockForm.quantity} onChange={(e) => setCorpAddStockForm({ ...corpAddStockForm, quantity: e.target.value })} placeholder="Enter units to add" min="1" />
+                    <input type="number" className="form-input" value={corpAddStockForm.quantity} onChange={(e) => setCorpAddStockForm({ ...corpAddStockForm, quantity: e.target.value })} placeholder="Enter units to add" min="0.1" step="0.1" />
                   </div>
                   <div className="space-y-1">
                     <label className="text-xs font-semibold text-muted block">Remarks</label>
@@ -1801,7 +1802,7 @@ const StockManagement = () => {
                 <>
                   <div className="space-y-1">
                     <label className="text-xs font-semibold text-muted block">Quantity <span style={{ color: '#EF4444' }}>*</span></label>
-                    <input type="number" className="form-input" value={addInwardForm.quantity} onChange={(e) => setAddInwardForm({ ...addInwardForm, quantity: e.target.value })} placeholder="Enter quantity to add" min="1" />
+                    <input type="number" className="form-input" value={addInwardForm.quantity} onChange={(e) => setAddInwardForm({ ...addInwardForm, quantity: e.target.value })} placeholder="Enter quantity to add" min="0.1" step="0.1" />
                   </div>
                   <div className="space-y-1">
                     <label className="text-xs font-semibold text-muted block">Remarks</label>

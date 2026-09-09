@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 
-const SearchableDropdown = ({ options = [], value, onChange, placeholder = "Search and select...", displayKey = "name", valueKey = "id", required = false, disabled = false, className = "" }) => {
+const SearchableDropdown = ({ options = [], value, onChange, placeholder = "Search and select...", displayKey = "name", valueKey = "id", required = false, disabled = false, className = "", autofocus = false }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
@@ -8,6 +8,17 @@ const SearchableDropdown = ({ options = [], value, onChange, placeholder = "Sear
   const inputRef = useRef(null);
 
   const selectedOption = options.find(opt => String(opt[valueKey]) === String(value));
+
+  // When the `autofocus` flag is set (e.g. a freshly added row below the one the
+  // user just selected), open the dropdown and focus its search input so the
+  // user can immediately type/select the next value without an extra click.
+  useEffect(() => {
+    if (autofocus) {
+      setIsOpen(true);
+      setSearchText('');
+      inputRef.current?.focus();
+    }
+  }, [autofocus]);
 
   useEffect(() => {
     const handleClickOutside = (event) => {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { format } from 'date-fns';
 import { formatDateDisplay } from '../utils/dateUtils';
-import { round2 } from '../utils/numUtils';
+import { round2, fmtQty1 } from '../utils/numUtils';
 import { getCurrencySymbol } from '../utils/currency';
 import * as XLSX from 'xlsx';
 import { supabase } from '../config/supabase';
@@ -12,7 +12,13 @@ import {
   getSummaryNonBillableReport,
 } from '../services/nonBillableReports';
 import { getTransactionReport } from '../services/transactionReports';
-import { Search, Download, FileText, FileSpreadsheet, Trash2, RotateCcw } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
+
+// The data-fetch effects/useMemos in this file intentionally keep minimal
+// dependency arrays (fetch helpers recreated each render; derived filters that
+// already depend on `history`), which the exhaustive-deps rule flags. The rule
+// is disabled file-wide because those arrays are deliberate, not accidental.
+/* eslint-disable react-hooks/exhaustive-deps */
 
 // Reusable KPI summary card — matches the Transaction Report card design exactly
 const KpiCard = ({ label, value, isCurrency = false }) => (
@@ -97,6 +103,7 @@ const Reports = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctxBranch]);
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (ctxBranch) {
       fetchBranches();
@@ -497,15 +504,22 @@ const Reports = () => {
             const product = billableProducts[cId] || { name: `Billable Item #${cId}`, cost: 0 };
             const units = Number(row[`consumable_${i}_units`] || 0);
 
-            consumables.push({
-              slot: i,
-              name: product.name,
-              units,
-              cost: product.cost,
-            });
+            // Skip billable consumables with NULL / 0 / negative units. A
+            // consumable id may exist in the DB without a valid quantity (e.g.
+            // legacy rows saved before save-time validation was hardened). Such
+            // rows represent no actual consumption and must NOT show as a
+            // "0 units" line or inflate the totals — or the cost will be padded.
+            if (units > 0) {
+              consumables.push({
+                slot: i,
+                name: product.name,
+                units,
+                cost: product.cost,
+              });
 
-            totalUnits = round2(totalUnits + units);
-            totalCost = round2(totalCost + units * product.cost);
+              totalUnits = round2(totalUnits + units);
+              totalCost = round2(totalCost + units * product.cost);
+            }
           }
         }
 
@@ -1481,7 +1495,7 @@ const Reports = () => {
                             </span>
                           </td>
                           <td className="px-4 py-3 text-sm text-gray-700 whitespace-nowrap" style={{ maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis' }}>{row.productName || '-'}</td>
-                          <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{Number(row.quantity || 0).toFixed(2)}</td>
+                          <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{fmtQty1(row.quantity)}</td>
                           <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-right whitespace-nowrap">{getCurrencySymbol()}{Number(row.unitCost || 0).toFixed(2)}</td>
                           <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{getCurrencySymbol()}{Number(row.totalCost || 0).toFixed(2)}</td>
                         </tr>
@@ -1666,8 +1680,8 @@ const Reports = () => {
                             <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['TOTAL REGISTRY COUNT'] || 0}</td>
                             <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['OPENING STOCK'] || 0}</td>
                             <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{row['RECEIVED'] || 0}</td>
-                            <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{Number(row['USED'] || 0).toFixed(2)}</td>
-                            <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{Number(row['CLOSING STOCK'] || 0).toFixed(2)}</td>
+                            <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{fmtQty1(row['USED'])}</td>
+                            <td className="px-4 py-3 text-sm font-semibold text-gray-700 text-center">{fmtQty1(row['CLOSING STOCK'])}</td>
                             <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{getCurrencySymbol()}{Number(row['COMPLETE COST'] || 0).toFixed(2)}</td>
                             <td className="px-4 py-3 text-sm font-bold text-gray-900 text-right whitespace-nowrap">{getCurrencySymbol()}{Number(row['INCOMPLETE COST'] || 0).toFixed(2)}</td>
                           </tr>

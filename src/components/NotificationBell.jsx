@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
 import * as stockApi from '../services/stockApi';
+import { fmtQty1 } from '../utils/numUtils';
 
 const NotificationBell = ({ userId }) => {
   const { branchId, misMode } = useBranch();
@@ -52,7 +53,7 @@ const NotificationBell = ({ userId }) => {
       // MIS direct login tokens start with 'mis_' - these are NOT stored in the DB,
       // they are direct/offline tokens that are always valid until logout.
       if (sessionToken.startsWith('mis_')) return;
-      const { data: session, error } = await supabase
+      const { data: session } = await supabase
         .from('user_sessions')
         .select('is_active, logout_time')
         .eq('session_token', sessionToken)
@@ -185,7 +186,7 @@ const NotificationBell = ({ userId }) => {
                     </div>
                     <div className="notif-card-row">
                       <span className="notif-card-row-label">Qty</span>
-                      <span className="notif-card-row-value">{Number(t.quantity || 0).toFixed(2)} Units</span>
+                      <span className="notif-card-row-value">{fmtQty1(t.quantity)} Units</span>
                     </div>
                     <div className="notif-card-row">
                       <span className="notif-card-row-label">From</span>

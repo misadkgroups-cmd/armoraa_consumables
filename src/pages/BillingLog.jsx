@@ -9,6 +9,11 @@ import BillDetailsModal from '../components/BillDetailsModal';
 import { getTodayLocal, formatDateDisplay } from '../utils/dateUtils';
 import { withBase } from '../utils/navigation';
 
+// Dependency arrays here intentionally stay minimal (fetchers recreated each
+// render; edit-request effect re-runs via bills/urlState). Deliberate, so the
+// rule is disabled file-wide.
+/* eslint-disable react-hooks/exhaustive-deps */
+
 const FIELD_LABEL = {
   fontSize: '11px',
   fontWeight: 600,
@@ -58,12 +63,15 @@ export default function BillingLog({ onNavigate, urlState }) {
   
   // Multiple services array
   const [serviceRows, setServiceRows] = useState([]);
+  // Row id of the freshly auto-appended empty service row that should receive
+  // focus so the user can immediately select the next service.
+  const [autoFocusRowId, setAutoFocusRowId] = useState(null);
 
   // Edit mode
   const [editingBillId, setEditingBillId] = useState(null);
 
   // Filters
-  const [filters, setFilters] = useState({
+  const [filters] = useState({
     bill_no: '',
     uid: '',
     patient_name: '',
@@ -75,6 +83,9 @@ export default function BillingLog({ onNavigate, urlState }) {
   const [showHistoryModal, setShowHistoryModal] = useState(false);
 
 
+  // These fetchers are recreated each render, so they are intentionally omitted
+  // from the dependency array to keep this a mount-on-branch-change effect.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (branchId) {
       fetchServices();
@@ -268,11 +279,15 @@ export default function BillingLog({ onNavigate, urlState }) {
     if (!formData.bill_no.trim()) errors.bill_no = 'Bill Number is required';
     if (!formData.patient_name.trim()) errors.patient_name = 'Patient Name is required';
     
-    // Validate at least one service is selected
-    if (serviceRows.length === 0) {
+    // Validate at least one service is selected. Rows are appended automatically
+    // as each service is picked, so trailing empty rows are ignored — they are
+    // placeholders for further selection, not part of the chosen services.
+    const trimmedRows = serviceRows.slice();
+    while (trimmedRows.length && !trimmedRows[trimmedRows.length - 1].service_id) trimmedRows.pop();
+    if (trimmedRows.length === 0) {
       errors.services = 'At least one service is required';
     } else {
-      const hasInvalidService = serviceRows.some(row => !row.service_id);
+      const hasInvalidService = trimmedRows.some(row => !row.service_id);
       if (hasInvalidService) errors.services = 'All services must be selected';
     }
     
@@ -295,6 +310,16 @@ export default function BillingLog({ onNavigate, urlState }) {
     return true;
   };
 
+  // Returns the rows that actually contain a selected service, dropping the
+  // trailing empty placeholder row(s) that are auto-appended as the user picks
+  // services. Used by validation and both save paths so a placeholder never
+  // becomes a bogus bill_service row (which would carry service_id = NaN).
+  const getFilledServiceRows = () => {
+    const rows = serviceRows.slice();
+    while (rows.length && !rows[rows.length - 1].service_id) rows.pop();
+    return rows;
+  };
+
   const addServiceRow = () => {
     setServiceRows([...serviceRows, { id: Date.now() + serviceRows.length, service_id: '', service_name: '' }]);
   };
@@ -305,11 +330,22 @@ export default function BillingLog({ onNavigate, urlState }) {
 
   const handleServiceChange = (id, value) => {
     const service = services.find(s => s.id === parseInt(value));
-    setServiceRows(serviceRows.map(row => 
-      row.id === id 
+    const updatedRows = serviceRows.map(row =>
+      row.id === id
         ? { ...row, service_id: value, service_name: service?.service_name || '' }
         : row
-    ));
+    );
+    setServiceRows(updatedRows);
+
+    // Automatically open the next service row: whenever a service is selected,
+    // ensure there is an empty row below it ready for the next selection so the
+    // user can quickly pick multiple services. If the form's last row is now
+    // filled (it was the one just edited), append a new empty one and focus it.
+    if (value && updatedRows[updatedRows.length - 1].service_id) {
+      const newId = Date.now() + updatedRows.length;
+      setServiceRows([...updatedRows, { id: newId, service_id: '', service_name: '' }]);
+      setAutoFocusRowId(String(newId));
+    }
   };
 
   const handleSaveBill = async () => {
@@ -353,7 +389,7 @@ export default function BillingLog({ onNavigate, urlState }) {
         const reusable = [...(existingServices || [])];
         const usedExistingIds = new Set();
         const addedRows = [];
-        serviceRows.forEach((row) => {
+        getFilledServiceRows().forEach((row) => {
           const match = reusable.find(bs => bs.service_id === parseInt(row.service_id) && !usedExistingIds.has(bs.id));
           if (match) usedExistingIds.add(match.id);
           else addedRows.push(row);
@@ -451,7 +487,7 @@ export default function BillingLog({ onNavigate, urlState }) {
         if (billError) throw billError;
 
         // Create bill_services for each selected service
-        const billServicesPayload = serviceRows.map(row => ({
+        const billServicesPayload = getFilledServiceRows().map(row => ({
           bill_id: billData.id,
           service_id: parseInt(row.service_id),
           service_name: row.service_name,
@@ -537,46 +573,6 @@ export default function BillingLog({ onNavigate, urlState }) {
   };
 
 
-  // Navigate to Add Consumables for a specific service
-  const handleAddConsumables = (bill, billServiceId, serviceId, serviceName) => {
-    const billData = {
-      bill_no: bill.bill_no,
-      uid: bill.uid || '',
-      service_date: bill.service_date,
-      billing_log_id: bill.id,
-      bill_service_id: billServiceId,
-      service_id: serviceId,
-      service_name: serviceName,
-    };
-    if (onNavigate) {
-      onNavigate('billable', billData);
-    } else {
-      const url = `/billable-consumables?bill_no=${encodeURIComponent(bill.bill_no)}&uid=${encodeURIComponent(bill.uid || '')}&service_date=${bill.service_date}&billing_log_id=${bill.id}&bill_service_id=${billServiceId}&service_id=${serviceId}&service_name=${encodeURIComponent(serviceName)}`;
-      window.history.pushState({}, '', withBase(url));
-      window.location.reload();
-    }
-  };
-
-  // Navigate to Edit Consumables for a completed service
-  const handleEditConsumables = (bill, billServiceId, serviceId, serviceName) => {
-    const billData = {
-      bill_no: bill.bill_no,
-      uid: bill.uid || '',
-      service_date: bill.service_date,
-      billing_log_id: bill.id,
-      bill_service_id: billServiceId,
-      service_id: serviceId,
-      service_name: serviceName,
-    };
-    if (onNavigate) {
-      onNavigate('billable', billData);
-    } else {
-      const url = `/billable-consumables?bill_no=${encodeURIComponent(bill.bill_no)}&uid=${encodeURIComponent(bill.uid || '')}&service_date=${bill.service_date}&billing_log_id=${bill.id}&bill_service_id=${billServiceId}&service_id=${serviceId}&service_name=${encodeURIComponent(serviceName)}`;
-      window.history.pushState({}, '', withBase(url));
-      window.location.reload();
-    }
-  };
-
   // Fetch consumable counts per bill_service (used for the progress display)
   const fetchConsumableCounts = async (servicesList) => {
     if (!servicesList || servicesList.length === 0) return;
@@ -611,7 +607,7 @@ export default function BillingLog({ onNavigate, urlState }) {
   // Refresh bill services after an embedded consumable save (keeps popup open).
   // Accepts an optional savedInfo payload from the embedded editor.
   // Memoised with useCallback so the BillDetailsModal can memoise its onSaveComplete handler.
-  const refreshBillServices = useCallback(async (savedInfo) => {
+  const refreshBillServices = useCallback(async (_savedInfo) => {
     if (!viewData?.bill?.id) return;
     try {
       // Re-fetch latest service status (consumable_completed, service_status) from DB
@@ -821,6 +817,9 @@ export default function BillingLog({ onNavigate, urlState }) {
   //   (c) URL param ?edit_bill_id=<id> from a full-page load.
   // The request is always cleared after being consumed so revisiting the page
   // never re-opens edit mode unexpectedly.
+  // onNavigate is stable but deliberately omitted; the effect re-runs via
+  // bills/urlState changes, so including it would add churn without benefit.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const stateId = urlState && urlState.edit_bill_id ? Number(urlState.edit_bill_id) : null;
@@ -1008,6 +1007,7 @@ export default function BillingLog({ onNavigate, urlState }) {
                     placeholder="Select Service"
                     displayKey="label"
                     valueKey="value"
+                    autofocus={autoFocusRowId === String(row.id)}
                   />
                 </div>
                 <div style={{ gridColumn: 'span 1' }}>

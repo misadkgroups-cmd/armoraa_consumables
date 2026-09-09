@@ -3,7 +3,6 @@ import { supabase } from '../config/supabase';
 import { Search, Plus, Edit2, Trash2, X, Package, Settings, Cog, Boxes } from 'lucide-react';
 import SearchableDropdown from '../components/SearchableDropdown';
 import * as auditApi from '../services/auditApi';
-import { round2 } from '../utils/numUtils';
 import { getCurrencySymbol, setCurrencyCode, syncCurrencyFromDb } from '../utils/currency';
 import { supabase as supabaseCfg } from '../config/supabase';
 
@@ -318,7 +317,7 @@ const Customization = () => {
   /* =================== MACHINERY =================== */
   const [machines, setMachines] = useState([]);
   const [machServices, setMachServices] = useState([]);
-  const [mSearch, setMSearch] = useState('');
+  const [mSearch] = useState('');
   const [mModal, setMModal] = useState(null);
   const [mForm, setMForm] = useState({ machine_name: '', service_id: '' });
 

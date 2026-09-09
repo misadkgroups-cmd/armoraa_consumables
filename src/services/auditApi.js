@@ -183,7 +183,7 @@ export const logActivity = async ({
 // Completion timestamps are NEVER substituted into the creation field.
 // ---------------------------------------------------------------------------
 
-const ACTIVITY_TYPE_LABELS = {
+const _ACTIVITY_TYPE_LABELS = {
   created: 'Created',
   edited: 'Edited',
   deleted: 'Deleted',
@@ -377,7 +377,7 @@ export const getDashboardKPIs = async (branchId) => {
     if (consumablesError) throw consumablesError;
 
     // Most active user
-    const { data: userActivity, error: userError } = await supabase
+    const { data: userActivity } = await supabase
       .from('activity_logs')
       .select('username, branch_name')
       .order('created_at', { ascending: false })

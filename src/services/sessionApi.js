@@ -58,7 +58,7 @@ export const createSession = async (userId, ipAddress = null, deviceInfo = null)
 };
 
 // End a session (logout or conflict)
-export const endSession = async (sessionToken = null, reason = 'logout') => {
+export const endSession = async (sessionToken = null, _reason = 'logout') => {
   const tokenToEnd = sessionToken || localStorage.getItem('sessionToken');
   if (!tokenToEnd) return { success: true };
 

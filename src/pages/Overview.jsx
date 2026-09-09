@@ -4,16 +4,21 @@ import { useBranch } from '../context/BranchContext';
 import Chart from 'react-apexcharts';
 import { motion } from 'framer-motion';
 import { getTodayLocal, formatDateLocal, formatDateDisplay } from '../utils/dateUtils';
+import { fmtQty1 } from '../utils/numUtils';
 import {
-  Calendar, Activity, FileText,
-  TrendingUp, CheckCircle, Clock, ChevronDown
+  Calendar, FileText,
+  TrendingUp, CheckCircle, Clock
 } from 'lucide-react';
+
+// Dependency arrays kept intentionally minimal (fetch recreated each render;
+// mount-scoped effects). Disabled file-wide as that is deliberate.
+/* eslint-disable react-hooks/exhaustive-deps */
 
 /* ---------- Animated Counter ---------- */
 const useCountUp = (target, duration = 800) => {
   const [val, setVal] = useState(0);
   useEffect(() => {
-    let start = 0, t0 = null;
+    let t0 = null;
     const step = (ts) => {
       if (!t0) t0 = ts;
       const p = Math.min((ts - t0) / duration, 1);
@@ -91,6 +96,9 @@ const Overview = () => {
   // The dashboard branch selection drives the GLOBAL branch context:
   // picking a branch here changes the data on ALL pages (Bills, Billing Log,
   // Stock, Reports, consumables, etc.) to that branch.
+  // updateBranch is recreated on each provider render, so including it in the
+  // dependency array would re-run this effect constantly. Kept minimal on purpose.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!misMode) return;
     if (selectedBranch !== null) {
@@ -119,7 +127,7 @@ const Overview = () => {
       } catch { /* ignore */ }
     };
     if (misMode) fetchBranches();
-  }, [misMode]);
+  }, [misMode, branchId]);
 
   // Close date picker / branch filter on outside click
   useEffect(() => {
@@ -167,6 +175,9 @@ const Overview = () => {
     return `${formatDateDisplay(new Date(appliedRange.start))} - ${formatDateDisplay(new Date(appliedRange.end))}`;
   }, [appliedRange]);
 
+  // fetchDashboard is recreated each render, so it is deliberately omitted from
+  // the dependency array to avoid re-running the dashboard fetch on every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (branchId || misMode) fetchDashboard();
   }, [branchId, misMode, appliedRange, selectedBranch]);
@@ -194,7 +205,7 @@ const Overview = () => {
         billingQuery = applyBranchFilter(billingQuery);
         const { data: billingLogs } = await billingQuery;
         billingArray = billingLogs || [];
-      } catch (e) {
+      } catch {
         console.warn('billing_log table not found, skipping billing metrics');
         billingArray = [];
       }
@@ -209,7 +220,7 @@ const Overview = () => {
           const { data: bs } = await bsQuery;
           billServicesArray = bs || [];
         }
-      } catch (e) {
+      } catch {
         console.warn('bill_services table not found, skipping service stats');
         billServicesArray = [];
       }
@@ -316,9 +327,6 @@ const Overview = () => {
       
       const completedBills = Object.values(serviceCountsByBill).filter(c => c.total > 0 && c.total === c.completed).length;
       const incompleteBills = totalBills - completedBills;
-
-      // Legacy fields for reference
-      const todaysCreatedBills = billingArray.filter(b => b.service_date === todayStr).length;
 
       // Inventory health (simulated stock levels based on data)
       const totalTracked = billableTop.length + nonBillableTop.length;
@@ -684,7 +692,7 @@ const Overview = () => {
                 <span className="mod-idx">{i + 1}</span>
                 <span className="mod-name">{item.name}</span>
                 <span className="mod-bar-track"><span className="mod-bar-fill" style={{ width: `${(item.units / maxBillable) * 100}%` }} /></span>
-                <span className="mod-val">{Number(item.units || 0).toFixed(2)}</span>
+                <span className="mod-val">{fmtQty1(item.units)}</span>
               </div>
             ))}
             {billableTop.length === 0 && <div className="flex-1 flex items-center justify-center text-sm text-[var(--color-muted)]">No data</div>}

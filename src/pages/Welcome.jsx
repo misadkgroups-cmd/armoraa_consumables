@@ -3,7 +3,6 @@ import { supabase } from '../config/supabase';
 import { 
   checkActiveSession, 
   createSession, 
-  endSession,
   logoutConcurrentUser,
   startHeartbeat,
   clearHeartbeat 
@@ -153,7 +152,6 @@ const MISModal = ({ onClose, onSuccess }) => {
               outline: 'none',
             }}
             onMouseEnter={(e) => { e.currentTarget.style.color = '#D1D5DB'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.color = '#6B7280'; }}
             title="Hold to show password"
           >
             {showPassword ? (

@@ -74,7 +74,7 @@ export async function getDetailedNonBillableReport(filters = {}) {
         }
       });
     });
-  } catch (normalizedError) {
+  } catch {
     // Fallback: Query legacy 14-slot format from billable_report
     try {
       const batchFields = [];

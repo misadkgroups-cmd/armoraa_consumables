@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
-import { Search, Plus, Edit2, Trash2, Archive, X } from 'lucide-react';
+import { Search, Edit2, Trash2, Archive } from 'lucide-react';
 import SearchableDropdown from '../components/SearchableDropdown';
 import { formatDateDisplay } from '../utils/dateUtils';
+
+/* eslint-disable react-hooks/exhaustive-deps */
 
 const NonBillableConsumables = () => {
   const { branchId } = useBranch();
@@ -18,6 +20,7 @@ const NonBillableConsumables = () => {
   const [editItem, setEditItem] = useState(null);
   const [editForm, setEditForm] = useState({ batch_id: '', opening_date: '', closing_date: '', status: 'active' });
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (branchId) { fetchRegistry(); fetchProducts(); fetchUsage(); } }, [branchId]);
 
   const fetchProducts = async () => {
@@ -74,7 +77,7 @@ const NonBillableConsumables = () => {
         }
         return;
       }
-    } catch (_) { /* fall through to legacy query */ }
+    } catch { /* fall through to legacy query */ }
     
     // Legacy fallback: query the 14 batch columns from billable_report filtered by branch
     try {
@@ -190,7 +193,7 @@ const NonBillableConsumables = () => {
           return;
         }
       }
-    } catch (_) { /* both queries failed, allow delete */ }
+    } catch { /* both queries failed, allow delete */ }
     
     if (!window.confirm('Delete this batch record?')) return;
     try { const { error } = await supabase.from('non_billable_consumable_registry').delete().eq('id', id); if (!error) fetchRegistry(); }
@@ -201,17 +204,6 @@ const NonBillableConsumables = () => {
   const filtered = registry.filter(r => ((r.product_name || '') + ' ' + (r.batch_id || '')).toLowerCase().includes(search.toLowerCase()));
   const incomplete = filtered.filter(i => i.status !== 'completed');
   const completed = filtered.filter(i => i.status === 'completed');
-
-  // Get batches for selected product - ALL active batches
-  const getBatchesForProduct = (productId) => {
-    if (!productId) return [];
-    const productBatches = registry.filter(r => 
-      r.product_id === Number(productId) && r.status === 'active'
-    );
-    return productBatches.map(b => ({ value: b.batch_id, label: b.batch_id }));
-  };
-
-  const selectedProductBatches = form.product_id ? getBatchesForProduct(form.product_id) : [];
 
   return (
     <div className="page-wrapper animate-fade-in">
@@ -302,7 +294,7 @@ const NonBillableConsumables = () => {
           <div className="modal" style={{ maxWidth: 520 }}>
             <div className="modal-header"><h3>Edit Batch</h3><button onClick={() => setEditItem(null)} className="btn btn-ghost btn-icon">×</button></div>
             <div className="modal-body space-y-4">
-              <div className="space-y-1"><label className="text-xs font-semibold text-muted block">Product</label><SearchableDropdown value={editItem.product_id} onChange={(val) => { }} options={products.map(p => ({value: String(p.id), label: p.product_name}))} placeholder="Select product" displayKey="label" valueKey="value" /></div>
+              <div className="space-y-1"><label className="text-xs font-semibold text-muted block">Product</label><SearchableDropdown value={editItem.product_id} onChange={() => { }} options={products.map(p => ({value: String(p.id), label: p.product_name}))} placeholder="Select product" displayKey="label" valueKey="value" /></div>
               <div className="space-y-1"><label className="text-xs font-semibold text-muted block">Batch ID</label><input className="form-input" value={editForm.batch_id} onChange={(e) => setEditForm({ ...editForm, batch_id: e.target.value })} /></div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1"><label className="text-xs font-semibold text-muted block">Opening Date</label><input type="date" className="form-input" value={editForm.opening_date} onChange={(e) => setEditForm({ ...editForm, opening_date: e.target.value })} /></div>

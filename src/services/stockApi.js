@@ -357,7 +357,7 @@ async function getBranchName(branchId) {
       .eq('id', branchId)
       .single();
     return data?.branch_name || `Branch ${branchId}`;
-  } catch (e) {
+  } catch {
     return `Branch ${branchId}`;
   }
 }

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getBillTimeline } from '../services/auditApi';
-import { formatDateDisplay, formatDateTimeDisplay } from '../utils/dateUtils';
+import { formatDateDisplay } from '../utils/dateUtils';
 
 const ACTIVITY_COLORS = {
   created: '#10B981', // green
@@ -38,7 +38,7 @@ const getActivityLabel = (type) => {
   return labels[type] || type;
 };
 
-export default function AuditTimelineModal({ isOpen, onClose, recordId, tableName = 'billing_log' }) {
+export default function AuditTimelineModal({ isOpen, onClose, recordId, _tableName = 'billing_log' }) {
   const [entries, setEntries] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');

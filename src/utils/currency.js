@@ -13,7 +13,7 @@ const LS_KEY = 'armoraa_base_currency';
 export const getCurrencyCode = () => {
   try {
     return localStorage.getItem(LS_KEY) || 'INR';
-  } catch (e) {
+  } catch {
     return 'INR';
   }
 };
@@ -26,7 +26,7 @@ export const getCurrencySymbol = () => {
 export const setCurrencyCode = (code) => {
   try {
     localStorage.setItem(LS_KEY, SYMBOLS[code] ? code : 'INR');
-  } catch (e) { /* storage unavailable — keep default */ }
+  } catch { /* storage unavailable — keep default */ }
 };
 
 /** Format a numeric amount with the base currency symbol: ₹1250.00 */
@@ -46,5 +46,5 @@ export const syncCurrencyFromDb = async () => {
     if (data && data.setting_value && SYMBOLS[data.setting_value]) {
       setCurrencyCode(data.setting_value);
     }
-  } catch (e) { /* non-fatal */ }
+  } catch { /* non-fatal */ }
 };

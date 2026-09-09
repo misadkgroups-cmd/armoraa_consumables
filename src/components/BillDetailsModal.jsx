@@ -1,11 +1,13 @@
 import { useState, useMemo, useCallback, Fragment } from 'react';
 import { formatDateDisplay } from '../utils/dateUtils';
 import BillableConsumables from '../pages/BillableConsumables';
+import ConsumableHistoryModal from './ConsumableHistoryModal';
 
 const BillDetailsModal = ({ bill, billServices, consumableCounts, onClose, onRefreshServices, onViewConsumables }) => {
   const [showServiceDetails, setShowServiceDetails] = useState({});
   const [editingServiceId, setEditingServiceId] = useState(null);
   const [editingServiceData, setEditingServiceData] = useState(null);
+  const [historyService, setHistoryService] = useState(null);
 
   const toggleServiceDetails = (serviceId) => {
     setShowServiceDetails(prev => ({
@@ -224,28 +226,38 @@ const BillDetailsModal = ({ bill, billServices, consumableCounts, onClose, onRef
                             {bs.consumable_completed ? getStatusBadge('Complete') : getStatusBadge('Pending')}
                           </td>
                           <td style={{ padding: '10px 12px', borderBottom: '1px solid var(--color-line-2)', textAlign: 'center', fontSize: 12, color: 'var(--color-muted)' }}>
-                            {bs.consumable_completed ? (
-                              <span
-                                style={{ color: 'var(--color-primary)', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
-                                onClick={() => handleViewDetails(bs)}
-                                title="View/edit consumables for this service"
-                              >
-                                View Details
-                              </span>
-                            ) : (
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 10, justifyContent: 'center' }}>
+                              {bs.consumable_completed ? (
+                                <span
+                                  style={{ color: 'var(--color-primary)', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline' }}
+                                  onClick={() => handleViewDetails(bs)}
+                                  title="View/edit consumables for this service"
+                                >
+                                  View Details
+                                </span>
+                              ) : (
+                                <button
+                                  onClick={() => handleViewDetails(bs)}
+                                  className="btn btn-sm"
+                                  style={{
+                                    background: '#D1FAE5',
+                                    color: '#065F46',
+                                    border: '1px solid #A7F3D0'
+                                  }}
+                                  title="Add/View consumables"
+                                >
+                                  View Details ({count})
+                                </button>
+                              )}
                               <button
-                                onClick={() => handleViewDetails(bs)}
-                                className="btn btn-sm"
-                                style={{
-                                  background: '#D1FAE5',
-                                  color: '#065F46',
-                                  border: '1px solid #A7F3D0'
-                                }}
-                                title="Add/View consumables"
+                                onClick={() => setHistoryService(bs)}
+                                className="btn btn-ghost btn-sm"
+                                style={{ padding: '3px 8px', fontSize: 14, lineHeight: 1 }}
+                                title="View consumable entry history"
                               >
-                                View Details ({count})
+                                🕒
                               </button>
-                            )}
+                            </div>
                           </td>
                         </tr>
                         {isExpanded && (
@@ -302,6 +314,14 @@ const BillDetailsModal = ({ bill, billServices, consumableCounts, onClose, onRef
           </button>
         </div>
       </div>
+      {/* Consumable entry history modal (self-contained, fetches its own data) */}
+      {historyService && (
+        <ConsumableHistoryModal
+          bill={bill}
+          bs={historyService}
+          onClose={() => setHistoryService(null)}
+        />
+      )}
     </div>
   );
 };

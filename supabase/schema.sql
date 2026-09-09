@@ -193,7 +193,7 @@ CREATE TABLE IF NOT EXISTS public.bill_service_consumables (
   product_type TEXT NOT NULL CHECK (product_type IN ('Billable', 'Non-Billable')),
   consumable_id BIGINT NOT NULL,
   required_quantity INTEGER NOT NULL DEFAULT 1 CHECK (required_quantity > 0),
-  used_quantity INTEGER NOT NULL DEFAULT 0 CHECK (used_quantity >= 0),
+  used_quantity NUMERIC NOT NULL DEFAULT 0 CHECK (used_quantity >= 0),
   status TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending', 'Used')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_by BIGINT REFERENCES public.users(id),
@@ -272,7 +272,7 @@ CREATE TABLE IF NOT EXISTS public.stock_transactions (
   product_type TEXT NOT NULL CHECK (product_type IN ('Billable', 'Non-Billable')),
   consumable_id BIGINT NOT NULL,
   branch_id BIGINT NOT NULL REFERENCES public.branches(id),
-  quantity INTEGER NOT NULL CHECK (quantity <> 0),
+  quantity NUMERIC NOT NULL CHECK (quantity <> 0),
   remarks TEXT,
   created_by TEXT NOT NULL DEFAULT 'System',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -441,8 +441,12 @@ CREATE TABLE IF NOT EXISTS public.report_audit_log (
 -- ============================================================
 CREATE INDEX IF NOT EXISTS idx_billable_report_branch ON billable_report(branch_id);
 CREATE INDEX IF NOT EXISTS idx_billable_report_date ON billable_report(report_date);
+CREATE INDEX IF NOT EXISTS idx_billable_report_bill_no ON billable_report(bill_no);
+CREATE INDEX IF NOT EXISTS idx_billable_report_service_id ON billable_report(service_id);
 CREATE INDEX IF NOT EXISTS idx_billing_log_branch ON billing_log(branch_id);
 CREATE INDEX IF NOT EXISTS idx_billing_log_service_date ON billing_log(service_date);
+CREATE INDEX IF NOT EXISTS idx_billing_log_bill_no ON billing_log(bill_no);
+CREATE INDEX IF NOT EXISTS idx_stock_transactions_branch_id ON stock_transactions(branch_id);
 CREATE INDEX IF NOT EXISTS idx_bill_services_bill_id ON bill_services(bill_id);
 CREATE INDEX IF NOT EXISTS idx_bill_services_consumable_completed ON bill_services(consumable_completed);
 CREATE INDEX IF NOT EXISTS idx_stock_inventory_branch ON stock_inventory(branch_id);

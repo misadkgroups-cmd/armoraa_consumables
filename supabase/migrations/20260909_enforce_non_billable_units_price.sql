@@ -13,8 +13,7 @@
 -- via src/utils/nonBillableDefaults.js, but the DB must guarantee them even
 -- if the frontend is bypassed, changed, or calls the API directly).
 --
--- 1. One-time data fix for legacy rows.
--- 2. BEFORE INSERT/UPDATE triggers on:
+-- 1. BEFORE INSERT/UPDATE triggers on:
 --      billable_report               (14-slot wide rows, is_non_billable_X)
 --      billable_report_consumables   (normalized child rows)
 --      bill_service_consumables      (per-service usage rows)
@@ -22,53 +21,16 @@
 -- Run this in the Supabase SQL editor (Dashboard -> SQL Editor).
 -- ============================================================================
 
--- ---------------------------------------------------------------
--- 1. Legacy data fix: force Non-Billable rows to units = 1
---    (only runs for tables that actually exist in this database —
---     billable_report_consumables may not have been created yet if the
---     20260722 normalize migration was never applied)
--- ---------------------------------------------------------------
-DO $$
-BEGIN
-  IF to_regclass('public.billable_report_consumables') IS NOT NULL THEN
-    UPDATE public.billable_report_consumables
-    SET units = 1
-    WHERE is_non_billable = true
-      AND (units IS NULL OR units <> 1);
-  ELSE
-    RAISE NOTICE 'public.billable_report_consumables does not exist - skipping legacy fix';
-  END IF;
-END $$;
-
-UPDATE public.bill_service_consumables
-SET used_quantity = 1
-WHERE product_type = 'Non-Billable'
-  AND (used_quantity IS NULL OR used_quantity <> 1);
-
--- Wide table: force every Non-Billable slot's units to 1
-UPDATE public.billable_report
-SET
-  consumable_1_units  = CASE WHEN COALESCE(is_non_billable_1,  false) THEN 1 ELSE consumable_1_units  END,
-  consumable_2_units  = CASE WHEN COALESCE(is_non_billable_2,  false) THEN 1 ELSE consumable_2_units  END,
-  consumable_3_units  = CASE WHEN COALESCE(is_non_billable_3,  false) THEN 1 ELSE consumable_3_units  END,
-  consumable_4_units  = CASE WHEN COALESCE(is_non_billable_4,  false) THEN 1 ELSE consumable_4_units  END,
-  consumable_5_units  = CASE WHEN COALESCE(is_non_billable_5,  false) THEN 1 ELSE consumable_5_units  END,
-  consumable_6_units  = CASE WHEN COALESCE(is_non_billable_6,  false) THEN 1 ELSE consumable_6_units  END,
-  consumable_7_units  = CASE WHEN COALESCE(is_non_billable_7,  false) THEN 1 ELSE consumable_7_units  END,
-  consumable_8_units  = CASE WHEN COALESCE(is_non_billable_8,  false) THEN 1 ELSE consumable_8_units  END,
-  consumable_9_units  = CASE WHEN COALESCE(is_non_billable_9,  false) THEN 1 ELSE consumable_9_units  END,
-  consumable_10_units = CASE WHEN COALESCE(is_non_billable_10, false) THEN 1 ELSE consumable_10_units END,
-  consumable_11_units = CASE WHEN COALESCE(is_non_billable_11, false) THEN 1 ELSE consumable_11_units END,
-  consumable_12_units = CASE WHEN COALESCE(is_non_billable_12, false) THEN 1 ELSE consumable_12_units END,
-  consumable_13_units = CASE WHEN COALESCE(is_non_billable_13, false) THEN 1 ELSE consumable_13_units END,
-  consumable_14_units = CASE WHEN COALESCE(is_non_billable_14, false) THEN 1 ELSE consumable_14_units END
-WHERE COALESCE(is_non_billable_1,  false) OR COALESCE(is_non_billable_2,  false)
-   OR COALESCE(is_non_billable_3,  false) OR COALESCE(is_non_billable_4,  false)
-   OR COALESCE(is_non_billable_5,  false) OR COALESCE(is_non_billable_6,  false)
-   OR COALESCE(is_non_billable_7,  false) OR COALESCE(is_non_billable_8,  false)
-   OR COALESCE(is_non_billable_9,  false) OR COALESCE(is_non_billable_10, false)
-   OR COALESCE(is_non_billable_11, false) OR COALESCE(is_non_billable_12, false)
-   OR COALESCE(is_non_billable_13, false) OR COALESCE(is_non_billable_14, false);
+-- ============================================================================
+-- NO LEGACY DATA FIX (by design).
+-- Earlier versions of this migration contained UPDATE statements that forced
+-- existing Non-Billable rows to units = 1. That MODIFIED historical records,
+-- which is not allowed ("existing reports must remain unchanged"), so the
+-- data-fix section was removed. Enforcement now applies ONLY to new saves:
+--   - BEFORE INSERT/UPDATE triggers rewrite incoming values
+--   - NOT VALID CHECK constraints reject bad NEW writes but never re-validate
+--     or alter already-stored rows
+-- ============================================================================
 
 -- ---------------------------------------------------------------
 -- 2. Trigger on billable_report_consumables

@@ -714,6 +714,68 @@ export default function AllBills({ onNavigate, urlState }) {
       await supabase.from('activity_logs').delete().eq('page_name', 'billing_log');
       await supabase.from('audit_logs').delete().eq('record_id', bill.id).eq('table_name', 'billing_log');
 
+      // ===== AUDIT: log 'Deleted' entries for every consumable on this bill =====
+      // Written BEFORE any deletion so the audit trail survives the cascade.
+      try {
+        const username = localStorage.getItem('username') || 'System';
+        const { data: billServicesForAudit } = await supabase
+          .from('bill_services')
+          .select('id, service_id, service_name')
+          .eq('bill_id', bill.id);
+        const bsAuditList = billServicesForAudit || [];
+
+        if (bsAuditList.length > 0) {
+          const bsIds = bsAuditList.map((bs) => bs.id);
+          const { data: usageRows } = await supabase
+            .from('bill_service_consumables')
+            .select('bill_service_id, product_type, consumable_id, used_quantity')
+            .in('bill_service_id', bsIds);
+
+          if (usageRows && usageRows.length > 0) {
+            // Resolve consumable names (billable vs non-billable masters).
+            const billableIds = [...new Set(usageRows.filter((r) => r.product_type === 'Billable' && r.consumable_id).map((r) => r.consumable_id))];
+            const nbIds = [...new Set(usageRows.filter((r) => r.product_type === 'Non-Billable' && r.consumable_id).map((r) => r.consumable_id))];
+            const nameMap = {};
+            if (billableIds.length) {
+              const { data: bc } = await supabase.from('master_consumables').select('id, name').in('id', billableIds);
+              (bc || []).forEach((c) => { nameMap[`b:${c.id}`] = c.name; });
+            }
+            if (nbIds.length) {
+              const { data: nbc } = await supabase.from('master_non_billable_consumables').select('id, product_name').in('id', nbIds);
+              (nbc || []).forEach((c) => { nameMap[`nb:${c.id}`] = c.product_name; });
+            }
+            const bsMap = Object.fromEntries(bsAuditList.map((bs) => [bs.id, bs]));
+
+            const deletedEntries = usageRows.map((r) => ({
+              bill_id: bill.id,
+              bill_service_id: r.bill_service_id,
+              service_id: bsMap[r.bill_service_id]?.service_id ?? null,
+              service_name: bsMap[r.bill_service_id]?.service_name ?? null,
+              consumable_id: r.consumable_id,
+              consumable_name:
+                nameMap[`${r.product_type === 'Non-Billable' ? 'nb' : 'b'}:${r.consumable_id}`] ||
+                `Item #${r.consumable_id}`,
+              product_type: r.product_type || 'Billable',
+              units: 0,
+              old_units: r.used_quantity ?? 0,
+              action_type: 'Deleted',
+              branch_id: bill.branch_id ?? null,
+              entered_by: username,
+              bill_no: bill.bill_no ?? null,
+              patient_name: bill.patient_name ?? null,
+            }));
+
+            if (deletedEntries.length > 0) {
+              await supabase.from('consumable_history').insert(deletedEntries);
+            }
+          }
+        }
+      } catch (auditErr) {
+        // Audit logging must never block the delete operation.
+        console.error('Failed to write deleted-consumable audit entries:', auditErr);
+      }
+      // ===== END delete audit =====
+
       // Step 2: Delete bill_service_consumables (child of bill_services)
       const { data: billServices } = await supabase
         .from('bill_services')

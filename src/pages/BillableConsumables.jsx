@@ -766,13 +766,15 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
   //   - UPDATE (isUpdate=true)        -> rows kept with different units are
   //                                      'Updated' (old_units captured); rows in
   //                                      the old report no longer present are 'Deleted'
-  const writeConsumableHistory = async (savedReport, isUpdate, oldReport) => {
+  const writeConsumableHistory = async (savedReport, isUpdate, oldReport, billInfo = null) => {
     try {
       const username = localStorage.getItem('username') || 'System';
       const numericBillId = Number(billingLogId) || null;
       const numericServiceId = Number(service) || null;
       const bsId = billServiceId ? Number(billServiceId) : null;
       const serviceName = query.service_name || '';
+      const auditBillNo = billInfo?.bill_no ?? null;
+      const auditPatientName = billInfo?.patient_name ?? null;
 
       // Map non-billable registry row id -> product id so old non-billable
       // slots can be compared with the current rows by the same raw id.
@@ -837,6 +839,8 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
           action_type: action,
           branch_id: branchId,
           entered_by: username,
+          bill_no: auditBillNo,
+          patient_name: auditPatientName,
         });
       }
 
@@ -860,6 +864,8 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
           action_type: 'Deleted',
           branch_id: branchId,
           entered_by: username,
+          bill_no: auditBillNo,
+          patient_name: auditPatientName,
         });
       }
 
@@ -918,14 +924,19 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       const numericBillingLogId = billingLogId ? Number(billingLogId) : null;
       const numericServiceId = service ? Number(service) : null;
       let validBillingLogId = null;
+      // Bill context captured for the consumable audit trail (bill_no + patient).
+      let billContext = null;
 
       if (numericBillingLogId) {
         const { data: logExists } = await supabase
           .from('billing_log')
-          .select('id')
+          .select('id, bill_no, patient_name')
           .eq('id', numericBillingLogId)
           .maybeSingle();
         validBillingLogId = logExists ? numericBillingLogId : null;
+        if (logExists) {
+          billContext = { bill_no: logExists.bill_no, patient_name: logExists.patient_name };
+        }
         console.log('Validated billing log id:', validBillingLogId, 'exists:', !!logExists);
       }
 
@@ -1187,7 +1198,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       if (savedReport) {
         // Append audit rows to consumable_history BEFORE deducting stock so the
         // (Added/Updated/Deleted) trail is captured on every save.
-        await writeConsumableHistory(savedReport, isUpdate, oldReport);
+        await writeConsumableHistory(savedReport, isUpdate, oldReport, billContext);
         await deductInventory(reportPayload, savedReport.id, isUpdate, oldReport);
       }
 

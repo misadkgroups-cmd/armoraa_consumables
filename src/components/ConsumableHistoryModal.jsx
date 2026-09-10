@@ -28,18 +28,7 @@ const ConsumableHistoryModal = ({ bill, bs, onClose }) => {
       const serviceId = bs?.service_id;
       const billServiceId = bs?.id;
 
-      // 1) Audit entries from consumable_history (append-only trail).
-      let query = supabase.from('consumable_history').select('*');
-      if (billServiceId) {
-        query = query.eq('bill_service_id', Number(billServiceId));
-      } else {
-        query = query.eq('bill_id', Number(billId)).eq('service_id', Number(serviceId));
-      }
-      const { data: hist, error: histError } = await query.order('created_at', { ascending: true });
-      if (!histError) setEntries(hist || []);
-      else setError(histError.message || 'Failed to load history');
-
-      // 2) Bill-level metadata (created / updated / branch).
+      // 1) Bill-level metadata (created / updated / branch).
       const metaData = {
         created_at: bill?.created_at || null,
         updated_at: bill?.updated_at || null,
@@ -50,7 +39,7 @@ const ConsumableHistoryModal = ({ bill, bs, onClose }) => {
         service_name: bs?.service_name || '-',
       };
 
-      // 3) Most recent billable_report for this bill + service -> updated_by.
+      // 2) Most recent billable_report for this bill + service -> updated_by.
       if (billId && serviceId) {
         const { data: rep } = await supabase
           .from('billable_report')
@@ -67,7 +56,7 @@ const ConsumableHistoryModal = ({ bill, bs, onClose }) => {
         }
       }
 
-      // 4) Branch name if not already present.
+      // 3) Branch name if not already present.
       if (bill?.branch_id && metaData.branch_name === '-') {
         const { data: br } = await supabase
           .from('branches')
@@ -78,6 +67,72 @@ const ConsumableHistoryModal = ({ bill, bs, onClose }) => {
       }
 
       setMeta(metaData);
+
+      // 4) Audit entries from consumable_history (append-only trail).
+      let hist = [];
+      if (billServiceId) {
+        const { data, error: histError } = await supabase
+          .from('consumable_history')
+          .select('*')
+          .eq('bill_service_id', Number(billServiceId))
+          .order('created_at', { ascending: true });
+        if (!histError && data && data.length > 0) hist = data;
+      }
+
+      if (hist.length === 0 && billId && serviceId) {
+        const { data, error: histError } = await supabase
+          .from('consumable_history')
+          .select('*')
+          .eq('bill_id', Number(billId))
+          .eq('service_id', Number(serviceId))
+          .order('created_at', { ascending: true });
+        if (!histError && data && data.length > 0) hist = data;
+      }
+
+      // 5) Fallback: if consumable_history has no entries yet, load from bill_service_consumables
+      if (hist.length === 0 && billServiceId) {
+        const { data: currentBsc } = await supabase
+          .from('bill_service_consumables')
+          .select('id, product_type, consumable_id, used_quantity, created_at, status')
+          .eq('bill_service_id', Number(billServiceId))
+          .eq('status', 'Used')
+          .order('id', { ascending: true });
+
+        if (currentBsc && currentBsc.length > 0) {
+          const bIds = currentBsc.filter((c) => c.product_type !== 'Non-Billable').map((c) => c.consumable_id);
+          const nbIds = currentBsc.filter((c) => c.product_type === 'Non-Billable').map((c) => c.consumable_id);
+          const nameMap = {};
+
+          if (bIds.length > 0) {
+            const { data: bMaster } = await supabase
+              .from('master_billable_consumables')
+              .select('id, product_name')
+              .in('id', bIds);
+            (bMaster || []).forEach((p) => { nameMap[`b:${p.id}`] = p.product_name; });
+          }
+
+          if (nbIds.length > 0) {
+            const { data: nbMaster } = await supabase
+              .from('master_non_billable_consumables')
+              .select('id, product_name')
+              .in('id', nbIds);
+            (nbMaster || []).forEach((p) => { nameMap[`nb:${p.id}`] = p.product_name; });
+          }
+
+          hist = currentBsc.map((item) => ({
+            id: `bsc-${item.id}`,
+            created_at: item.created_at || metaData.created_at || metaData.updated_at,
+            consumable_name: nameMap[`${item.product_type === 'Non-Billable' ? 'nb' : 'b'}:${item.consumable_id}`] || `Item #${item.consumable_id}`,
+            units: item.product_type === 'Non-Billable' ? 1 : item.used_quantity,
+            old_units: null,
+            batch_id: null,
+            action_type: 'Added',
+            entered_by: metaData.updated_by || 'System',
+          }));
+        }
+      }
+
+      setEntries(hist);
     } catch (e) {
       console.error('Failed to build consumable history:', e);
       setError('Failed to load consumable history');

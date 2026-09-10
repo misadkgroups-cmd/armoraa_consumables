@@ -11,6 +11,7 @@ import {
   getDetailedNonBillableReport,
   getSummaryNonBillableReport,
 } from '../services/nonBillableReports';
+import { getBillableReportFromServiceConsumables } from '../services/billableReports';
 import { getTransactionReport } from '../services/transactionReports';
 import { Trash2 } from 'lucide-react';
 
@@ -341,15 +342,7 @@ const Reports = () => {
   const generateBillableReport = async () => {
     setLoading(true);
     try {
-      // 1. Fetch billable_report records
-      let query = supabase
-        .from('billable_report')
-        .select('*')
-        .gte('report_date', dateRange.start)
-        .lte('report_date', dateRange.end);
-
-      if (filterBranch) query = query.eq('branch_id', filterBranch);
-      if (filterService) query = query.eq('service_id', filterService);
+      let machineryIds = undefined;
       if (filterMachinery) {
         // filterMachinery holds the machine NAME. One name can map to many
         // master_machinery rows (e.g. "CHEMICAL PEEL" -> 90+ variants), so
@@ -357,199 +350,20 @@ const Reports = () => {
         const machineGroup = machines.find(
           (m) => String(m.id) === String(filterMachinery) || String(m.machine_name) === String(filterMachinery)
         );
-        const ids = machineGroup?.ids?.length ? machineGroup.ids : [filterMachinery];
-        query = query.in('machinery_id', ids);
+        machineryIds = machineGroup?.ids?.length ? machineGroup.ids : [filterMachinery];
       }
 
-      const { data, error } = await query.order('id', { ascending: true });
+      const filters = {
+        startDate: dateRange.start,
+        endDate: dateRange.end,
+        branchId: filterBranch || undefined,
+        serviceId: filterService || undefined,
+        machineryIds,
+      };
 
-      if (error) {
-        console.error('Error querying billable_report:', error);
-        throw error;
-      }
+      const rows = await getBillableReportFromServiceConsumables(filters);
 
-      if (!data || data.length === 0) {
-        setRawReportData([]);
-        setHasReport(true);
-        setLoading(false);
-        return;
-      }
-
-      // 2. Hydrate Foreign Key Labels (Branches, Services, Machinery, Billing Log)
-      const branchIds = [...new Set(data.map((r) => r.branch_id).filter(Boolean))];
-      let branchMap = {};
-      if (branchIds.length) {
-        const { data: br } = await supabase.from('branches').select('id, branch_name').in('id', branchIds);
-        if (br) br.forEach((b) => (branchMap[b.id] = b.branch_name));
-      }
-
-      const serviceIds = [...new Set(data.map((r) => r.service_id).filter(Boolean))];
-      let serviceMap = {};
-      if (serviceIds.length) {
-        const { data: sr } = await supabase.from('master_services').select('id, service_name').in('id', serviceIds);
-        if (sr) sr.forEach((s) => (serviceMap[s.id] = s.service_name));
-      }
-
-      const machineryIds = [...new Set(data.map((r) => r.machinery_id).filter(Boolean))];
-      let machineryMap = {};
-      if (machineryIds.length) {
-        const { data: mr } = await supabase.from('master_machinery').select('id, machine_name').in('id', machineryIds);
-        if (mr) mr.forEach((m) => (machineryMap[m.id] = m.machine_name));
-      }
-
-      // 2b. Hydrate Doctor and Staff names via billing_log
-      const billingLogIds = [...new Set(data.map((r) => r.billing_log_id).filter(Boolean))];
-      let billingInfoMap = {};
-      if (billingLogIds.length) {
-        const { data: logs } = await supabase
-          .from('billing_log')
-          .select('id, doctor_id, staff_id')
-          .in('id', billingLogIds);
-
-        const doctorIds = [...new Set((logs || []).map((l) => l.doctor_id).filter(Boolean))];
-        const staffIds = [...new Set((logs || []).map((l) => l.staff_id).filter(Boolean))];
-
-        let doctorNameLookup = {};
-        let staffNameLookup = {};
-
-        if (doctorIds.length) {
-          const { data: docs } = await supabase.from('master_doctors').select('id, doctor_name').in('id', doctorIds);
-          if (docs) docs.forEach((d) => (doctorNameLookup[d.id] = d.doctor_name));
-        }
-
-        if (staffIds.length) {
-          const { data: stf } = await supabase.from('master_staff').select('id, staff_name').in('id', staffIds);
-          if (stf) stf.forEach((s) => (staffNameLookup[s.id] = s.staff_name));
-        }
-
-        (logs || []).forEach((l) => {
-          billingInfoMap[l.id] = {
-            doctor_name: l.doctor_id ? (doctorNameLookup[l.doctor_id] || 'Unknown') : '-',
-            staff_name: l.staff_id ? (staffNameLookup[l.staff_id] || 'Unknown') : '-',
-          };
-        });
-      }
-
-      // 3. Extract all consumable IDs
-      const billableConsumableIds = new Set();
-      const nonBillableRegistryIds = new Set();
-
-      data.forEach((row) => {
-        for (let i = 1; i <= 14; i++) {
-          const cId = row[`consumable_${i}_id`];
-          const isNB = row[`is_non_billable_${i}`];
-          const regId = row[`non_billable_registry_id_${i}`];
-
-          if (isNB) {
-            if (regId) {
-              nonBillableRegistryIds.add(regId);
-            }
-          } else if (cId) {
-            billableConsumableIds.add(cId);
-          }
-        }
-      });
-
-      // Fetch Billable Master Products
-      let billableProducts = {};
-      if (billableConsumableIds.size > 0) {
-        const { data: bp } = await supabase
-          .from('master_billable_consumables')
-          .select('id, product_name, cost_unit')
-          .in('id', Array.from(billableConsumableIds));
-        if (bp) {
-          bp.forEach((p) => {
-            billableProducts[p.id] = { name: p.product_name, cost: Number(p.cost_unit || 0) };
-          });
-        }
-      }
-
-      // Fetch Non-Billable Master Products via the registry table
-      let nonBillableProducts = {};
-      if (nonBillableRegistryIds.size > 0) {
-        const { data: regRows } = await supabase
-          .from('non_billable_consumable_registry')
-          .select('id, product_id, master_non_billable_consumables ( product_name, cost )')
-          .in('id', Array.from(nonBillableRegistryIds));
-        if (regRows) {
-          regRows.forEach((reg) => {
-            nonBillableProducts[reg.id] = {
-              name: reg.master_non_billable_consumables?.product_name || `Non-Billable Item #${reg.id}`,
-              cost: Number(reg.master_non_billable_consumables?.cost || 0),
-            };
-          });
-        }
-      }
-
-      // 4. Transform flat columns into structured consumable list
-      const processedRows = data.map((row) => {
-        const consumables = [];
-        let totalUnits = 0;
-        let totalCost = 0;
-
-        for (let i = 1; i <= 14; i++) {
-          const cId = row[`consumable_${i}_id`];
-          const isNB = row[`is_non_billable_${i}`];
-          const regId = row[`non_billable_registry_id_${i}`];
-
-          if (isNB) {
-            const product = nonBillableProducts[regId] || { name: `Non-Billable Item #${regId || i}`, cost: 0 };
-            // Non-Billable invariants (see src/utils/nonBillableDefaults.js):
-            // units = 1 (USED), price = 0.00, amount = 0.00 — never derived
-            // from the master product cost / stock price.
-            consumables.push({
-              slot: i,
-              name: product.name,
-              units: 1,
-              price: 0,
-              amount: 0,
-              cost: 0,
-              isNonBillable: true,
-            });
-            totalUnits = round2(totalUnits + 1);
-          } else if (cId) {
-            const product = billableProducts[cId] || { name: `Billable Item #${cId}`, cost: 0 };
-            const units = Number(row[`consumable_${i}_units`] || 0);
-
-            // Skip billable consumables with NULL / 0 / negative units. A
-            // consumable id may exist in the DB without a valid quantity (e.g.
-            // legacy rows saved before save-time validation was hardened). Such
-            // rows represent no actual consumption and must NOT show as a
-            // "0 units" line or inflate the totals — or the cost will be padded.
-            if (units > 0) {
-              consumables.push({
-                slot: i,
-                name: product.name,
-                units,
-                cost: product.cost,
-              });
-
-              totalUnits = round2(totalUnits + units);
-              totalCost = round2(totalCost + units * product.cost);
-            }
-          }
-        }
-
-        return {
-          ...row,
-          bill_no: row.bill_no || row.bill_id || '-',
-          bill_id: row.bill_id || '-',
-          uid: row.uid || '-',
-          patient_name: row.patient_name || '-',
-          report_date: row.report_date || '-',
-          branch_name: (row.branch_id ? branchMap[row.branch_id] : null) || '-',
-          doctor_name: (row.billing_log_id && billingInfoMap[row.billing_log_id]?.doctor_name) || row.doctor_name || '-',
-          staff_name: (row.billing_log_id && billingInfoMap[row.billing_log_id]?.staff_name) || row.staff_name || '-',
-          service_name: row.service_name || (row.service_id ? serviceMap[row.service_id] : null) || '-',
-          machine_name: row.machine_name || (row.machinery_id ? machineryMap[row.machinery_id] : null) || '-',
-          consumables,
-          consumableCount: consumables.length,
-          totalUnits,
-          totalCost,
-        };
-      });
-
-      setRawReportData(processedRows);
+      setRawReportData(rows || []);
       setHasReport(true);
     } catch (e) {
       console.error('Error generating billable report:', e);
@@ -783,12 +597,12 @@ const Reports = () => {
           'STATUS',
         ];
         rows = nbData.map((r) => [
-          r.date || '-',
+          fmtDate(r.date),
           r.branch || '-',
           r.consumableName || '-',
           r.batchId || '-',
-          r.openingDate || '-',
-          r.closingDate || '-',
+          fmtDate(r.openingDate),
+          r.closingDate ? (String(r.closingDate).includes('Active') ? r.closingDate : fmtDate(r.closingDate)) : '-',
           r.serviceUsedBy || '-',
           r.serviceUsedCount || 0,
           r.status || '-',
@@ -819,7 +633,7 @@ const Reports = () => {
           row.bill_no || row.bill_id || '-',
           row.patient_name || '-',
           row.uid || '-',
-          row.report_date || '-',
+          fmtDate(row.report_date),
           row.branch_name || '-',
           row.doctor_name || '-',
           row.staff_name || '-',
@@ -833,10 +647,14 @@ const Reports = () => {
 
         for (let i = 0; i < maxConsumables; i++) {
           const c = row.consumables ? row.consumables[i] : null;
-          v.push(c ? c.name : '-', c && c.units ? c.units : 0, c && c.cost ? c.cost : 0);
+          v.push(
+            c ? c.name : '-',
+            c && c.units != null ? c.units : 0,
+            c && c.cost != null ? Number(c.cost).toFixed(2) : '0.00'
+          );
         }
 
-        v.push(row.totalUnits || 0, row.totalCost || 0);
+        v.push(round2(row.totalUnits) || 0, Number(row.totalCost || 0).toFixed(2));
         return v;
       });
     }
@@ -881,12 +699,12 @@ const Reports = () => {
         }));
       } else {
         rows = nbData.map((r) => ({
-          DATE: r.date || '-',
+          DATE: fmtDate(r.date),
           BRANCH: r.branch || '-',
           'NON-BILLABLE CONSUMABLE': r.consumableName || '-',
           BATCH: r.batchId || '-',
-          'OPENING DATE': r.openingDate || '-',
-          'CLOSING DATE': r.closingDate || '-',
+          'OPENING DATE': fmtDate(r.openingDate),
+          'CLOSING DATE': r.closingDate ? (String(r.closingDate).includes('Active') ? r.closingDate : fmtDate(r.closingDate)) : '-',
           'SERVICE USED BY': r.serviceUsedBy || '-',
           'TIMES USED': r.serviceUsedCount || 0,
           STATUS: r.status || '-',
@@ -908,7 +726,7 @@ const Reports = () => {
           'BILL ID': row.bill_no || row.bill_id || '-',
           'PATIENT NAME': row.patient_name || '-',
           UID: row.uid || '-',
-          DATE: row.report_date || '-',
+          DATE: fmtDate(row.report_date),
           BRANCH: row.branch_name || '-',
           DOCTOR: row.doctor_name || '-',
           STAFF: row.staff_name || '-',
@@ -923,23 +741,40 @@ const Reports = () => {
         for (let i = 0; i < maxConsumables; i++) {
           const c = row.consumables ? row.consumables[i] : null;
           rowObj[`CONSUMABLE ${i + 1}`] = c ? c.name : '-';
-          rowObj[`UNITS ${i + 1}`] = c && c.units ? c.units : 0;
-          rowObj[`COST ${i + 1}`] = c && c.cost ? c.cost : 0;
+          rowObj[`UNITS ${i + 1}`] = c && c.units != null ? c.units : 0;
+          rowObj[`COST ${i + 1}`] = c && c.cost != null ? Number(c.cost).toFixed(2) : '0.00';
         }
 
-        rowObj['TOTAL UNITS'] = row.totalUnits || 0;
-        rowObj['TOTAL COST'] = row.totalCost || 0;
+        rowObj['TOTAL UNITS'] = round2(row.totalUnits) || 0;
+        rowObj['TOTAL COST'] = Number(row.totalCost || 0).toFixed(2);
         return rowObj;
       });
     }
 
+    if (!rows || rows.length === 0) return;
+
     const worksheet = XLSX.utils.json_to_sheet(rows);
+
+    // Auto-fit column widths
+    const colKeys = Object.keys(rows[0] || {});
+    worksheet['!cols'] = colKeys.map((key) => {
+      let maxLen = key.length;
+      rows.forEach((r) => {
+        const valStr = String(r[key] ?? '');
+        if (valStr.length > maxLen) maxLen = valStr.length;
+      });
+      return { wch: Math.min(Math.max(maxLen + 3, 11), 40) };
+    });
+
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(
-      workbook,
-      worksheet,
-      reportType === 'non-billable' ? 'Non-Billable Report' : reportType === 'transaction' ? 'Transaction Report' : 'Billable Report'
-    );
+    const sheetName =
+      reportType === 'non-billable'
+        ? `Non-Billable (${nbReportMode})`
+        : reportType === 'transaction'
+        ? 'Transaction Report'
+        : `Billable (${billableReportView})`;
+
+    XLSX.utils.book_append_sheet(workbook, worksheet, sheetName.slice(0, 31));
     XLSX.writeFile(workbook, `${reportType}-${billableReportView}-report-${format(new Date(), 'yyyy-MM-dd')}.xlsx`);
   };
 

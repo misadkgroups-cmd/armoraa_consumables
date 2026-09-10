@@ -1,5 +1,5 @@
 import { supabase } from '../config/supabase';
-import { withRetry } from '../utils/supabaseRetry';
+import { withRetry, fetchAllRows, chunk } from '../utils/supabaseRetry';
 
 /**
  * Detailed Report: enriched non-billable batch and usage logs.
@@ -9,59 +9,58 @@ export async function getDetailedNonBillableReport(filters = {}) {
   const registryUseCounter = {};
   const serviceEntriesByRegistryId = {};
 
-  // 1. Fetch registry items for the branch & date range
-  let registryQuery = supabase
-    .from('non_billable_consumable_registry')
-    .select(`
-      id,
-      branch_id,
-      product_id,
-      batch_id,
-      opening_date,
-      closing_date,
-      status,
-      branches ( branch_name ),
-      master_non_billable_consumables ( product_name, cost )
-    `);
-
-  if (filters.branchId) registryQuery = registryQuery.eq('branch_id', filters.branchId);
-  if (filters.startDate) registryQuery = registryQuery.gte('opening_date', filters.startDate);
-  if (filters.endDate) registryQuery = registryQuery.lte('opening_date', filters.endDate);
-
-  const { data: registryRows } = await withRetry(() =>
-    registryQuery.order('opening_date', { ascending: false })
-  );
-
-  // 2. Fetch service usages from billable_report
-  try {
-    let query = supabase
-      .from('billable_report')
+  // 1. Fetch registry items for the branch & date range (fully paginated)
+  const registryRows = await fetchAllRows(() => {
+    let registryQuery = supabase
+      .from('non_billable_consumable_registry')
       .select(`
         id,
-        report_date,
         branch_id,
-        service_id,
-        machinery_id,
-        bill_id,
-        uid,
+        product_id,
+        batch_id,
+        opening_date,
+        closing_date,
+        status,
         branches ( branch_name ),
-        master_services ( service_name ),
-        billable_report_consumables!inner (
-          id,
-          product_type,
-          consumable_id,
-          is_non_billable,
-          registry_id,
-          batch_id
-        )
+        master_non_billable_consumables ( product_name, cost )
       `);
 
-    if (filters.branchId) query = query.eq('branch_id', filters.branchId);
-    if (filters.startDate) query = query.gte('report_date', filters.startDate);
-    if (filters.endDate) query = query.lte('report_date', filters.endDate);
+    if (filters.branchId) registryQuery = registryQuery.eq('branch_id', filters.branchId);
+    if (filters.startDate) registryQuery = registryQuery.gte('opening_date', filters.startDate);
+    if (filters.endDate) registryQuery = registryQuery.lte('opening_date', filters.endDate);
+    return registryQuery.order('opening_date', { ascending: false });
+  });
 
-    const { data: reports, error } = await withRetry(() => query);
-    if (error) throw error;
+  // 2. Fetch service usages from billable_report (fully paginated)
+  try {
+    const reports = await fetchAllRows(() => {
+      let query = supabase
+        .from('billable_report')
+        .select(`
+          id,
+          report_date,
+          branch_id,
+          service_id,
+          machinery_id,
+          bill_id,
+          uid,
+          branches ( branch_name ),
+          master_services ( service_name ),
+          billable_report_consumables (
+            id,
+            product_type,
+            consumable_id,
+            is_non_billable,
+            registry_id,
+            batch_id
+          )
+        `);
+
+      if (filters.branchId) query = query.eq('branch_id', filters.branchId);
+      if (filters.startDate) query = query.gte('report_date', filters.startDate);
+      if (filters.endDate) query = query.lte('report_date', filters.endDate);
+      return query;
+    });
 
     (reports || []).forEach((report) => {
       (report.billable_report_consumables || []).forEach((item) => {
@@ -84,16 +83,18 @@ export async function getDetailedNonBillableReport(filters = {}) {
         registryFields.push(`non_billable_registry_id_${i}`);
       }
 
-      let query = supabase
-        .from('billable_report')
-        .select(`id, report_date, branch_id, service_id, bill_id, uid, branches(branch_name), master_services(service_name), ${batchFields.join(', ')}, ${registryFields.join(', ')}`);
+      const reportsWithSlots = await fetchAllRows(() => {
+        let query = supabase
+          .from('billable_report')
+          .select(`id, report_date, branch_id, service_id, bill_id, uid, branches(branch_name), master_services(service_name), ${batchFields.join(', ')}, ${registryFields.join(', ')}`);
 
-      if (filters.branchId) query = query.eq('branch_id', filters.branchId);
-      if (filters.startDate) query = query.gte('report_date', filters.startDate);
-      if (filters.endDate) query = query.lte('report_date', filters.endDate);
+        if (filters.branchId) query = query.eq('branch_id', filters.branchId);
+        if (filters.startDate) query = query.gte('report_date', filters.startDate);
+        if (filters.endDate) query = query.lte('report_date', filters.endDate);
+        return query;
+      });
 
-      const { data: reportsWithSlots, error } = await withRetry(() => query);
-      if (!error && reportsWithSlots) {
+      if (reportsWithSlots) {
         reportsWithSlots.forEach((report) => {
           for (let i = 1; i <= 14; i++) {
             const batchId = report[`consumable_${i}_batch_id`];
@@ -124,23 +125,25 @@ export async function getDetailedNonBillableReport(filters = {}) {
 
   let extraRegistryRows = [];
   if (missingRegistryIds.length > 0) {
-    const { data: extraReg } = await withRetry(() =>
-      supabase
-        .from('non_billable_consumable_registry')
-        .select(`
-          id,
-          branch_id,
-          product_id,
-          batch_id,
-          opening_date,
-          closing_date,
-          status,
-          branches ( branch_name ),
-          master_non_billable_consumables ( product_name, cost )
-        `)
-        .in('id', missingRegistryIds)
-    );
-    if (extraReg) extraRegistryRows = extraReg;
+    for (const ids of chunk(missingRegistryIds, 100)) {
+      const rows = await fetchAllRows(() =>
+        supabase
+          .from('non_billable_consumable_registry')
+          .select(`
+            id,
+            branch_id,
+            product_id,
+            batch_id,
+            opening_date,
+            closing_date,
+            status,
+            branches ( branch_name ),
+            master_non_billable_consumables ( product_name, cost )
+          `)
+          .in('id', ids)
+      );
+      if (rows) extraRegistryRows.push(...rows);
+    }
   }
 
   const allRegistryMap = {};
@@ -237,7 +240,7 @@ export async function getDetailedNonBillableReport(filters = {}) {
  */
 export async function getSummaryNonBillableReport(filters = {}) {
   // 1. Fetch all master products so product names and costs are always available
-  const { data: masterProducts } = await withRetry(() =>
+  const masterProducts = await fetchAllRows(() =>
     supabase
       .from('master_non_billable_consumables')
       .select('id, product_name, cost, status')
@@ -248,16 +251,17 @@ export async function getSummaryNonBillableReport(filters = {}) {
     productMap[p.id] = p;
   });
 
-  // 2. Fetch registry items for the branch and date range
-  let registryQuery = supabase
-    .from('non_billable_consumable_registry')
-    .select('id, product_id, status, opening_date, closing_date, batch_id');
+  // 2. Fetch registry items for the branch and date range (fully paginated)
+  const allRegistry = await fetchAllRows(() => {
+    let registryQuery = supabase
+      .from('non_billable_consumable_registry')
+      .select('id, product_id, status, opening_date, closing_date, batch_id');
 
-  if (filters.branchId) registryQuery = registryQuery.eq('branch_id', filters.branchId);
-  if (filters.startDate) registryQuery = registryQuery.gte('opening_date', filters.startDate);
-  if (filters.endDate) registryQuery = registryQuery.lte('opening_date', filters.endDate);
-
-  const { data: allRegistry } = await withRetry(() => registryQuery);
+    if (filters.branchId) registryQuery = registryQuery.eq('branch_id', filters.branchId);
+    if (filters.startDate) registryQuery = registryQuery.gte('opening_date', filters.startDate);
+    if (filters.endDate) registryQuery = registryQuery.lte('opening_date', filters.endDate);
+    return registryQuery;
+  });
 
   const registryStatusByProduct = {}; // productId -> { completed: 0, incomplete: 0, total: 0 }
 
@@ -274,14 +278,15 @@ export async function getSummaryNonBillableReport(filters = {}) {
     }
   });
 
-  // 3. Fetch current stock levels
-  let stockQuery = supabase
-    .from('non_billable_stock')
-    .select('consumable_id, available_stock');
+  // 3. Fetch current stock levels (fully paginated)
+  const stockData = await fetchAllRows(() => {
+    let stockQuery = supabase
+      .from('non_billable_stock')
+      .select('consumable_id, available_stock');
 
-  if (filters.branchId) stockQuery = stockQuery.eq('branch_id', filters.branchId);
-
-  const { data: stockData } = await withRetry(() => stockQuery);
+    if (filters.branchId) stockQuery = stockQuery.eq('branch_id', filters.branchId);
+    return stockQuery;
+  });
   const stockMap = {};
   (stockData || []).forEach((s) => {
     stockMap[s.consumable_id] = Number(s.available_stock) || 0;

@@ -1,5 +1,5 @@
 import { supabase } from '../config/supabase';
-import { withRetry } from '../utils/supabaseRetry';
+import { fetchAllRows } from '../utils/supabaseRetry';
 
 /**
  * Transaction Report: product transfer history (no bills involved).
@@ -7,27 +7,27 @@ import { withRetry } from '../utils/supabaseRetry';
  * Cost = product cost x transferred quantity.
  */
 export async function getTransactionReport(filters = {}) {
-  // 1. Load master product costs for both types
+  // 1. Load master product costs for both types (fully paginated)
   const [billableMaster, nonBillableMaster] = await Promise.all([
-    withRetry(() =>
+    fetchAllRows(() =>
       supabase.from('master_billable_consumables').select('id, product_name, cost_unit')
     ),
-    withRetry(() =>
+    fetchAllRows(() =>
       supabase.from('master_non_billable_consumables').select('id, product_name, cost')
     ),
   ]);
 
-  // 2. Fetch transfers with date range filter
-  let query = supabase
-    .from('stock_transfers')
-    .select('*')
-    .order('transferred_at', { ascending: false });
+  // 2. Fetch transfers with date range filter (fully paginated)
+  const transfers = await fetchAllRows(() => {
+    let query = supabase
+      .from('stock_transfers')
+      .select('*')
+      .order('transferred_at', { ascending: false });
 
-  if (filters.startDate) query = query.gte('transferred_at', `${filters.startDate}T00:00:00`);
-  if (filters.endDate) query = query.lte('transferred_at', `${filters.endDate}T23:59:59`);
-
-  const { data: transfers, error } = await withRetry(() => query);
-  if (error) throw error;
+    if (filters.startDate) query = query.gte('transferred_at', `${filters.startDate}T00:00:00`);
+    if (filters.endDate) query = query.lte('transferred_at', `${filters.endDate}T23:59:59`);
+    return query;
+  });
 
   const selected = new Set((filters.branchIds || []).map(Number));
 

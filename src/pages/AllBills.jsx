@@ -761,12 +761,11 @@ export default function AllBills({ onNavigate, urlState }) {
               action_type: 'Deleted',
               branch_id: bill.branch_id ?? null,
               entered_by: username,
-              bill_no: bill.bill_no ?? null,
-              patient_name: bill.patient_name ?? null,
             }));
 
             if (deletedEntries.length > 0) {
-              await supabase.from('consumable_history').insert(deletedEntries);
+              const { error: insErr } = await supabase.from('consumable_history').insert(deletedEntries);
+              if (insErr) console.error('Failed to log deleted consumables history:', insErr);
             }
           }
         }

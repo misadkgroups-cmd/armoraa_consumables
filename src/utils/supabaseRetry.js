@@ -66,6 +66,31 @@ export async function withRetry(supabaseFn, { maxRetries = DEFAULT_RETRIES, onRe
   };
 }
 
+export const chunk = (arr, size = 100) => {
+  const out = [];
+  for (let i = 0; i < (arr || []).length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+};
+
+/**
+ * Fetches ALL rows matching a query by automatically paginating in chunks of 1000,
+ * overcoming PostgREST's default 1000-row limit.
+ */
+export async function fetchAllRows(buildQueryFn, step = 1000) {
+  let all = [];
+  let from = 0;
+  while (true) {
+    const q = buildQueryFn().range(from, from + step - 1);
+    const { data, error } = await withRetry(() => q);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < step) break;
+    from += step;
+  }
+  return all;
+}
+
 /**
  * Higher-order function that creates a Supabase retry helper with a pre-configured onRetry callback.
  * Use this when you want to integrate with your app's notification or logging system.

@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard';
 import { endSession } from './services/sessionApi';
 import { syncCurrencyFromDb } from './utils/currency';
 import UpdatePrompt from './components/UpdatePrompt';
+import ChatBot from './components/ChatBot';
 import './App.css';
 
 const pathToPage = (path) => {
@@ -44,7 +45,7 @@ const AppContent = () => {
   // static hosts — index.html restores the deep-link before we get here).
   const [currentPage, setCurrentPage] = useState(() => pathToPage(stripBase(window.location.pathname)));
   const [urlState, setUrlState] = useState({});
-  const { branchId, switchBranch, loginMis, logout } = useBranch();
+  const { branchId, switchBranch, loginMis, logout, misMode } = useBranch();
   const [showConflictModal, setShowConflictModal] = useState(false);
   const [conflictMessage, setConflictMessage] = useState('');
 
@@ -177,6 +178,10 @@ const AppContent = () => {
     setCurrentPage(page);
   };
 
+  // AI assistant is available to MIS logins only (per the ARMORAA AI spec).
+  // misMode comes from BranchContext (reactive) so the widget mounts right
+  // after MIS login without needing a page reload.
+
   return (
     <>
       <Dashboard
@@ -185,6 +190,7 @@ const AppContent = () => {
         onNavigate={navigateWithState}
         onLogout={handleLogout}
       />
+      {misMode && <ChatBot />}
       <UpdatePrompt />
     </>
   );

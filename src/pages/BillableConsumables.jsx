@@ -4,7 +4,6 @@ import { useBranch } from '../context/BranchContext';
 import SearchableDropdown from '../components/SearchableDropdown';
 import * as auditApi from '../services/auditApi';
 import { prepareSavePayload } from '../utils/billableReportPayload';
-import { NON_BILLABLE_UNITS } from '../utils/nonBillableDefaults';
 import { getTodayLocal, formatDateDisplay } from '../utils/dateUtils';
 import { withBase } from '../utils/navigation';
 import { fmtQty2, round2 } from '../utils/numUtils';
@@ -772,9 +771,10 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       const numericBillId = Number(billingLogId) || null;
       const numericServiceId = Number(service) || null;
       const bsId = billServiceId ? Number(billServiceId) : null;
-      const serviceName = query.service_name || '';
-      const auditBillNo = billInfo?.bill_no ?? null;
-      const auditPatientName = billInfo?.patient_name ?? null;
+      const serviceName =
+        (services || []).find((s) => Number(s.id) === numericServiceId)?.service_name ||
+        query.service_name ||
+        '';
 
       // Map non-billable registry row id -> product id so old non-billable
       // slots can be compared with the current rows by the same raw id.
@@ -839,8 +839,6 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
           action_type: action,
           branch_id: branchId,
           entered_by: username,
-          bill_no: auditBillNo,
-          patient_name: auditPatientName,
         });
       }
 
@@ -864,15 +862,16 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
           action_type: 'Deleted',
           branch_id: branchId,
           entered_by: username,
-          bill_no: auditBillNo,
-          patient_name: auditPatientName,
         });
       }
 
       if (entries.length > 0) {
         // Records only apply when a bill service context exists; otherwise skip
         // quietly so a standalone save never fails because of the audit log.
-        await supabase.from('consumable_history').insert(entries);
+        const { error: insError } = await supabase.from('consumable_history').insert(entries);
+        if (insError) {
+          console.error('Failed to insert into consumable_history:', insError);
+        }
       }
       return savedReport ? savedReport.id : null;
     } catch (e) {

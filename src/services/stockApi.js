@@ -850,54 +850,101 @@ export async function createMultiLocationTransferRequest(
       }
 
       // Branch → Corporate: auto-confirm immediately (no manual receipt needed).
-      // The stock is added back to corporate_stock right away and the transfer
-      // is marked 'Received' instead of sitting in 'Pending'.
+      // The shipped quantity is added to corporate_stock and the transfer is
+      // marked 'Received' instead of sitting in 'Pending'.
       if (isToCorporate) {
+        // SINGLE atomic upsert instead of select-then-insert.
+        // The old two-step version aborted the whole transfer (leaving it
+        // 'Pending' forever) whenever the corporate row was missing or the
+        // UPDATE silently matched 0 rows. onConflict makes the write
+        // idempotent: it inserts when the product is new to the warehouse and
+        // updates the running balance otherwise.
+        //
+        // NOTE: corporate_stock is RLS-protected — the anon-key policies are
+        // fixed by 20260919000001_fix_corporate_stock_rls_and_stuck_transfers.sql.
         const { data: corpRow, error: corpFetchErr } = await withRetry(() =>
           supabase
             .from('corporate_stock')
             .select('id, available_units, product_name')
             .eq('product_id', productId)
             .eq('stock_type', t.stock_type)
-            .single()
+            .maybeSingle()
         );
 
-        if (corpFetchErr || !corpRow) {
-          results.push({ success: false, productId, product_name: t.product_name, message: 'Corporate stock record not found for auto-confirm' });
+        if (corpFetchErr) {
+          results.push({
+            success: false,
+            productId,
+            product_name: t.product_name,
+            message: `Corporate Warehouse read failed: ${corpFetchErr.message}`,
+          });
           continue;
         }
 
-        const newCorpQty = round2(Number(corpRow.available_units || 0) + qty);
-        const { error: corpUpdErr } = await withRetry(() =>
+        const currentCorpUnits = Number(corpRow?.available_units || 0);
+        const newCorpQty = round2(currentCorpUnits + qty);
+
+        const { data: savedCorp, error: corpUpdErr } = await withRetry(() =>
           supabase
             .from('corporate_stock')
-            .update({ available_units: newCorpQty, updated_at: new Date().toISOString(), updated_by: createdBy })
-            .eq('id', corpRow.id)
+            .upsert(
+              {
+                product_id: productId,
+                product_name: t.product_name || corpRow?.product_name || '',
+                stock_type: t.stock_type,
+                available_units: newCorpQty,
+                updated_at: new Date().toISOString(),
+                updated_by: createdBy,
+              },
+              { onConflict: 'product_id,stock_type' }
+            )
+            .select('id')
+            .single()
         );
-        if (corpUpdErr) {
-          results.push({ success: false, productId, product_name: t.product_name, message: corpUpdErr.message });
+
+        if (corpUpdErr || !savedCorp) {
+          results.push({
+            success: false,
+            productId,
+            product_name: t.product_name,
+            message: `Corporate Warehouse update failed: ${corpUpdErr?.message || 'no row returned'}`,
+          });
           continue;
         }
 
         // Mark the transfer as Received straight away
-        await supabase
-          .from('stock_transfers')
-          .update({ status: 'Received', received_by: createdBy, received_at: new Date().toISOString() })
-          .eq('id', stData.id);
+        const { error: rcErr } = await withRetry(() =>
+          supabase
+            .from('stock_transfers')
+            .update({ status: 'Received', received_by: createdBy, received_at: new Date().toISOString() })
+            .eq('id', stData.id)
+        );
+        if (rcErr) {
+          results.push({
+            success: false,
+            productId,
+            product_name: t.product_name,
+            message: `Corporate stock updated but transfer not confirmed: ${rcErr.message}`,
+          });
+          continue;
+        }
 
         // Corporate audit row (Inward from the branch)
-        await supabase.from('corporate_stock_transactions').insert({
-          product_id: productId,
-          product_name: t.product_name || corpRow.product_name || '',
-          stock_type: t.stock_type,
-          transaction_type: 'Inward',
-          quantity: qty,
-          balance_after: newCorpQty,
-          remarks: `Received from Branch ${fromBranchId}${remarks ? `: ${remarks}` : ''}`,
-          from_location: `Branch ${fromBranchId}`,
-          to_location: 'Corporate Warehouse',
-          created_by: createdBy,
-        });
+        const { error: ctxErr } = await withRetry(() =>
+          supabase.from('corporate_stock_transactions').insert({
+            product_id: productId,
+            product_name: t.product_name || corpRow?.product_name || '',
+            stock_type: t.stock_type,
+            transaction_type: 'Inward',
+            quantity: qty,
+            balance_after: newCorpQty,
+            remarks: `Received from Branch ${fromBranchId}${remarks ? `: ${remarks}` : ''}`,
+            from_location: `Branch ${fromBranchId}`,
+            to_location: 'Corporate Warehouse',
+            created_by: createdBy,
+          })
+        );
+        if (ctxErr) console.warn('Branch → Corporate audit row not written:', ctxErr.message);
 
         results.push({
           success: true,

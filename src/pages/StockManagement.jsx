@@ -735,8 +735,14 @@ const StockManagement = () => {
 
       setShowTransferModal(false);
       setTransferRows([]);
-      if (from_branch_id === 'corporate') {
+      // Refresh BOTH sides whenever the Corporate Warehouse is involved:
+      //   Corporate → Branch : corporate decreases, branch increases
+      //   Branch → Corporate : branch decreases, corporate increases
+      // Previously only the source side refreshed, so a Branch → Corporate
+      // transfer left the Corporate tab showing its stale balance.
+      if (from_branch_id === 'corporate' || to_branch_id === 'corporate') {
         fetchCorporateStock();
+        fetchStock();
       } else {
         fetchStock();
       }

@@ -684,7 +684,14 @@ export default function AllBills({ onNavigate, urlState }) {
       }
     } catch (error) {
       console.error('Error saving bill:', error);
-      if (error.message && error.message.includes("billing_log")) {
+      // Detect UNIQUE constraint violation on bill_no
+      const isUniqueViolation = error.code === '23505' ||
+        (error.message && error.message.includes('billing_log_bill_no_unique')) ||
+        (error.details && error.details.includes('bill_no'));
+      if (isUniqueViolation) {
+        showToast('error', `Bill Number "${formData.bill_no}" already exists`);
+        setFormErrors({ bill_no: 'Bill Number already exists' });
+      } else if (error.message && error.message.includes("billing_log")) {
         showToast('error', 'Database table not set up. Please run the migration script.');
       } else {
         showToast('error', error.message || 'Failed to save bill');

@@ -11,7 +11,11 @@ import {
   getDetailedNonBillableReport,
   getSummaryNonBillableReport,
 } from '../services/nonBillableReports';
-import { getBillableReportFromServiceConsumables } from '../services/billableReports';
+import {
+  getBillableReportFromServiceConsumables,
+  getReportFilterFacts,
+  computeCascadingFacets,
+} from '../services/billableReports';
 import { getTransactionReport } from '../services/transactionReports';
 import { Trash2 } from 'lucide-react';
 
@@ -49,6 +53,13 @@ const Reports = () => {
   const [branches, setBranches] = useState([]);
   const [services, setServices] = useState([]);
   const [machines, setMachines] = useState([]);
+
+  // Cascading filter support: one "fact" row per bill -> service -> machinery
+  // combination inside the current date range, plus the display names those
+  // facts reference. Every dropdown is narrowed to the values actually present
+  // in these facts (instead of listing the whole master data).
+  const [filterFacts, setFilterFacts] = useState({ facts: [], serviceNames: {}, machineryNames: {} });
+  const [filterFactsLoading, setFilterFactsLoading] = useState(false);
 
   // Billable state
   const [rawReportData, setRawReportData] = useState([]);
@@ -338,19 +349,124 @@ const Reports = () => {
     }
   }, [billableReportView, rawReportData, processReportData]);
 
+  // Keep the filter "facts" in sync with the date range (debounced) so every
+  // dropdown can be narrowed to values that actually exist in that range.
+  useEffect(() => {
+    if (reportType !== 'billable') return undefined;
+    if (!dateRange.start || !dateRange.end) return undefined;
+
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setFilterFactsLoading(true);
+      try {
+        const facts = await getReportFilterFacts({
+          startDate: dateRange.start,
+          endDate: dateRange.end,
+        });
+        if (!cancelled) setFilterFacts(facts);
+      } catch (e) {
+        console.error('Filter facts error:', e);
+        if (!cancelled) setFilterFacts({ facts: [], serviceNames: {}, machineryNames: {} });
+      } finally {
+        if (!cancelled) setFilterFactsLoading(false);
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [reportType, dateRange.start, dateRange.end]);
+
+  // ============ CASCADING FILTER OPTIONS ============
+  // The Machinery filter stores the machine NAME (one name can map to hundreds
+  // of master_machinery rows). Resolve that name to the ids present in the
+  // current facts so the cascade can match it.
+  const selectedMachineryIds = (() => {
+    if (!filterMachinery) return [];
+    const target = String(filterMachinery).trim().toLowerCase();
+    return Object.entries(filterFacts.machineryNames || {})
+      .filter(([, name]) => String(name || '').trim().toLowerCase() === target)
+      .map(([id]) => Number(id));
+  })();
+
+  // Values still valid given the OTHER selected filters (each facet ignores
+  // its own selection so the chosen value stays visible).
+  const cascade = computeCascadingFacets(filterFacts.facts, {
+    branchId: filterBranch,
+    serviceId: filterService,
+    machineryIds: selectedMachineryIds,
+  });
+
+  // Dropdown options — only values that exist in the current date range AND
+  // survive the other active filters. The currently selected value is always
+  // kept visible even when it momentarily has no matching rows.
+  const branchOptions = (() =>
+    branches
+      .filter((b) => cascade.branchIds.has(Number(b.id)) || String(b.id) === String(filterBranch))
+      .map((b) => ({ value: b.id, label: b.branch_name })))();
+
+  const serviceOptions = (() => {
+    const opts = Array.from(cascade.serviceIds).map((id) => ({
+      value: id,
+      label:
+        filterFacts.serviceNames?.[id] ||
+        (services.find((s) => Number(s.id) === Number(id)) || {}).service_name ||
+        `Service #${id}`,
+    }));
+    if (filterService && !opts.some((o) => String(o.value) === String(filterService))) {
+      const nm =
+        (services.find((s) => String(s.id) === String(filterService)) || {}).service_name ||
+        `Service #${filterService}`;
+      opts.push({ value: filterService, label: nm });
+    }
+    return opts.sort((a, b) => String(a.label).localeCompare(String(b.label)));
+  })();
+
+  const machineryOptions = (() => {
+    const byName = new Map();
+    cascade.machineryIds.forEach((id) => {
+      const name = filterFacts.machineryNames?.[id];
+      if (!name) return;
+      const key = String(name).toLowerCase().trim();
+      if (!byName.has(key)) byName.set(key, { value: name, label: name });
+    });
+    const opts = Array.from(byName.values());
+    if (
+      filterMachinery &&
+      !opts.some((o) => String(o.value).toLowerCase() === String(filterMachinery).toLowerCase())
+    ) {
+      opts.push({ value: filterMachinery, label: filterMachinery });
+    }
+    return opts.sort((a, b) => String(a.label).localeCompare(String(b.label)));
+  })();
+
   // ============ BILLABLE REPORT FETCH ============
   const generateBillableReport = async () => {
     setLoading(true);
     try {
       let machineryIds = undefined;
       if (filterMachinery) {
-        // filterMachinery holds the machine NAME. One name can map to many
-        // master_machinery rows (e.g. "CHEMICAL PEEL" -> 90+ variants), so
-        // match all of them, not just a single machinery_id.
+        // filterMachinery holds the machine NAME. One name maps to many
+        // master_machinery rows (e.g. "CHEMICAL PEEL" -> dozens of variants),
+        // so match ALL of them, never a single machinery_id.
+        //
+        // Two sources are combined:
+        //   1. the date-range facts — authoritative, because they contain the
+        //      exact ids this range used, including branches other than the
+        //      user's own branch (the master list below is branch-scoped);
+        //   2. the master_machinery list already loaded (covers the moment
+        //      before the facts have finished loading).
+        const target = String(filterMachinery).trim().toLowerCase();
+        const ids = new Set();
+        Object.entries(filterFacts.machineryNames || {}).forEach(([id, name]) => {
+          if (String(name || '').trim().toLowerCase() === target) ids.add(Number(id));
+        });
         const machineGroup = machines.find(
           (m) => String(m.id) === String(filterMachinery) || String(m.machine_name) === String(filterMachinery)
         );
-        machineryIds = machineGroup?.ids?.length ? machineGroup.ids : [filterMachinery];
+        (machineGroup?.ids || []).forEach((id) => ids.add(Number(id)));
+        machineryIds = ids.size ? Array.from(ids) : [filterMachinery];
       }
 
       const filters = {
@@ -1030,11 +1146,11 @@ const Reports = () => {
                 <SearchableDropdown
                   value={filterBranch}
                   onChange={(val) => setFilterBranch(val)}
-                  options={branches.map((b) => ({ value: b.id, label: b.branch_name }))}
+                  options={branchOptions}
                   placeholder="All Branches"
                   displayKey="label"
                   valueKey="value"
-                  disabled={loading}
+                  disabled={loading || filterFactsLoading}
                 />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -1044,13 +1160,12 @@ const Reports = () => {
                   onChange={(val) => {
                     setFilterService(val);
                     setFilterMachinery('');
-                    fetchMachines(val);
                   }}
-                  options={services.map((s) => ({ value: s.id, label: s.service_name }))}
+                  options={serviceOptions}
                   placeholder="All Services"
                   displayKey="label"
                   valueKey="value"
-                  disabled={loading}
+                  disabled={loading || filterFactsLoading}
                 />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -1058,11 +1173,11 @@ const Reports = () => {
                 <SearchableDropdown
                   value={filterMachinery}
                   onChange={(val) => setFilterMachinery(val)}
-                  options={machines.map((m) => ({ value: m.id, label: m.machine_name }))}
+                  options={machineryOptions}
                   placeholder="All Machinery"
                   displayKey="label"
                   valueKey="value"
-                  disabled={loading}
+                  disabled={loading || filterFactsLoading}
                 />
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>

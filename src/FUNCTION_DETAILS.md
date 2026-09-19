@@ -297,6 +297,24 @@ Supports:
 
 Billable report hydration resolves branch, service, machinery, doctor, staff, and consumable labels through follow-up queries.
 
+The Billable filters are **cascading (real-time dependent)** — they never list the
+full master data:
+
+- The date range defines the "universe".
+- `getReportFilterFacts()` flattens that range into one fact row per
+  bill → service → machinery combination, with the display names it references.
+- `computeCascadingFacets()` then keeps only the values that satisfy the OTHER
+  active filters, so each dropdown offers exactly the options that can still
+  produce rows.
+- Fact loading is debounced 350 ms on date changes; facet recomputation is
+  in-memory (no extra query) when only branch/service/machinery change.
+
+Examples: choosing a single date hides services and machinery that did not run
+that day; choosing a branch hides services/machinery that branch never used;
+choosing a service narrows machinery to the units that performed it. A facet
+never filters itself, so the current selection always stays visible, and the
+selected value is kept in its dropdown even if it momentarily has no rows.
+
 ### `Customization.jsx`
 
 Manages:
@@ -486,6 +504,17 @@ Owns custom session creation, validation, heartbeat, logout, and concurrent-logi
 ### `src/services/nonBillableReports.js`
 
 Builds detailed and summary non-billable report data.
+
+### `src/services/billableReports.js`
+
+Builds billable report rows from `billing_log` → `bill_services` →
+`bill_service_consumables`, and exposes the cascading report-filter helpers:
+
+- `getReportFilterFacts({ startDate, endDate })` — one fact row per
+  bill → service → machinery in the range, plus the service/machinery display
+  names those facts reference.
+- `computeCascadingFacets(facts, { branchId, serviceId, machineryIds })` — the
+  set of still-valid options per facet (each facet ignores its own selection).
 
 ### `src/utils/billableReportPayload.js`
 

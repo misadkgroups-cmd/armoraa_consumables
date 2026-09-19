@@ -284,5 +284,163 @@ export async function getBillableReportFromServiceConsumables(filters = {}) {
   return rows;
 }
 
+// ---------------------------------------------------------------------------
+// CASCADING (real-time dependent) FILTER SUPPORT
+// ---------------------------------------------------------------------------
+// The Billable Report screen exposes four filters: Date range, Branch, Service
+// and Machinery. Plain master-list dropdowns let users pick combinations that
+// can never produce a row (e.g. a service a branch never performed), so these
+// filters are driven by the ACTUAL report data instead:
+//
+//   * The date range is the "universe".
+//   * Every (bill -> service -> machinery) combination inside it becomes a
+//     "fact" row.
+//   * Each dropdown then shows only the values present in the facts that also
+//     satisfy the OTHER currently-selected filters.
+//
+// Result: choosing a date hides services/machinery that never occurred on that
+// date, choosing a branch hides services/machinery that branch never used, and
+// choosing a service hides machinery that never ran it — instead of showing
+// every master record.
+
+/**
+ * Loads the filter "facts" for a date range: one row per
+ * bill -> service -> machinery combination, plus the display names needed to
+ * label the dropdowns.
+ *
+ * @param  {object}  options
+ * @param  {string}  options.startDate  yyyy-MM-dd
+ * @param  {string}  options.endDate    yyyy-MM-dd
+ * @returns {Promise<{facts: Array<{branch_id:(number|null), service_id:(number|null), machinery_id:(number|null)}>,
+ *                    serviceNames: Object<string,string>,
+ *                    machineryNames: Object<string,string>}>}
+ */
+export async function getReportFilterFacts({ startDate, endDate } = {}) {
+  const empty = { facts: [], serviceNames: {}, machineryNames: {} };
+  if (!startDate || !endDate) return empty;
+
+  // 1. Bills inside the date range (the facts universe).
+  const bills = await fetchAllRows(() =>
+    supabase
+      .from('billing_log')
+      .select('id, branch_id')
+      .gte('service_date', startDate)
+      .lte('service_date', endDate)
+      .is('deleted_at', null)
+      .order('id', { ascending: true })
+  );
+  if (!bills || bills.length === 0) return empty;
+
+  const billById = new Map((bills || []).map((b) => [Number(b.id), b]));
+  const billIds = (bills || []).map((b) => b.id);
+
+  // 2. Services attached to those bills.
+  let billServices = [];
+  for (const ids of chunk(billIds, 100)) {
+    const rows = await fetchAllRows(() =>
+      supabase
+        .from('bill_services')
+        .select('bill_id, service_id')
+        .in('bill_id', ids)
+        .is('deleted_at', null)
+    );
+    billServices.push(...rows);
+  }
+  if (billServices.length === 0) return empty;
+
+  // 3. Machinery recorded for each (bill, service) pair.
+  const reportMap = {};
+  for (const ids of chunk(billIds, 100)) {
+    const rows = await fetchAllRows(() =>
+      supabase
+        .from('billable_report')
+        .select('billing_log_id, service_id, machinery_id')
+        .in('billing_log_id', ids)
+    );
+    (rows || []).forEach((r) => {
+      reportMap[`${r.billing_log_id}__${r.service_id}`] = r;
+    });
+  }
+
+  // 4. Flatten into fact rows.
+  const facts = [];
+  billServices.forEach((bs) => {
+    const bill = billById.get(Number(bs.bill_id));
+    if (!bill) return;
+    const rep = reportMap[`${bs.bill_id}__${bs.service_id}`];
+    facts.push({
+      branch_id: bill.branch_id != null ? Number(bill.branch_id) : null,
+      service_id: bs.service_id != null ? Number(bs.service_id) : null,
+      machinery_id: rep && rep.machinery_id != null ? Number(rep.machinery_id) : null,
+    });
+  });
+
+  // 5. Resolve display names for the ids actually present.
+  const serviceNames = {};
+  const machineryNames = {};
+  const svcIds = [...new Set(facts.map((f) => f.service_id).filter(Boolean))];
+  const machIds = [...new Set(facts.map((f) => f.machinery_id).filter(Boolean))];
+
+  for (const ids of chunk(svcIds, 100)) {
+    if (!ids.length) break;
+    const rows = await fetchAllRows(() =>
+      supabase.from('master_services').select('id, service_name').in('id', ids)
+    );
+    (rows || []).forEach((s) => {
+      serviceNames[s.id] = s.service_name;
+    });
+  }
+  for (const ids of chunk(machIds, 100)) {
+    if (!ids.length) break;
+    const rows = await fetchAllRows(() =>
+      supabase.from('master_machinery').select('id, machine_name').in('id', ids)
+    );
+    (rows || []).forEach((m) => {
+      machineryNames[m.id] = m.machine_name;
+    });
+  }
+
+  return { facts, serviceNames, machineryNames };
+}
+
+/**
+ * Computes which filter values are still valid for the CURRENT selections.
+ *
+ * Standard cascading rule: the options for a facet are the values found in the
+ * fact rows that satisfy every OTHER facet. A facet never filters itself, so
+ * the value the user just picked always stays visible in its own dropdown.
+ *
+ * @param  {Array}  facts       rows produced by getReportFilterFacts
+ * @param  {object} selections  { branchId, serviceId, machineryIds }
+ * @returns {{branchIds: Set<number>, serviceIds: Set<number>, machineryIds: Set<number>}}
+ */
+export function computeCascadingFacets(facts = [], selections = {}) {
+  const branchSel = selections.branchId ? String(selections.branchId) : '';
+  const serviceSel = selections.serviceId ? String(selections.serviceId) : '';
+  const machSel = new Set(
+    (selections.machineryIds || []).map(Number).filter((n) => Number.isFinite(n))
+  );
+  const hasMachSel = machSel.size > 0;
+
+  const branchIds = new Set();
+  const serviceIds = new Set();
+  const machineryIds = new Set();
+
+  (facts || []).forEach((row) => {
+    const branchOk = !branchSel || String(row.branch_id) === branchSel;
+    const serviceOk = !serviceSel || String(row.service_id) === serviceSel;
+    const machOk = !hasMachSel || machSel.has(Number(row.machinery_id));
+
+    // Branch facet: honour service + machinery, ignore the branch selection.
+    if (serviceOk && machOk && row.branch_id != null) branchIds.add(Number(row.branch_id));
+    // Service facet: honour branch + machinery, ignore the service selection.
+    if (branchOk && machOk && row.service_id != null) serviceIds.add(Number(row.service_id));
+    // Machinery facet: honour branch + service, ignore the machinery selection.
+    if (branchOk && serviceOk && row.machinery_id != null) machineryIds.add(Number(row.machinery_id));
+  });
+
+  return { branchIds, serviceIds, machineryIds };
+}
+
 
 

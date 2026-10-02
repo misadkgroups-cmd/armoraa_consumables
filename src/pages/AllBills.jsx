@@ -8,6 +8,7 @@ import AuditTimelineModal from '../components/AuditTimelineModal';
 import BillDetailsModal from '../components/BillDetailsModal';
 import { getTodayLocal, formatDateDisplay } from '../utils/dateUtils';
 import { withBase } from '../utils/navigation';
+import { restoreBillableStockForBillServices } from '../utils/stockRestore';
 
 // Dependency arrays here intentionally stay minimal (loaders are recreated each
 // render; effects are mount-scoped). Disabled file-wide as that is deliberate.
@@ -556,6 +557,18 @@ export default function AllBills({ onNavigate, urlState }) {
         // Remove services deleted from the form (and their child consumables)
         const removedIds = reusable.filter(bs => !usedExistingIds.has(bs.id)).map(bs => bs.id);
         if (removedIds.length > 0) {
+          // Return the billable units these services consumed back to the
+          // branch that owns the bill BEFORE the rows disappear — otherwise
+          // those units are lost from that branch's stock forever.
+          // (Must run first: it derives the units from bill_service_consumables.)
+          try {
+            await restoreBillableStockForBillServices(removedIds, {
+              reason: `Service removed from Bill #${formData.bill_no.trim()}`,
+            });
+          } catch (restoreErr) {
+            console.error('Failed to restore stock for removed services:', restoreErr);
+          }
+
           const { error: bscDeleteError } = await supabase
             .from('bill_service_consumables')
             .delete()
@@ -790,6 +803,20 @@ export default function AllBills({ onNavigate, urlState }) {
       
       if (billServices && billServices.length > 0) {
         const bscIds = billServices.map(bs => bs.id);
+
+        // Return every billable unit this bill consumed to the branch that owns
+        // the bill, before the usage rows are deleted. Without this, deleting a
+        // bill (e.g. Branch 2's duplicated/mismatched service entry that MIS
+        // Admin removes) permanently strips those units from Branch 2's stock.
+        // bill.branch_id — not the acting user's branch — is the one credited.
+        try {
+          await restoreBillableStockForBillServices(bscIds, {
+            reason: `Bill #${bill.bill_no} deleted`,
+          });
+        } catch (restoreErr) {
+          console.error('Failed to restore stock on bill delete:', restoreErr);
+        }
+
         await supabase
           .from('bill_service_consumables')
           .delete()

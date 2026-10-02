@@ -576,6 +576,15 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       if (billErr) console.warn('Could not read current bill status:', billErr);
       const prevStatus = billRow?.bill_status || 'Incomplete';
 
+      // A bill that is already Complete is NEVER demoted back to Incomplete by
+      // this page. Re-saving an existing service (or re-entering consumables for
+      // it) must leave a completed bill completed — otherwise editing one
+      // service silently flips the whole bill back to Incomplete.
+      if (prevStatus === 'Complete' && newStatus !== 'Complete') {
+        console.log('Bill is already Complete — skipping downgrade to Incomplete.');
+        return;
+      }
+
       // Timestamp the lifecycle transition precisely (completion time).
       const nowIso = new Date().toISOString();
       const username = localStorage.getItem('username') || 'System';
@@ -967,16 +976,48 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       const pendingConsumableItems = consumableItems;
 
       let savedReport = null;
-      
+
+      // Resolve the bill_services row this save targets.
+      //
+      // The user is allowed to CHANGE the Service on this form. That must be a
+      // rename/re-point of the SAME row, never a new row: the row id is what
+      // `bill_service_consumables` hangs off, so creating a new one would orphan
+      // every already-saved consumable and re-deduct their stock.
+      //
+      // We therefore read the row FIRST and remember its ORIGINAL service id,
+      // then use that original id for the duplicate-report lookup below.
+      let targetBillService = null;
+      const bsId = billServiceId ? Number(billServiceId) : null;
+      if (validBillingLogId) {
+        let bsQuery = supabase
+          .from('bill_services')
+          .select('id, service_id, service_name, consumable_completed')
+          .eq('bill_id', validBillingLogId);
+        // Prefer the exact row we were opened for; otherwise fall back to the
+        // row matching the originally-selected service (legacy links that carry
+        // no bill_service_id).
+        const { data: bsRows } = bsId
+          ? await bsQuery.eq('id', bsId).maybeSingle()
+          : await bsQuery.eq('service_id', numericServiceId).maybeSingle();
+        targetBillService = bsRows || null;
+      }
+      const originalServiceId = targetBillService?.service_id != null
+        ? Number(targetBillService.service_id)
+        : numericServiceId;
+      const serviceChanged =
+        !!targetBillService &&
+        numericServiceId != null &&
+        originalServiceId !== numericServiceId;
+
       // Check if report already exists for this billing_log_id + service_id to prevent duplicates
       let isUpdate = false;
       let oldReport = null;
-      if (validBillingLogId && numericServiceId) {
+      if (validBillingLogId && originalServiceId) {
         const { data: existingReport } = await supabase
           .from('billable_report')
           .select('*')
           .eq('billing_log_id', validBillingLogId)
-          .eq('service_id', numericServiceId)
+          .eq('service_id', originalServiceId)
           .maybeSingle();
         
         console.log('Existing report check:', existingReport);
@@ -1045,9 +1086,6 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       // NOTE: billable_report_id column does NOT exist on bill_services in the actual DB
       // Instead, the relationship is maintained via billing_log_id+service_id on billable_report
       if (savedReport) {
-        // Convert billServiceId to number if it exists
-        const bsId = billServiceId ? Number(billServiceId) : null;
-        
         // Only mark as complete if there are consumables to save.
         // NOTE: non-billable rows have units='USED' — a sentinel value meaning the
         // product was consumed but is non-billable. Number('USED') is NaN, so the
@@ -1136,19 +1174,41 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
           return;
         }
         
-        // Update bill_services with consumable_completed = true
-        // Update by bill_id + service_id if billServiceId is not available
+        // Mark the resolved bill_services row Complete.
+        //
+        // Previously this filtered on `.eq('service_id', Number(service))`, which
+        // broke the moment the user changed the Service dropdown: the row still
+        // held the OLD service_id, so the filter matched nothing and the update
+        // silently affected 0 rows (service never persisted, never completed).
+        //
+        // Now we target the row by its resolved id, and — when the service was
+        // changed — write the new service_id/service_name onto that SAME row so
+        // the already-saved consumables stay attached to it.
+        const completionPatch = {
+          consumable_completed: true,
+          service_status: 'Complete',
+        };
+        if (serviceChanged) {
+          completionPatch.service_id = numericServiceId;
+          completionPatch.service_name =
+            (services || []).find((s) => Number(s.id) === numericServiceId)?.service_name ||
+            targetBillService.service_name;
+          console.log(
+            'Service changed from', originalServiceId, 'to', numericServiceId,
+            '— updating existing bill_services row', targetBillService.id,
+            '(consumables preserved)'
+          );
+        }
+
         let updateQuery = supabase
           .from('bill_services')
-          .update({
-            consumable_completed: true,
-            service_status: 'Complete',
-          })
+          .update(completionPatch)
           .eq('bill_id', Number(validBillingLogId))
-          .eq('service_id', Number(service));
-        
-        if (bsId) {
-          updateQuery = updateQuery.eq('id', bsId);
+          // Match on the ORIGINAL service so a changed service still hits the row.
+          .eq('service_id', originalServiceId ?? numericServiceId);
+
+        if (targetBillService?.id) {
+          updateQuery = updateQuery.eq('id', targetBillService.id);
         }
         
         const { data: updatedServices, error: updErr } = await updateQuery.select('id, consumable_completed');

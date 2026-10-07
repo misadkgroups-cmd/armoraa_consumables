@@ -410,7 +410,12 @@ const Welcome = ({ onBranchSelect, onMisLogin }) => {
 
       if (queryError) {
         console.error('Database query error:', queryError);
-        setError('Login failed: ' + queryError.message);
+        const msg = queryError.message || '';
+        if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch')) {
+          setError('Unable to connect to database (Network Error). Please check internet, system date/time, ad-blocker, or firewall on this computer.');
+        } else {
+          setError('Login failed: ' + msg);
+        }
         setLoading(false);
         return;
       }
@@ -464,7 +469,12 @@ const Welcome = ({ onBranchSelect, onMisLogin }) => {
       await completeLogin(user);
     } catch (err) {
       console.error('Login exception:', err);
-      setError('Login failed. Check console for details.');
+      const msg = err?.message || String(err);
+      if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch')) {
+        setError('Unable to connect to database (Network Error). Please check internet, system date/time, ad-blocker, or firewall on this computer.');
+      } else {
+        setError('Login failed. ' + (msg || 'Check console for details.'));
+      }
     } finally {
       setLoading(false);
     }

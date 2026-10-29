@@ -623,9 +623,31 @@ const Welcome = ({ onBranchSelect, onMisLogin }) => {
               </div>
 
               {error && (
-                <p style={{ margin: '12px 0 0 0', textAlign: 'center', fontSize: 13, fontWeight: 600, color: '#F87171' }}>
-                  {error}
-                </p>
+                <div style={{ margin: '12px 0 0 0', textAlign: 'center' }}>
+                  <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: '#F87171', lineHeight: 1.4 }}>
+                    {error}
+                  </p>
+                  {(error.toLowerCase().includes('database') || error.toLowerCase().includes('network') || error.toLowerCase().includes('fetch')) && (
+                    <div className="mt-3 p-3 rounded-xl border border-red-500/25 bg-red-950/40 text-left text-xs text-red-200/90 space-y-1.5 shadow-lg">
+                      <p className="font-semibold text-red-300 flex items-center gap-1.5">
+                        <span>⚠️</span> Device Troubleshooting Guide:
+                      </p>
+                      <p>• <b>Computer Date & Time:</b> Ensure Windows clock and year are 100% accurate (wrong clock blocks database SSL security).</p>
+                      <p>• <b>AdBlock / Brave Shields:</b> Try opening in <b>Incognito Window</b> (<kbd className="px-1.5 py-0.5 rounded bg-black/60 text-[10px] text-white">Ctrl + Shift + N</kbd>) or disable adblockers.</p>
+                      <p>• <b>DNS Cache:</b> Run <code className="px-1.5 py-0.5 rounded bg-black/60 text-[11px] text-amber-300">ipconfig /flushdns</code> in Command Prompt.</p>
+                      <div className="pt-1.5 text-center border-t border-red-500/20">
+                        <a
+                          href={supabase.supabaseUrl || 'https://kihlfvquhwhgskfnmsli.supabase.co'}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-violet-300 hover:text-violet-200 underline"
+                        >
+                          🔗 Click here to test Database Link in new tab
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
 
               <button

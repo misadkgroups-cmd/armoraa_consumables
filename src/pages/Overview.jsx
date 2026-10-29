@@ -64,13 +64,22 @@ const Overview = () => {
   // Date filter — persisted so it STICKS across navigation/remounts,
   // exactly like the branch selection. Only Apply/Clear updates it.
   const loadStoredDateFilter = () => {
-    try { return JSON.parse(localStorage.getItem('dashboard-date-filter')) || null; } catch { return null; }
+    try {
+      const f = JSON.parse(localStorage.getItem('dashboard-date-filter'));
+      if (f && ['thisMonth', 'overall', 'custom'].includes(f.preset)) {
+        return f;
+      }
+      return null;
+    } catch {
+      return null;
+    }
   };
   const saveDateFilter = (f) => {
     try { localStorage.setItem('dashboard-date-filter', JSON.stringify(f)); } catch { /* ignore */ }
   };
   const storedFilter = loadStoredDateFilter();
-  const [dateRange, setDateRange] = useState(storedFilter?.preset || 'last7');
+  const initialPreset = storedFilter?.preset || 'thisMonth';
+  const [dateRange, setDateRange] = useState(initialPreset);
   const [customStart, setCustomStart] = useState(storedFilter?.customStart || '');
   const [customEnd, setCustomEnd] = useState(storedFilter?.customEnd || '');
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -145,34 +154,47 @@ const Overview = () => {
   // Pending (draft) range edited in the picker — nothing refetches until Apply
   const pendingRange = useMemo(() => {
     const today = new Date();
-    let start = new Date();
+    let start = new Date(today.getFullYear(), today.getMonth(), 1);
     let end = today;
-    if (dateRange === 'last7') start = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-    else if (dateRange === 'last30') start = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
-    else if (dateRange === 'thisMonth') start = new Date(today.getFullYear(), today.getMonth(), 1);
-    else if (dateRange === 'custom' && customStart && customEnd) { start = new Date(customStart); end = new Date(customEnd); }
+    if (dateRange === 'thisMonth') {
+      start = new Date(today.getFullYear(), today.getMonth(), 1);
+      end = today;
+    } else if (dateRange === 'overall') {
+      start = new Date(2020, 0, 1);
+      end = today;
+    } else if (dateRange === 'custom' && customStart && customEnd) {
+      start = new Date(customStart);
+      end = new Date(customEnd);
+    }
     return { preset: dateRange, start: formatDateLocal(start), end: formatDateLocal(end) };
   }, [dateRange, customStart, customEnd]);
 
   // Applied range — the ONLY thing that triggers a refetch (via Apply / Clear)
   const defaultRange = useMemo(() => {
     const today = new Date();
-    const start = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
-    return { preset: 'last7', start: formatDateLocal(start), end: formatDateLocal(today) };
+    const start = new Date(today.getFullYear(), today.getMonth(), 1);
+    return { preset: 'thisMonth', start: formatDateLocal(start), end: formatDateLocal(today) };
   }, []);
-  const [appliedRange, setAppliedRange] = useState(storedFilter
-    ? { preset: storedFilter.preset, start: storedFilter.start, end: storedFilter.end }
-    : defaultRange);
+  const [appliedRange, setAppliedRange] = useState(() => {
+    if (storedFilter && storedFilter.preset !== 'thisMonth') {
+      return { preset: storedFilter.preset, start: storedFilter.start, end: storedFilter.end };
+    }
+    const today = new Date();
+    const start = new Date(today.getFullYear(), today.getMonth(), 1);
+    return { preset: 'thisMonth', start: formatDateLocal(start), end: formatDateLocal(today) };
+  });
 
   const pendingDirty = pendingRange.preset !== appliedRange.preset
     || pendingRange.start !== appliedRange.start
     || pendingRange.end !== appliedRange.end;
 
   const appliedLabel = useMemo(() => {
-    if (appliedRange.preset === 'last7') return 'Last 7 Days';
-    if (appliedRange.preset === 'last30') return 'Last 30 Days';
     if (appliedRange.preset === 'thisMonth') return 'This Month';
-    return `${formatDateDisplay(new Date(appliedRange.start))} - ${formatDateDisplay(new Date(appliedRange.end))}`;
+    if (appliedRange.preset === 'overall') return 'Overall';
+    if (appliedRange.preset === 'custom' || (appliedRange.start && appliedRange.end)) {
+      return `${formatDateDisplay(new Date(appliedRange.start))} - ${formatDateDisplay(new Date(appliedRange.end))}`;
+    }
+    return 'This Month';
   }, [appliedRange]);
 
   // fetchDashboard is recreated each render, so it is deliberately omitted from
@@ -191,7 +213,11 @@ const Overview = () => {
         if (branchId) return q.eq('branch_id', branchId);
         return q;
       };
-      let query = applyBranchFilter(supabase.from('billable_report').select('*')).gte('report_date', start).lte('report_date', end);
+      let query = applyBranchFilter(supabase.from('billable_report').select('*'));
+      if (appliedRange.preset !== 'overall') {
+        query = query.gte('report_date', start);
+      }
+      query = query.lte('report_date', end);
       const { data: bills } = await query;
       const billsArray = bills || [];
 
@@ -199,9 +225,11 @@ const Overview = () => {
       let billingArray = [];
       try {
         // Filter by BILL DATE (service_date), not created date
-        let billingQuery = supabase.from('billing_log').select('*')
-          .gte('service_date', start)
-          .lte('service_date', end);
+        let billingQuery = supabase.from('billing_log').select('*');
+        if (appliedRange.preset !== 'overall') {
+          billingQuery = billingQuery.gte('service_date', start);
+        }
+        billingQuery = billingQuery.lte('service_date', end);
         billingQuery = applyBranchFilter(billingQuery);
         const { data: billingLogs } = await billingQuery;
         billingArray = billingLogs || [];
@@ -260,7 +288,7 @@ const Overview = () => {
       const serviceCounts = {};
       if (services) services.forEach(s => serviceCounts[s.id] = { name: s.service_name, count: 0 });
       billsArray.forEach(bill => { if (bill.service_id && serviceCounts[bill.service_id]) serviceCounts[bill.service_id].count++; });
-      const serviceChart = Object.values(serviceCounts).sort((a, b) => b.count - a.count).filter(s => s.count > 0).slice(0, 10);
+      const serviceChart = Object.values(serviceCounts).sort((a, b) => b.count - a.count).filter(s => s.count > 0).slice(0, 7);
 
       // Machinery
       const machineryIds = new Set(billsArray.map(b => b.machinery_id).filter(Boolean));
@@ -380,30 +408,115 @@ const Overview = () => {
   const columnChart = {
     series: [{ name: 'Bills', data: serviceChart.map(s => s.count) }],
     options: {
-      chart: { type: 'bar', height: '100%', foreColor: '#64748B', fontFamily: 'Inter, sans-serif', toolbar: { show: false }, zoom: { enabled: false }, animations: { enabled: true, dynamicAnimation: { speed: 600 } } },
-      plotOptions: { bar: { borderRadius: 8, horizontal: false, columnWidth: '58%', borderRadiusApplication: 'end', dataLabels: { position: 'top' } } },
-      colors: ['#7C5CFC'],
-      fill: { type: 'gradient', gradient: { shade: 'dark', type: 'vertical', shadeIntensity: 0.4, gradientToColors: ['#A78BFA'], inverseColors: false, opacityFrom: 0.95, opacityTo: 0.65 } },
-      xaxis: { categories: serviceChart.map(s => s.name), labels: { rotate: -40, style: { fontSize: '11px' } }, axisBorder: { show: false }, axisTicks: { show: false } },
-      yaxis: { labels: { style: { fontSize: '11px' } } },
-      grid: { borderColor: '#F1F5F9', strokeDashArray: 4, padding: { left: 0, right: 8 } },
-      dataLabels: { enabled: true, offsetY: -18, style: { colors: ['#0F172A'], fontSize: '11px', fontWeight: 600 } },
-      tooltip: { theme: 'light', style: { fontSize: '12px', fontFamily: 'Inter' }, y: { formatter: v => `${v} Bills` } },
+      chart: {
+        type: 'bar',
+        height: 230,
+        foreColor: '#64748B',
+        fontFamily: 'Inter, sans-serif',
+        toolbar: { show: false },
+        zoom: { enabled: false },
+        animations: { enabled: true, dynamicAnimation: { speed: 500 } }
+      },
+      plotOptions: {
+        bar: {
+          borderRadius: 6,
+          horizontal: false,
+          columnWidth: '45%',
+          borderRadiusApplication: 'end',
+          dataLabels: { position: 'top' },
+          distributed: true,
+        }
+      },
+      colors: ['#7C5CFC', '#6366F1', '#3B82F6', '#0EA5E9', '#10B981', '#F59E0B', '#EC4899'],
+      xaxis: {
+        categories: serviceChart.map(s => s.name.length > 14 ? s.name.substring(0, 12) + '…' : s.name),
+        labels: {
+          rotate: -20,
+          rotateAlways: false,
+          hideOverlappingLabels: true,
+          trim: true,
+          style: { fontSize: '11px', fontWeight: 600, colors: '#64748B' }
+        },
+        axisBorder: { show: false },
+        axisTicks: { show: false }
+      },
+      yaxis: {
+        min: 0,
+        labels: {
+          style: { fontSize: '11px', colors: '#64748B' },
+          formatter: v => Math.floor(v)
+        }
+      },
+      grid: { borderColor: '#F1F5F9', strokeDashArray: 4, padding: { left: 8, right: 8, bottom: 4 } },
+      dataLabels: {
+        enabled: true,
+        offsetY: -14,
+        style: { colors: ['#0F172A'], fontSize: '11px', fontWeight: 700 }
+      },
+      tooltip: {
+        theme: 'light',
+        style: { fontSize: '12px', fontFamily: 'Inter' },
+        x: {
+          formatter: (val, opts) => serviceChart[opts.dataPointIndex]?.name || val
+        },
+        y: { formatter: v => `${v} Bills` }
+      },
+      legend: { show: false }
     }
   };
 
   const horizontalBar = {
     series: [{ name: 'Usage', data: machineryChart.map(m => m.count) }],
     options: {
-      chart: { type: 'bar', height: '100%', foreColor: '#64748B', fontFamily: 'Inter, sans-serif', toolbar: { show: false }, animations: { enabled: true, dynamicAnimation: { speed: 600 } } },
-      plotOptions: { bar: { borderRadius: 8, horizontal: true, barHeight: '56%', borderRadiusApplication: 'end', dataLabels: { position: 'right' } } },
-      colors: ['#7C5CFC'],
-      fill: { type: 'gradient', gradient: { shade: 'dark', type: 'horizontal', shadeIntensity: 0.4, gradientToColors: ['#A78BFA'], inverseColors: true, opacityFrom: 0.95, opacityTo: 0.65 } },
-      xaxis: { categories: machineryChart.map(m => m.name), labels: { style: { fontSize: '11px' } }, axisBorder: { show: false }, axisTicks: { show: false } },
-      yaxis: { labels: { style: { fontSize: '11px' } } },
-      grid: { borderColor: '#F1F5F9', strokeDashArray: 4, padding: { left: 0, right: 8 } },
-      dataLabels: { enabled: true, style: { colors: ['#0F172A'], fontSize: '11px', fontWeight: 600 } },
-      tooltip: { theme: 'light', style: { fontSize: '12px', fontFamily: 'Inter' }, y: { formatter: v => `${v} Uses` } },
+      chart: {
+        type: 'bar',
+        height: 230,
+        foreColor: '#64748B',
+        fontFamily: 'Inter, sans-serif',
+        toolbar: { show: false },
+        animations: { enabled: true, dynamicAnimation: { speed: 500 } }
+      },
+      plotOptions: {
+        bar: {
+          borderRadius: 6,
+          horizontal: true,
+          barHeight: '48%',
+          borderRadiusApplication: 'end',
+          dataLabels: { position: 'top' },
+          distributed: true,
+        }
+      },
+      colors: ['#7C5CFC', '#38BDF8', '#818CF8', '#34D399', '#FBBF24', '#F472B6'],
+      xaxis: {
+        categories: machineryChart.map(m => m.name.length > 16 ? m.name.substring(0, 14) + '…' : m.name),
+        labels: {
+          style: { fontSize: '11px', colors: '#64748B' },
+          formatter: v => Math.floor(v)
+        },
+        axisBorder: { show: false },
+        axisTicks: { show: false }
+      },
+      yaxis: {
+        labels: {
+          maxWidth: 130,
+          style: { fontSize: '11px', fontWeight: 600, colors: '#334155' }
+        }
+      },
+      grid: { borderColor: '#F1F5F9', strokeDashArray: 4, padding: { left: 4, right: 24 } },
+      dataLabels: {
+        enabled: true,
+        offsetX: 12,
+        style: { colors: ['#0F172A'], fontSize: '11px', fontWeight: 700 }
+      },
+      tooltip: {
+        theme: 'light',
+        style: { fontSize: '12px', fontFamily: 'Inter' },
+        x: {
+          formatter: (val, opts) => machineryChart[opts.dataPointIndex]?.name || val
+        },
+        y: { formatter: v => `${v} Uses` }
+      },
+      legend: { show: false }
     }
   };
 
@@ -427,55 +540,55 @@ const Overview = () => {
           <p className="dash-header-sub"><span className="live-dot" /> Real-time clinic operations</p>
         </div>
         <div className="dash-header-actions">
-          {/* Date Range Picker — dark glass theme, draft edits, refresh only on Apply */}
+          {/* Date Range Picker — Premium Light Glass Theme */}
           <div className="relative" ref={datePickerRef}>
             <button
               onClick={() => setShowDatePicker(o => !o)}
-              className="flex items-center gap-2.5 rounded-xl border px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-violet-500/15"
+              className="flex items-center gap-2.5 rounded-xl px-3.5 py-2 text-xs font-semibold transition-all hover:border-violet-400 hover:shadow-sm"
               style={{
-                borderColor: pendingDirty ? 'rgba(251,191,36,0.5)' : 'rgba(139,92,246,0.3)',
-                background: 'rgba(18,18,26,0.9)',
-                boxShadow: showDatePicker ? '0 0 20px rgba(139,92,246,0.2)' : 'none',
+                background: '#FFFFFF',
+                border: '1px solid #E2E8F0',
+                color: '#0F172A',
+                boxShadow: showDatePicker
+                  ? '0 4px 16px rgba(124,92,252,0.15), 0 0 0 2px rgba(124,92,252,0.2)'
+                  : '0 1px 3px rgba(15,23,42,0.05), 0 1px 2px rgba(15,23,42,0.03)',
               }}
-              title={pendingDirty ? 'Unapplied changes — click Apply' : ''}
             >
-              <Calendar size={16} style={{ color: pendingDirty ? '#FBBF24' : '#a78bfa' }} />
-              <span>{appliedLabel}</span>
-              {pendingDirty && <span className="w-2 h-2 rounded-full animate-pulse" style={{ background: '#FBBF24' }} />}
-              <svg className={`w-4 h-4 text-violet-400 transition-transform duration-200 ${showDatePicker ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+              <div className="w-5 h-5 rounded-md flex items-center justify-center" style={{ background: '#EEF2FF' }}>
+                <Calendar size={13} style={{ color: '#7C5CFC' }} />
+              </div>
+              <span className="font-semibold text-slate-800">{appliedLabel}</span>
+              <svg className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${showDatePicker ? 'rotate-180 text-violet-600' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
                 <polyline points="6 9 12 15 18 9" />
               </svg>
             </button>
 
             {showDatePicker && (
               <div
-                className="absolute right-0 top-full mt-2 rounded-2xl border z-50 p-4 min-w-[340px]"
+                className="absolute right-0 top-full mt-2 rounded-2xl z-50 p-4 min-w-[340px]"
                 style={{
-                  background: 'rgba(15,15,25,0.97)',
-                  backdropFilter: 'blur(16px)',
-                  WebkitBackdropFilter: 'blur(16px)',
-                  borderColor: 'rgba(139,92,246,0.25)',
-                  boxShadow: '0 0 60px rgba(139,92,246,0.15), 0 12px 40px rgba(0,0,0,0.5)',
+                  background: '#FFFFFF',
+                  border: '1px solid #E2E8F0',
+                  boxShadow: '0 20px 45px -8px rgba(15, 23, 42, 0.16), 0 8px 18px -4px rgba(15, 23, 42, 0.08)',
                 }}
                 onMouseDown={(e) => e.stopPropagation()}
               >
-                {/* Preset Buttons (draft only — no refetch until Apply) */}
-                <div className="grid grid-cols-2 gap-2 mb-4">
+                {/* Preset Buttons */}
+                <div className="grid grid-cols-3 gap-2 mb-4">
                   {[
-                    { key: 'last7', label: 'Last 7 Days' },
-                    { key: 'last30', label: 'Last 30 Days' },
                     { key: 'thisMonth', label: 'This Month' },
-                    { key: 'custom', label: 'Custom Range' },
+                    { key: 'overall', label: 'Overall' },
+                    { key: 'custom', label: 'Custom Date' },
                   ].map(preset => (
                     <button
                       key={preset.key}
                       onClick={() => setDateRange(preset.key)}
-                      className={`px-3 py-2.5 text-sm font-medium rounded-xl transition-all border ${
-                        dateRange === preset.key ? 'text-white' : 'text-gray-400 hover:text-white hover:bg-violet-500/10'
+                      className={`px-3 py-2 text-xs font-semibold rounded-xl transition-all border ${
+                        dateRange === preset.key ? 'text-white' : 'text-slate-600 hover:text-violet-700 hover:bg-violet-50 hover:border-violet-200'
                       }`}
                       style={dateRange === preset.key
-                        ? { background: 'linear-gradient(135deg,#7C5CFC,#A78BFA)', borderColor: 'transparent', boxShadow: '0 4px 16px rgba(124,92,252,0.35)' }
-                        : { background: 'rgba(255,255,255,0.04)', borderColor: 'rgba(139,92,246,0.15)' }}
+                        ? { background: 'linear-gradient(135deg, #7C5CFC, #6D28D9)', borderColor: 'transparent', boxShadow: '0 4px 14px rgba(124,92,252,0.3)' }
+                        : { background: '#F8FAFC', borderColor: '#E2E8F0' }}
                     >
                       {preset.label}
                     </button>
@@ -484,26 +597,26 @@ const Overview = () => {
 
                 {/* Custom Date Inputs */}
                 {dateRange === 'custom' && (
-                  <div className="space-y-3 pt-4 border-t" style={{ borderColor: 'rgba(139,92,246,0.12)' }}>
+                  <div className="space-y-3 pt-3 border-t border-slate-100">
                     <div className="flex items-center gap-3">
                       <div className="flex-1">
-                        <label className="text-[10px] font-semibold uppercase tracking-widest block mb-1.5" style={{ color: '#6c727f' }}>From</label>
+                        <label className="text-[10px] font-bold uppercase tracking-wider block mb-1.5 text-slate-500">From</label>
                         <input
                           type="date"
                           value={customStart}
                           onChange={(e) => setCustomStart(e.target.value)}
-                          className="w-full px-3 py-2.5 text-sm rounded-xl text-white focus:outline-none"
-                          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(139,92,246,0.25)', colorScheme: 'dark' }}
+                          className="w-full px-3 py-2 text-xs rounded-xl text-slate-800 focus:outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500/15"
+                          style={{ background: '#F8FAFC', border: '1px solid #CBD5E1' }}
                         />
                       </div>
                       <div className="flex-1">
-                        <label className="text-[10px] font-semibold uppercase tracking-widest block mb-1.5" style={{ color: '#6c727f' }}>To</label>
+                        <label className="text-[10px] font-bold uppercase tracking-wider block mb-1.5 text-slate-500">To</label>
                         <input
                           type="date"
                           value={customEnd}
                           onChange={(e) => setCustomEnd(e.target.value)}
-                          className="w-full px-3 py-2.5 text-sm rounded-xl text-white focus:outline-none"
-                          style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(139,92,246,0.25)', colorScheme: 'dark' }}
+                          className="w-full px-3 py-2 text-xs rounded-xl text-slate-800 focus:outline-none focus:border-violet-500 focus:ring-2 focus:ring-violet-500/15"
+                          style={{ background: '#F8FAFC', border: '1px solid #CBD5E1' }}
                         />
                       </div>
                     </div>
@@ -511,32 +624,30 @@ const Overview = () => {
                 )}
 
                 {/* Preview of pending range */}
-                <div className="mt-4 pt-3 border-t flex items-center justify-between text-xs" style={{ borderColor: 'rgba(139,92,246,0.12)', color: '#8b8f9a' }}>
+                <div className="mt-3.5 pt-3 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
                   <span>
                     Selected:&nbsp;
-                    <b className="text-gray-200">
-                      {pendingRange.preset === 'last7' ? 'Last 7 Days'
-                        : pendingRange.preset === 'last30' ? 'Last 30 Days'
-                        : pendingRange.preset === 'thisMonth' ? 'This Month'
+                    <b className="text-slate-800">
+                      {pendingRange.preset === 'thisMonth' ? 'This Month'
+                        : pendingRange.preset === 'overall' ? 'Overall (All Data)'
                         : `${pendingRange.start} → ${pendingRange.end}`}
                     </b>
                   </span>
-                  {pendingDirty && <span className="font-semibold" style={{ color: '#FBBF24' }}>Not applied</span>}
+                  {pendingDirty && <span className="font-semibold px-2 py-0.5 rounded-md text-[10.5px] text-amber-700 bg-amber-100 border border-amber-200">Not applied</span>}
                 </div>
 
                 {/* Apply / Clear actions */}
-                <div className="mt-3 flex items-center justify-end gap-2">
+                <div className="mt-3.5 flex items-center justify-end gap-2">
                   <button
                     onClick={() => {
-                      setDateRange('last7');
+                      setDateRange('thisMonth');
                       setCustomStart('');
                       setCustomEnd('');
                       setAppliedRange(defaultRange);
-                      saveDateFilter({ preset: 'last7', ...defaultRange, customStart: '', customEnd: '' });
+                      saveDateFilter({ preset: 'thisMonth', ...defaultRange, customStart: '', customEnd: '' });
                       setShowDatePicker(false);
                     }}
-                    className="px-4 py-2.5 text-sm font-medium rounded-xl text-gray-300 transition-all hover:text-white hover:bg-violet-500/10"
-                    style={{ border: '1px solid rgba(139,92,246,0.2)' }}
+                    className="px-3.5 py-2 text-xs font-semibold rounded-xl text-slate-600 transition-all hover:bg-slate-100 hover:text-slate-900 border border-slate-200"
                   >
                     Clear
                   </button>
@@ -548,8 +659,8 @@ const Overview = () => {
                       setShowDatePicker(false);
                     }}
                     disabled={dateRange === 'custom' && (!customStart || !customEnd)}
-                    className="px-5 py-2.5 text-sm font-semibold text-white rounded-xl transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-                    style={{ background: 'linear-gradient(135deg,#7C5CFC,#A78BFA)', boxShadow: '0 4px 16px rgba(124,92,252,0.35)' }}
+                    className="px-4 py-2 text-xs font-semibold text-white rounded-xl transition-all hover:opacity-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{ background: 'linear-gradient(135deg, #7C5CFC, #6D28D9)', boxShadow: '0 4px 14px rgba(124,92,252,0.3)' }}
                   >
                     Apply
                   </button>
@@ -558,41 +669,44 @@ const Overview = () => {
             )}
           </div>
 
-          {/* Multi-select Branch Filter (MIS mode) — dark glass theme, no branch names on the button */}
+          {/* Multi-select Branch Filter (MIS mode) — Matching Light Glass Theme */}
           {misMode && (
             <div className="relative" ref={branchFilterRef}>
               <button
                 onClick={() => setShowBranchFilter(o => !o)}
-                className="flex items-center gap-2.5 rounded-xl border px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-violet-500/15"
+                className="flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-semibold transition-all"
                 style={{
-                  borderColor: selectedBranch !== null ? 'rgba(167,139,250,0.55)' : 'rgba(139,92,246,0.3)',
-                  background: 'rgba(18,18,26,0.9)',
-                  boxShadow: showBranchFilter ? '0 0 20px rgba(139,92,246,0.2)' : 'none',
+                  background: '#FFFFFF',
+                  border: '1px solid #E2E8F0',
+                  color: '#0F172A',
+                  boxShadow: showBranchFilter
+                    ? '0 4px 16px rgba(124,92,252,0.15), 0 0 0 2px rgba(124,92,252,0.2)'
+                    : '0 1px 3px rgba(15,23,42,0.05), 0 1px 2px rgba(15,23,42,0.03)',
                 }}
               >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <circle cx="12" cy="12" r="10" />
-                  <line x1="2" y1="12" x2="22" y2="12" />
-                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-                </svg>
-                <span>{branchFilterLabel}</span>
-                <svg className={`w-4 h-4 text-violet-400 transition-transform duration-200 ${showBranchFilter ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                <div className="w-5 h-5 rounded-md flex items-center justify-center" style={{ background: '#EEF2FF' }}>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7C5CFC" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <line x1="2" y1="12" x2="22" y2="12" />
+                    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                  </svg>
+                </div>
+                <span className="font-semibold">{branchFilterLabel}</span>
+                <svg className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${showBranchFilter ? 'rotate-180 text-violet-600' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
                   <polyline points="6 9 12 15 18 9" />
                 </svg>
               </button>
 
               {showBranchFilter && (
                 <div
-                  className="absolute right-0 top-full mt-2 rounded-2xl border z-50 py-2 min-w-[230px] max-h-[340px] overflow-y-auto"
+                  className="absolute right-0 top-full mt-2 rounded-2xl z-50 py-2 min-w-[220px] max-h-[340px] overflow-y-auto"
                   style={{
-                    background: 'rgba(15,15,25,0.97)',
-                    backdropFilter: 'blur(16px)',
-                    WebkitBackdropFilter: 'blur(16px)',
-                    borderColor: 'rgba(139,92,246,0.25)',
-                    boxShadow: '0 0 60px rgba(139,92,246,0.15), 0 12px 40px rgba(0,0,0,0.5)',
+                    background: '#FFFFFF',
+                    border: '1px solid #E2E8F0',
+                    boxShadow: '0 20px 45px -8px rgba(15, 23, 42, 0.16), 0 8px 18px -4px rgba(15, 23, 42, 0.08)',
                   }}
                 >
-                  <div className="px-4 py-2 text-[10px] font-semibold uppercase tracking-widest border-b" style={{ color: '#6c727f', borderColor: 'rgba(139,92,246,0.12)' }}>
+                  <div className="px-4 py-2 text-[10px] font-bold uppercase tracking-wider border-b border-slate-100 text-slate-400">
                     Select Branch
                   </div>
                   {branches.map((b) => {
@@ -601,13 +715,17 @@ const Overview = () => {
                       <button
                         key={b.id}
                         onClick={() => { setSelectedBranch(b.id); setShowBranchFilter(false); }}
-                        className={`flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm transition-all ${active ? 'text-violet-200 font-semibold bg-violet-500/10' : 'text-gray-300 hover:bg-violet-500/10 hover:text-white'}`}
+                        className={`flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-xs font-medium transition-all ${
+                          active
+                            ? 'text-violet-700 font-bold bg-violet-50/80'
+                            : 'text-slate-700 hover:bg-slate-50 hover:text-slate-900'
+                        }`}
                       >
                         <span
                           className="flex items-center justify-center w-4 h-4 rounded-full border"
                           style={active
-                            ? { borderColor: 'transparent', background: 'linear-gradient(135deg,#7C5CFC,#A78BFA)', boxShadow: '0 0 0 3px rgba(124,92,252,0.25)' }
-                            : { borderColor: 'rgba(139,92,246,0.4)' }}
+                            ? { borderColor: '#7C5CFC', background: '#7C5CFC', boxShadow: '0 0 0 2px rgba(124,92,252,0.2)' }
+                            : { borderColor: '#CBD5E1' }}
                         >
                           {active && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
                         </span>
@@ -616,7 +734,7 @@ const Overview = () => {
                     );
                   })}
                   {branches.length === 0 && (
-                    <div className="px-4 py-3 text-sm" style={{ color: '#6c727f' }}>No branches found</div>
+                    <div className="px-4 py-3 text-xs text-slate-400">No branches found</div>
                   )}
                 </div>
               )}
@@ -655,7 +773,7 @@ const Overview = () => {
           </div>
           <div className="panel-body">
             {serviceChart.length > 0
-              ? <Chart options={columnChart.options} series={columnChart.series} type="bar" height="100%" />
+              ? <Chart options={columnChart.options} series={columnChart.series} type="bar" height={230} />
               : <div className="flex-1 flex items-center justify-center text-sm text-[var(--color-muted)]">No data</div>}
           </div>
         </motion.div>
@@ -670,7 +788,7 @@ const Overview = () => {
           </div>
           <div className="panel-body">
             {machineryChart.length > 0
-              ? <Chart options={horizontalBar.options} series={horizontalBar.series} type="bar" height="100%" />
+              ? <Chart options={horizontalBar.options} series={horizontalBar.series} type="bar" height={230} />
               : <div className="flex-1 flex items-center justify-center text-sm text-[var(--color-muted)]">No data</div>}
           </div>
         </motion.div>

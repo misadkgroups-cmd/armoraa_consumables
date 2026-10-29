@@ -48,6 +48,8 @@ const NotificationBell = ({ userId }) => {
   useEffect(() => {
     if (!userId) return;
     const checkSessionConflicts = async () => {
+      // Never poll if tab is in the background or minimized
+      if (typeof document !== 'undefined' && document.hidden) return;
       const sessionToken = localStorage.getItem('sessionToken');
       if (!sessionToken) return;
       // MIS direct login tokens start with 'mis_' - these are NOT stored in the DB,
@@ -63,25 +65,51 @@ const NotificationBell = ({ userId }) => {
         window.dispatchEvent(new Event('session-conflict'));
       }
     };
-    const interval = setInterval(checkSessionConflicts, 30000);
+
+    // Poll every 3 minutes (180s) instead of 30s
+    const interval = setInterval(checkSessionConflicts, 180000);
     const handleFocus = () => checkSessionConflicts();
+    const handleVisibility = () => { if (!document.hidden) checkSessionConflicts(); };
+
     window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibility);
     checkSessionConflicts();
-    return () => { clearInterval(interval); window.removeEventListener('focus', handleFocus); };
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [userId]);
 
   useEffect(() => {
     const load = async () => {
+      // Never poll if tab is in the background or minimized
+      if (typeof document !== 'undefined' && document.hidden) return;
       // effectiveBranchId === null (MIS + All Branches) -> ALL pending transfers
       const incoming = await stockApi.getIncomingTransfers(effectiveBranchId);
       setTransferNots(incoming || []);
       setUnreadCount(await stockApi.getUnreadTransferNotificationCount(effectiveBranchId));
     };
     load();
-    const interval = setInterval(load, 30000);
+
+    // Poll every 3 minutes (180s) instead of 30s
+    const interval = setInterval(load, 180000);
     const handleFocus = () => load();
+    const handleVisibility = () => { if (!document.hidden) load(); };
+    // Instant refresh when a transfer occurs anywhere in the app
+    const handleTransferUpdated = () => load();
+
     window.addEventListener('focus', handleFocus);
-    return () => { clearInterval(interval); window.removeEventListener('focus', handleFocus); };
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('stock-transfer-updated', handleTransferUpdated);
+
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('stock-transfer-updated', handleTransferUpdated);
+    };
   }, [effectiveBranchId]);
 
   const hasTransferNot = unreadCount > 0 || transferNots.length > 0;

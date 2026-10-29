@@ -48,8 +48,9 @@ export const BranchProvider = ({ children }) => {
 
     checkAndRestoreSession();
 
-    // Periodic session check every 1 minute
-    sessionCheckRef.current = setInterval(() => {
+    // Periodic session check every 3 minutes (paused when tab is hidden/minimized)
+    const checkSession = () => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       const isAuthenticated = localStorage.getItem('branchAuthenticated') === 'true';
       if (isAuthenticated) {
         validateSession().then(isValid => {
@@ -58,7 +59,19 @@ export const BranchProvider = ({ children }) => {
           }
         });
       }
-    }, 60000);
+    };
+
+    sessionCheckRef.current = setInterval(checkSession, 180000);
+
+    // When tab becomes visible again, check session validity immediately
+    const onVisibilityChange = () => {
+      if (typeof document !== 'undefined' && !document.hidden) {
+        checkSession();
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    }
 
     return () => {
       if (heartbeatIntervalRef.current) {
@@ -66,6 +79,9 @@ export const BranchProvider = ({ children }) => {
       }
       if (sessionCheckRef.current) {
         clearInterval(sessionCheckRef.current);
+      }
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
       }
     };
   }, []);

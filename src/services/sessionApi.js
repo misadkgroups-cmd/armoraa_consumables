@@ -159,8 +159,13 @@ export const getUserSessions = async (userId) => {
   return data;
 };
 
-// Start heartbeat interval
-export const startHeartbeat = (intervalMs = 30000) => {
+// Track active heartbeat timer to prevent duplicate polling across components
+let activeHeartbeatInterval = null;
+let lastHeartbeatTime = 0;
+let visibilityListenerAttached = false;
+
+// Start heartbeat interval (default 5 minutes; paused when tab is hidden)
+export const startHeartbeat = (intervalMs = 300000) => {
   const sessionToken = localStorage.getItem('sessionToken');
   if (!sessionToken) return null;
 
@@ -168,13 +173,40 @@ export const startHeartbeat = (intervalMs = 30000) => {
   // they are direct/offline tokens that are always valid until logout, so no
   // heartbeat is needed.
   if (sessionToken.startsWith('mis_')) return null;
-  
-  return setInterval(() => {
+
+  // Clear any existing heartbeat timer first to ensure strictly 1 timer per tab
+  if (activeHeartbeatInterval) {
+    clearInterval(activeHeartbeatInterval);
+    activeHeartbeatInterval = null;
+  }
+
+  const runHeartbeat = () => {
+    // Never send heartbeat if document is minimized or tab is in background
+    if (typeof document !== 'undefined' && document.hidden) return;
+    lastHeartbeatTime = Date.now();
     updateHeartbeat();
-  }, intervalMs);
+  };
+
+  // If user returns to tab after a long time away, refresh heartbeat immediately
+  if (!visibilityListenerAttached && typeof document !== 'undefined') {
+    visibilityListenerAttached = true;
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden && Date.now() - lastHeartbeatTime >= intervalMs) {
+        runHeartbeat();
+      }
+    });
+  }
+
+  lastHeartbeatTime = Date.now();
+  activeHeartbeatInterval = setInterval(runHeartbeat, intervalMs);
+  return activeHeartbeatInterval;
 };
 
 // Clear heartbeat
 export const clearHeartbeat = (intervalId) => {
   if (intervalId) clearInterval(intervalId);
+  if (activeHeartbeatInterval) {
+    clearInterval(activeHeartbeatInterval);
+    activeHeartbeatInterval = null;
+  }
 };

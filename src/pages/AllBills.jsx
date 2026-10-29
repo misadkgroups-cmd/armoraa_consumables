@@ -101,12 +101,19 @@ export default function AllBills({ onNavigate, urlState }) {
     return () => clearInterval(interval);
   }, []);
 
+  // Master lookup data only re-fetches when branch changes
   useEffect(() => {
     if (branchId) {
-      fetchAllBills();
       fetchServices();
       fetchDoctors();
       fetchStaff();
+    }
+  }, [branchId]);
+
+  // Bills list fetches when filters (date/status/branch/refresh) change
+  useEffect(() => {
+    if (branchId) {
+      fetchAllBills();
     }
   }, [branchId, selectedDate, statusFilter, refreshToken]);
 

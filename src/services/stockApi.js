@@ -978,6 +978,10 @@ export async function createMultiLocationTransferRequest(
     }
   }
 
+  if (typeof window !== 'undefined' && results.some((r) => r.success)) {
+    window.dispatchEvent(new Event('stock-transfer-updated'));
+  }
+
   return results;
 }
 
@@ -1102,6 +1106,10 @@ export async function createTransferRequest(transfers, toBranchId, toBranchName,
     } catch (e) {
       results.push({ success: false, productId, product_name: t.product_name, message: e.message });
     }
+  }
+
+  if (typeof window !== 'undefined' && results.some((r) => r.success)) {
+    window.dispatchEvent(new Event('stock-transfer-updated'));
   }
 
   return results;
@@ -1249,6 +1257,10 @@ export async function getIncomingTransfers(branchId, limit = 50) {
 
     // Mark related notifications read
     await supabase.from('stock_transfer_notifications').update({ is_read: true }).eq('transfer_id', Number(transferId));
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new Event('stock-transfer-updated'));
+    }
 
     return { success: true, transferId, newBranchStock, message: 'Transfer received' };
   } catch (e) {

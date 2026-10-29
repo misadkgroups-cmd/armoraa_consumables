@@ -304,9 +304,18 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
     }
   };
 
+  const lastFocusFetchRef = useRef(0);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    const onFocus = () => { if (branchId) { fetchAllConsumables(); fetchBillableStock(); } };
+    const onFocus = () => {
+      const now = Date.now();
+      // Throttle: only refetch if at least 60 seconds have passed since last fetch
+      if (branchId && now - lastFocusFetchRef.current > 60000) {
+        lastFocusFetchRef.current = now;
+        fetchAllConsumables();
+        fetchBillableStock();
+      }
+    };
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, [branchId]);

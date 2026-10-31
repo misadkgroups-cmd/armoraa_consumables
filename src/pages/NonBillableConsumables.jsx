@@ -49,46 +49,52 @@ const NonBillableConsumables = () => {
   
   const fetchUsage = async () => {
     try {
-      // Try normalized table first, fall back to legacy 14-slot columns
-      // Join with billable_report to filter by branch_id
-      const { data: newData, error } = await supabase
-        .from('billable_report_consumables')
-        .select('batch_id, report_id')
-        .eq('product_type', 'Non-Billable');
-      
-      if (!error && newData) {
-        // Filter by branch_id through report
-        const reportIds = [...new Set(newData.map(r => r.report_id))];
-        if (reportIds.length > 0) {
-          const { data: reports } = await supabase
-            .from('billable_report')
-            .select('id')
-            .in('id', reportIds)
-            .eq('branch_id', branchId);
-          
-          const validReportIds = new Set(reports?.map(r => r.id) || []);
-          const counts = {};
-          newData.forEach(row => { 
-            if (row.batch_id && validReportIds.has(row.report_id)) { 
-              counts[row.batch_id] = (counts[row.batch_id] || 0) + 1; 
-            }
-          });
-          setUsageCounts(counts);
+      const orBatch = Array.from({ length: 14 }, (_, i) => `consumable_${i + 1}_batch_id.not.is.null`).join(',');
+      const selectCols = Array.from({ length: 14 }, (_, i) => `consumable_${i + 1}_batch_id,non_billable_registry_id_${i + 1}`).join(',');
+
+      let allBatchRows = [];
+      let from = 0;
+      const step = 1000;
+
+      while (true) {
+        let query = supabase
+          .from('billable_report')
+          .select(selectCols)
+          .or(orBatch)
+          .range(from, from + step - 1);
+
+        if (branchId) {
+          query = query.eq('branch_id', branchId);
         }
-        return;
+
+        const { data, error } = await query;
+        if (error || !data || data.length === 0) break;
+        allBatchRows.push(...data);
+        if (data.length < step) break;
+        from += step;
       }
-    } catch { /* fall through to legacy query */ }
-    
-    // Legacy fallback: query the 14 batch columns from billable_report filtered by branch
-    try {
-      const { data } = await supabase
-        .from('billable_report')
-        .select('consumable_1_batch_id,consumable_2_batch_id,consumable_3_batch_id,consumable_4_batch_id,consumable_5_batch_id,consumable_6_batch_id,consumable_7_batch_id,consumable_8_batch_id,consumable_9_batch_id,consumable_10_batch_id,consumable_11_batch_id,consumable_12_batch_id,consumable_13_batch_id,consumable_14_batch_id')
-        .eq('branch_id', branchId);
+
       const counts = {};
-      data?.forEach(row => { for (let i = 1; i <= 14; i++) { const b = row[`consumable_${i}_batch_id`]; if (b) counts[b] = (counts[b] || 0) + 1; } });
+      allBatchRows.forEach(row => {
+        for (let i = 1; i <= 14; i++) {
+          const b = row[`consumable_${i}_batch_id`];
+          const regId = row[`non_billable_registry_id_${i}`];
+          if (b) {
+            counts[b] = (counts[b] || 0) + 1;
+            const trimmed = String(b).trim();
+            if (trimmed !== b) {
+              counts[trimmed] = (counts[trimmed] || 0) + 1;
+            }
+          }
+          if (regId) {
+            counts[`reg_${regId}`] = (counts[`reg_${regId}`] || 0) + 1;
+          }
+        }
+      });
       setUsageCounts(counts);
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error('Error fetching batch usage counts:', e);
+    }
   };
 
   const saveRegistry = async () => {
@@ -127,6 +133,7 @@ const NonBillableConsumables = () => {
       
       setForm({ product_id: '', batch_id: '', opening_date: new Date().toISOString().slice(0,10) });
       fetchRegistry();
+      fetchUsage();
     } catch (e) { console.error(e); }
     setLoading(false);
   };
@@ -138,7 +145,7 @@ const NonBillableConsumables = () => {
       const payload = { batch_id: editForm.batch_id, opening_date: editForm.opening_date, closing_date: editForm.closing_date || null, status: editForm.status };
       const { error } = await supabase.from('non_billable_consumable_registry').update(payload).eq('id', editItem.id);
       if (error) throw error;
-      setEditItem(null); fetchRegistry();
+      setEditItem(null); fetchRegistry(); fetchUsage();
     } catch (e) { console.error(e); }
     setLoading(false);
   };
@@ -149,6 +156,7 @@ const NonBillableConsumables = () => {
       const { error } = await supabase.from('non_billable_consumable_registry').update({ status: 'completed', closing_date: new Date().toISOString().slice(0,10) }).eq('id', item.id);
       if (error) throw error;
       fetchRegistry();
+      fetchUsage();
     } catch (e) { console.error(e); }
   };
 
@@ -162,45 +170,50 @@ const NonBillableConsumables = () => {
   };
 
   const deleteItem = async (id) => {
-    const batchId = registry.find(r => r.id === id)?.batch_id || '';
+    const item = registry.find(r => r.id === id);
+    const batchId = item?.batch_id || '';
     
     try {
-      // Try normalized table first to check usage
-      const { data: usageCheck, error: checkError } = await supabase
-        .from('billable_report_consumables')
+      const orChecks = [];
+      for (let i = 1; i <= 14; i++) {
+        orChecks.push(`non_billable_registry_id_${i}.eq.${id}`);
+        if (batchId) {
+          orChecks.push(`consumable_${i}_batch_id.eq.${batchId}`);
+        }
+      }
+      
+      const { data: usageCheck } = await supabase
+        .from('billable_report')
         .select('id')
-        .eq('batch_id', batchId)
-        .eq('product_type', 'Non-Billable')
+        .or(orChecks.join(','))
         .limit(1);
       
-      if (!checkError && usageCheck && usageCheck.length > 0) {
+      if (usageCheck && usageCheck.length > 0) {
         alert('Cannot delete this batch. It is already linked to service records. You can mark it as Completed instead.');
         return;
       }
-      
-      // If normalized table doesn't exist, check legacy billable_report batch columns
-      if (checkError) {
-        const { data: legacyCheck } = await supabase
-          .from('billable_report')
-          .select('id')
-          .or(
-            `consumable_1_batch_id.eq.${batchId},consumable_2_batch_id.eq.${batchId},consumable_3_batch_id.eq.${batchId},consumable_4_batch_id.eq.${batchId},consumable_5_batch_id.eq.${batchId},consumable_6_batch_id.eq.${batchId},consumable_7_batch_id.eq.${batchId},consumable_8_batch_id.eq.${batchId},consumable_9_batch_id.eq.${batchId},consumable_10_batch_id.eq.${batchId},consumable_11_batch_id.eq.${batchId},consumable_12_batch_id.eq.${batchId},consumable_13_batch_id.eq.${batchId},consumable_14_batch_id.eq.${batchId}`
-          )
-          .limit(1);
-        
-        if (legacyCheck && legacyCheck.length > 0) {
-          alert('Cannot delete this batch. It is already linked to service records. You can mark it as Completed instead.');
-          return;
-        }
-      }
-    } catch { /* both queries failed, allow delete */ }
+    } catch { /* allow delete */ }
     
     if (!window.confirm('Delete this batch record?')) return;
-    try { const { error } = await supabase.from('non_billable_consumable_registry').delete().eq('id', id); if (!error) fetchRegistry(); }
-    catch (e) { console.error(e); }
+    try {
+      const { error } = await supabase.from('non_billable_consumable_registry').delete().eq('id', id);
+      if (!error) {
+        fetchRegistry();
+        fetchUsage();
+      }
+    } catch (e) {
+      console.error(e);
+    }
   };
 
-  const usageText = (batchId) => `Used in ${usageCounts[batchId] || 0} Services`;
+  const usageText = (item) => {
+    if (!item) return 'Used in 0 Services';
+    const count = (item.id && usageCounts[`reg_${item.id}`])
+      || (item.batch_id && usageCounts[item.batch_id])
+      || (item.batch_id && usageCounts[String(item.batch_id).trim()])
+      || 0;
+    return `Used in ${count} Services`;
+  };
   const filtered = registry.filter(r => ((r.product_name || '') + ' ' + (r.batch_id || '')).toLowerCase().includes(search.toLowerCase()));
   const incomplete = filtered.filter(i => i.status !== 'completed');
   const completed = filtered.filter(i => i.status === 'completed');
@@ -270,7 +283,7 @@ const NonBillableConsumables = () => {
                   <td className="rpt-wrap">{item.product_name}</td>
                   <td className="rpt-nowrap" style={{ textAlign: 'center' }}>{item.batch_id || '-'}</td>
                   <td className="rpt-nowrap"><span className="rpt-date">{formatDateDisplay(item.opening_date)}</span></td>
-                  <td className="rpt-wrap" style={{ color: 'var(--color-primary)' }}>{usageText(item.batch_id)}</td>
+                  <td className="rpt-wrap" style={{ color: 'var(--color-primary)' }}>{usageText(item)}</td>
                   <td className="rpt-nowrap"><span className={`sbadge ${item.status === 'completed' ? 'inactive' : 'active'}`}><span className={`status-dot ${item.status === 'completed' ? 'orange' : 'green'}`} /> {item.status || 'active'}</span></td>
                   <td className="rpt-actions-cell">
                     <div className="flex items-center justify-center gap-1.5">

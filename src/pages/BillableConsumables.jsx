@@ -187,17 +187,60 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       const nonBillableItems = existingConsumables.filter(c => c.product_type === 'Non-Billable');
       const nonBillableIds = nonBillableItems.map(c => c.consumable_id);
       
-      // For non-billable items, find matching registry entries with batch info
+      // 1. First check billable_report for exact saved batches and registry IDs for this service
+      let reportBatchByConsumableId = {};
+      if (billService.bill_id && billService.service_id) {
+        const { data: savedReport } = await supabase
+          .from('billable_report')
+          .select('*')
+          .eq('billing_log_id', billService.bill_id)
+          .eq('service_id', billService.service_id)
+          .maybeSingle();
+
+        if (savedReport) {
+          const regIdsToFetch = [];
+          const slotMap = {};
+          for (let i = 1; i <= 14; i++) {
+            const isNb = savedReport[`is_non_billable_${i}`];
+            const regId = savedReport[`non_billable_registry_id_${i}`];
+            const cBatch = savedReport[`consumable_${i}_batch_id`];
+            if (isNb && regId) {
+              regIdsToFetch.push(regId);
+              slotMap[regId] = cBatch;
+            }
+          }
+          if (regIdsToFetch.length > 0) {
+            const { data: regRows } = await supabase
+              .from('non_billable_consumable_registry')
+              .select('id, product_id, batch_id')
+              .in('id', regIdsToFetch);
+            if (regRows) {
+              regRows.forEach(r => {
+                reportBatchByConsumableId[r.product_id] = {
+                  registryId: r.id,
+                  batchId: slotMap[r.id] || r.batch_id
+                };
+              });
+            }
+          }
+        }
+      }
+
+      // 2. Fallback for any non-billable items not recorded in billable_report
       let registryBatchMap = {};
-      if (nonBillableIds.length > 0) {
-        const { data: registryRows } = await supabase
+      const missingIds = nonBillableIds.filter(pid => !reportBatchByConsumableId[pid]);
+      if (missingIds.length > 0) {
+        let regQuery = supabase
           .from('non_billable_consumable_registry')
           .select('id, product_id, batch_id')
-          .in('product_id', nonBillableIds)
+          .in('product_id', missingIds)
           .eq('status', 'active');
+        if (branchId) {
+          regQuery = regQuery.eq('branch_id', branchId);
+        }
+        const { data: registryRows } = await regQuery;
         
         if (registryRows) {
-          // Map product_id -> first available batch
           registryRows.forEach(r => {
             if (!registryBatchMap[r.product_id]) {
               registryBatchMap[r.product_id] = { registryId: r.id, batchId: r.batch_id };
@@ -210,7 +253,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
         const isNb = item.product_type === 'Non-Billable';
         const productId = item.consumable_id;
         const compositeId = isNb ? `nbproduct-${productId}` : `billable-${productId}`;
-        const batchInfo = registryBatchMap[productId];
+        const batchInfo = reportBatchByConsumableId[productId] || registryBatchMap[productId];
 
         // Debug: confirm the exact value coming from the DB. If this prints 3,
         // the rounding is in the stored data (historical), not in the UI.

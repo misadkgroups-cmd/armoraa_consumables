@@ -1,14 +1,15 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '../config/supabase';
 import { useBranch } from '../context/BranchContext';
-import { Search, Plus, Edit2, Package, TrendingDown, ArrowLeftRight, History, FileText, FileSpreadsheet, Send, Printer } from 'lucide-react';
+import { Search, Plus, Edit2, Package, TrendingDown, ArrowLeftRight, History, FileText, FileSpreadsheet, Eye } from 'lucide-react';
 import SearchableDropdown from '../components/SearchableDropdown';
+import TransactionDetailsModal from '../components/TransactionDetailsModal';
 import * as XLSX from 'xlsx';
+import { parseTxnDetails } from '../utils/stockUtils';
 
 // Dependency arrays kept intentionally minimal (helpers recreated each render;
 // filteredHistory depends on `history` which is already narrowed). Deliberate.
 /* eslint-disable react-hooks/exhaustive-deps */
-import { jsPDF } from 'jspdf';
 import * as stockApi from '../services/stockApi';
 import { formatDateDisplay, formatDateTimeDisplay } from '../utils/dateUtils';
 import { round2, fmtQty1, fmtQty2 } from '../utils/numUtils';
@@ -27,14 +28,31 @@ const StockManagement = () => {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
-  const [search, setSearch] = useState('');
-  const [historyProductFilter, setHistoryProductFilter] = useState(null);
+  const [search, setSearch] = useState(() => sessionStorage.getItem('stock_search') || '');
+  const [historyProductFilter, setHistoryProductFilter] = useState(() => sessionStorage.getItem('stock_hist_product') || null);
   // History sub-tab: 'transfers' (Stock Transfers) | 'consumed' (Consumed / Usage History)
   const [historySubTab, setHistorySubTab] = useState('transfers');
   // History filters: branch (MIS only) + date range
-  const [historyBranchFilter, setHistoryBranchFilter] = useState('');
-  const [historyDateFrom, setHistoryDateFrom] = useState('');
-  const [historyDateTo, setHistoryDateTo] = useState('');
+  const [historyBranchFilter, setHistoryBranchFilter] = useState(() => sessionStorage.getItem('stock_hist_branch') || '');
+  const [historyDateFrom, setHistoryDateFrom] = useState(() => sessionStorage.getItem('stock_hist_dateFrom') || '');
+  const [historyDateTo, setHistoryDateTo] = useState(() => sessionStorage.getItem('stock_hist_dateTo') || '');
+
+  useEffect(() => {
+    sessionStorage.setItem('stock_search', search);
+  }, [search]);
+  useEffect(() => {
+    if (historyProductFilter) sessionStorage.setItem('stock_hist_product', historyProductFilter);
+    else sessionStorage.removeItem('stock_hist_product');
+  }, [historyProductFilter]);
+  useEffect(() => {
+    sessionStorage.setItem('stock_hist_branch', historyBranchFilter);
+  }, [historyBranchFilter]);
+  useEffect(() => {
+    sessionStorage.setItem('stock_hist_dateFrom', historyDateFrom);
+  }, [historyDateFrom]);
+  useEffect(() => {
+    sessionStorage.setItem('stock_hist_dateTo', historyDateTo);
+  }, [historyDateTo]);
 
   // Adjust stock modal (existing, kept)
   const [adjustForm, setAdjustForm] = useState({ product_id: '', product_type: 'Billable', current_stock: 0, add_units: '', reduce_units: '', remarks: '' });
@@ -53,11 +71,9 @@ const StockManagement = () => {
   const [showAddInwardModal, setShowAddInwardModal] = useState(false);
   const [addInwardForm, setAddInwardForm] = useState({ product_id: '', quantity: '', remarks: '' });
 
-  // Bulk Transfer modal
-  const [showTransferModal, setShowTransferModal] = useState(false);
-  const [transferForm, setTransferForm] = useState({ transfer_type: 'Corporate→Branch', product_type: 'Billable', from_branch_id: 'corporate', to_branch_id: branchId || '', remarks: '' });
-  const [transferRows, setTransferRows] = useState([]);
-  const [transferSearch, setTransferSearch] = useState('');
+  // Transaction details modal (popup when clicking Transaction ID)
+  const [selectedTxn, setSelectedTxn] = useState(null);
+  const [showTxnModal, setShowTxnModal] = useState(false);
 
   // ---- Branches ----
   const fetchBranches = useCallback(async () => {
@@ -146,12 +162,22 @@ const StockManagement = () => {
   const fetchProducts = async () => {
     try {
       const [billable, nonBillable] = await Promise.all([
-        supabase.from('master_billable_consumables').select('id, product_name, unit, minimum_stock').eq('status', 'Active').order('product_name'),
-        supabase.from('master_non_billable_consumables').select('id, product_name, minimum_stock').eq('status', 'Active').order('product_name'),
+        supabase.from('master_billable_consumables').select('id, product_name, unit, minimum_stock, cost_unit').order('product_name'),
+        supabase.from('master_non_billable_consumables').select('id, product_name, minimum_stock, cost, status').order('product_name'),
       ]);
 
-      const billableProducts = (billable.data || []).map(p => ({ ...p, type: 'Billable' }));
-      const nonBillableProducts = (nonBillable.data || []).map(p => ({ ...p, type: 'Non-Billable' }));
+      const billableProducts = (billable.data || []).map(p => ({
+        ...p,
+        type: 'Billable',
+        price: Number(p.cost_unit || 0),
+      }));
+      const nonBillableProducts = (nonBillable.data || [])
+        .filter(p => !p.status || p.status === 'Active')
+        .map(p => ({
+          ...p,
+          type: 'Non-Billable',
+          price: Number(p.cost || 0),
+        }));
       setProducts([...billableProducts, ...nonBillableProducts]);
     } catch (e) {
       console.error('Error fetching products:', e);
@@ -534,239 +560,30 @@ const StockManagement = () => {
     }
   };
 
-  // ---- Transfer helpers ----
-  const initTransferRows = (productType, sourceBranchId) => {
-    if (sourceBranchId === 'corporate') {
-      return corporateStock
-        .filter(x => x.stock_type === productType)
-        .map(x => ({
-          id: x.id,
-          product_id: x.product_id,
-          product_name: x.product_name,
-          stock_type: x.stock_type,
-          available: Number(x.available_units) || 0,
-          qty: '',
-          selected: false,
-        }));
-    }
-    
-    // Branch-to-Branch or Branch-to-Corporate: use current branch stock as source
-    return stock
-      .filter(x => x.product_type === productType)
-      .map(x => {
-        const product = products.find(p => p.id === x.consumable_id && p.type === x.product_type);
-        return {
-          id: x.id,
-          product_id: x.consumable_id,
-          product_name: product?.product_name || `Product ${x.consumable_id}`,
-          stock_type: x.product_type,
-          available: Number(x.current_stock) || 0,
-          qty: '',
-          selected: false,
-        };
-      });
-  };
+  const openTxnDetails = (item) => {
+    const { txnId, user, comment } = parseTxnDetails(item);
 
-  const openTransferModal = () => {
-    const type = activeTab === 'non-billable' ? 'Non-Billable' : 'Billable';
-    let transferType = 'Corporate→Branch';
-    let fromBranchId = 'corporate';
-    
-    // For MIS Admin with branch selected, default to Branch→Branch
-    // For branch users, always start with Branch→Branch
-    if (branchId) {
-      transferType = 'Branch→Branch';
-      fromBranchId = String(branchId);
-    }
-    
-    const formData = { transfer_type: transferType, product_type: type, from_branch_id: fromBranchId, to_branch_id: '', remarks: '' };
-    
-    // Initialize transfer rows based on the source branch - FORCE new array
-    const rows = initTransferRows(type, fromBranchId);
-    
-    // Reset all state
-    setTransferForm(formData);
-    setTransferRows(rows);
-    setTransferSearch('');
-    setShowTransferModal(true);
-  };
+    const matchingItems = history.filter(h => {
+      const parsed = parseTxnDetails(h);
+      return parsed.txnId === txnId;
+    });
 
-  const getAvailableLocations = (transferType, currentBranchId) => {
-    // Ensure branches are loaded before filtering
-    if (!branches || branches.length === 0) {
-      return [{ id: 'corporate', name: 'Corporate Warehouse' }];
-    }
-    
-    const currentId = String(currentBranchId);
-    const locs = branches.map(b => ({ id: String(b.id), name: b.branch_name }));
-    
-    switch (transferType) {
-      case 'Corporate→Branch':
-        // From: Corporate, To: Any branch
-        return [{ id: 'corporate', name: 'Corporate Warehouse' }, ...locs.filter(l => l.id !== 'corporate')];
-      case 'Branch→Corporate':
-        // From: Current branch only, To: Corporate
-        return [{ id: 'corporate', name: 'Corporate Warehouse' }, ...locs.filter(l => l.id === currentId)];
-      case 'Branch→Branch':
-        // From: Current branch, To: Other branches (exclude corporate)
-        const currentBranch = locs.find(l => l.id === currentId);
-        const otherBranches = locs.filter(l => l.id !== 'corporate' && l.id !== currentId);
-        if (currentBranch) {
-          return [currentBranch, ...otherBranches];
-        }
-        return otherBranches;
-      default:
-        return locs;
-    }
-  };
-
-  // Sync transfer rows when from_branch_id or product_type changes
-  // NOTE: Do NOT include transfer_type here - it causes race condition with handleTransferTypeChange
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (showTransferModal && transferForm.from_branch_id) {
-      const rows = initTransferRows(transferForm.product_type, transferForm.from_branch_id);
-      setTransferRows(rows);
-    }
-  }, [showTransferModal, transferForm.from_branch_id, transferForm.product_type]);
-
-  const handleTransferTypeChange = (newType) => {
-    let fromId = 'corporate';
-    let toId = '';
-    
-    // Set correct from_branch_id based on transfer type
-    if (newType === 'Corporate→Branch') {
-      fromId = 'corporate';
-    } else if ((newType === 'Branch→Corporate' || newType === 'Branch→Branch') && branchId) {
-      fromId = String(branchId);
-    }
-    
-    // Guard: if branchId is not available for branch-based transfers, don't update
-    if ((newType === 'Branch→Corporate' || newType === 'Branch→Branch') && !branchId) {
-      console.warn('Cannot switch to branch-based transfer: branchId not available');
-      return;
-    }
-    
-    // Update form state
-    const updatedForm = { 
-      transfer_type: newType, 
-      product_type: transferForm.product_type,
-      from_branch_id: fromId, 
-      to_branch_id: toId,
-      remarks: transferForm.remarks
-    };
-    
-    // Immediately initialize rows with the correct from_branch_id
-    const newRows = initTransferRows(transferForm.product_type, fromId);
-    
-    // Update both form and rows together
-    setTransferForm(updatedForm);
-    setTransferRows(newRows);
-  };
-
-  const handleTransferAll = async () => {
-    const { transfer_type, from_branch_id, to_branch_id, remarks } = transferForm;
-
-    if (!to_branch_id) {
-      alert('Please select a destination');
-      return;
-    }
-    if (from_branch_id === to_branch_id) {
-      alert('Source and destination cannot be the same');
-      return;
-    }
-    if (transfer_type === 'Corporate→Branch' && to_branch_id === 'corporate') {
-      alert('Please select a valid branch destination');
-      return;
-    }
-    if (transfer_type === 'Branch→Corporate' && from_branch_id === 'corporate') {
-      alert('Source must be a branch for Branch → Corporate transfer');
-      return;
-    }
-
-    const toTransfer = transferRows.filter(r => r.selected && Number(r.qty) > 0);
-    if (toTransfer.length === 0) {
-      alert('Please select at least one product and enter a transfer quantity');
-      return;
-    }
-
-    const invalid = toTransfer.find(r => Number(r.qty) > r.available);
-    if (invalid) {
-      alert(`Available stock is only ${invalid.available} units for ${invalid.product_name || 'product'}.`);
-      return;
-    }
-
-    const toBranch = branches.find(b => String(b.id) === String(to_branch_id));
-    const toBranchName = toBranch?.branch_name || '';
-    const fromBranch = branches.find(b => String(b.id) === String(from_branch_id));
-    const fromBranchName = fromBranch?.branch_name || 'Corporate Warehouse';
-
-    if (!toBranchName) {
-      alert('Invalid destination selected');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const transfers = toTransfer.map(r => ({
-        product_id: r.product_id,
-        product_name: r.product_name,
-        stock_type: r.stock_type,
-        quantity: Number(r.qty),
-      }));
-
-      const results = await stockApi.createMultiLocationTransferRequest(
-        transfers,
-        transfer_type,
-        from_branch_id,
-        to_branch_id,
-        remarks || 'Stock transfer',
-        CURRENT_USER
-      );
-
-      const failures = results.filter(r => !r.success);
-      const successes = results.filter(r => r.success);
-
-      let msg = `${successes.length} of ${toTransfer.length} product(s) transferred from ${fromBranchName} to ${toBranchName}.`;
-      if (failures.length) {
-        msg += '\n\nFailed:\n' + failures.map(f => `- ${f.product_name || 'Product'}: ${f.message}`).join('\n');
-      }
-      alert(msg);
-
-      setShowTransferModal(false);
-      setTransferRows([]);
-      // Refresh BOTH sides whenever the Corporate Warehouse is involved:
-      //   Corporate → Branch : corporate decreases, branch increases
-      //   Branch → Corporate : branch decreases, corporate increases
-      // Previously only the source side refreshed, so a Branch → Corporate
-      // transfer left the Corporate tab showing its stale balance.
-      if (from_branch_id === 'corporate' || to_branch_id === 'corporate') {
-        fetchCorporateStock();
-        fetchStock();
-      } else {
-        fetchStock();
-      }
-      fetchHistory();
-      setSuccessMsg('Transfer request created (Pending Receipt)');
-    } catch (e) {
-      setErrorMsg('Error transferring stock: ' + e.message);
-      alert('Error transferring stock: ' + e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const updateTransferRow = (idx, patch) => {
-    setTransferRows(prev => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
-  };
-
-  const toggleTransferRow = (productId) => {
-    const idStr = String(productId);
-    setTransferRows(prev => prev.map(r => 
-      (String(r.product_id) === idStr || String(r.id) === idStr) 
-        ? { ...r, selected: !r.selected, qty: '' }
-        : r
-    ));
+    setSelectedTxn({
+      txnId,
+      date: item.transferred_at,
+      fromLocation: item.fromLabel || branchNameById(item.from_branch_id),
+      toLocation: item.toLabel || branchNameById(item.to_branch_id),
+      status: item.status,
+      user,
+      comment,
+      items: matchingItems.length > 0 ? matchingItems : [item],
+      id: item.id,
+      product_id: item.product_id,
+      stock_type: item.stock_type,
+      quantity: item.quantity,
+      to_branch_id: item.to_branch_id,
+    });
+    setShowTxnModal(true);
   };
 
   // ---- Helpers ----
@@ -949,75 +766,6 @@ const StockManagement = () => {
     XLSX.writeFile(workbook, `stock-${activeTab}-${new Date().toISOString().split('T')[0]}.xlsx`);
   };
 
-  const exportPDF = () => {
-    const { headers, rows, title } = buildExportData;
-    if (rows.length === 0) return;
-
-    const doc = new jsPDF('p', 'pt', 'a4');
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const marginLeft = 40;
-    const marginTop = 100;
-    const rowHeight = 22;
-    const colWidth = (pageWidth - marginLeft * 2) / headers.length;
-    const bottomMargin = 50;
-    let y = marginTop;
-
-    // Header block
-    doc.setFontSize(22);
-    doc.setFont('helvetica', 'bold');
-    doc.text('ARMORAA', marginLeft, 34);
-
-    doc.setFontSize(15);
-    doc.setFont('helvetica', 'normal');
-    doc.text(title, marginLeft, 56);
-
-    doc.setFontSize(9);
-    doc.setTextColor(128);
-    doc.text(`Generated: ${formatDateTimeDisplay(new Date())}`, pageWidth - marginLeft, 34, { align: 'right' });
-    doc.setTextColor(0);
-
-    const drawTableHeader = (yy) => {
-      doc.setFillColor(241, 245, 249);
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'bold');
-      let x = marginLeft;
-      headers.forEach(h => {
-        doc.rect(x, yy, colWidth, rowHeight, 'FD');
-        doc.text(h, x + colWidth / 2, yy + rowHeight / 2 + 3, { align: 'center' });
-        x += colWidth;
-      });
-    };
-
-    const drawRow = (cells, yy, alt) => {
-      const r = alt ? 248 : 255;
-      doc.setFillColor(r, r, r);
-      doc.setFontSize(9);
-      doc.setFont('helvetica', 'normal');
-      let x = marginLeft;
-      cells.forEach(cell => {
-        doc.rect(x, yy, colWidth, rowHeight, 'FD');
-        doc.text(String(cell), x + 5, yy + rowHeight / 2 + 3);
-        x += colWidth;
-      });
-    };
-
-    drawTableHeader(y);
-    y += rowHeight;
-
-    rows.forEach((row, i) => {
-      const cells = headers.map(h => row[h]);
-      if (y + rowHeight > doc.internal.pageSize.getHeight() - bottomMargin) {
-        doc.addPage();
-        drawTableHeader(marginTop);
-        y = marginTop + rowHeight;
-      }
-      drawRow(cells, y, i % 2 === 0);
-      y += rowHeight;
-    });
-
-    doc.save(`${title.replace(/\s+/g, '-').toLowerCase()}-${new Date().toISOString().split('T')[0]}.pdf`);
-  };
-
   const currentTabType = activeTab === 'non-billable' ? 'Non-Billable' : 'Billable';
 
   return (
@@ -1046,15 +794,6 @@ const StockManagement = () => {
           >
             <FileSpreadsheet size={16} />
             Export Excel
-          </button>
-          <button
-            onClick={exportPDF}
-            disabled={buildExportData.rows.length === 0 || loading}
-            className="btn btn-secondary"
-            title="Export PDF"
-          >
-            <Printer size={16} />
-            Export PDF
           </button>
 
           {/* Corporate tab MIS actions */}
@@ -1096,17 +835,6 @@ const StockManagement = () => {
               title="Add Product / Inward Stock"
             >
               <Plus size={16} /> Add Product
-            </button>
-          )}
-
-          {misMode && activeTab !== 'corporate' && activeTab !== 'history' && (
-            <button
-              onClick={openTransferModal}
-              className="btn btn-primary"
-              style={{ backgroundColor: '#059669' }}
-              title="Transfer Stock"
-            >
-              <Send size={16} /> Transfer Stock
             </button>
           )}
         </div>
@@ -1477,8 +1205,10 @@ const StockManagement = () => {
             <table className="rpt-table">
               <thead>
                 <tr>
+                  {historySubTab === 'transfers' && <th className="rpt-c-service" style={{ width: 140 }}>Transaction ID</th>}
                   <th className="rpt-c-date">Date</th>
                   <th className="rpt-c-service">Product</th>
+                  {historySubTab === 'transfers' && <th className="rpt-c-units" style={{ width: 90 }}>Type</th>}
                   <th className="rpt-c-units">{historySubTab === 'consumed' ? 'Qty Consumed' : 'Qty'}</th>
                   <th className="rpt-c-units">{historySubTab === 'consumed' ? 'Branch' : 'From Location'}</th>
                   <th className="rpt-c-units">{historySubTab === 'consumed' ? 'Reference / Status' : 'To Location'}</th>
@@ -1489,7 +1219,7 @@ const StockManagement = () => {
               <tbody>
                 {filteredHistory.length === 0 && (
                   <tr>
-                    <td colSpan={historySubTab === 'transfers' ? (!misMode ? 7 : 6) : 5} className="text-center text-muted" style={{ padding: 40 }}>
+                    <td colSpan={historySubTab === 'transfers' ? (!misMode ? 9 : 8) : 5} className="text-center text-muted" style={{ padding: 40 }}>
                       {loading ? 'Loading...' : historySubTab === 'transfers' ? 'No stock transfers found' : 'No consumed usage records found'}
                     </td>
                   </tr>
@@ -1499,14 +1229,53 @@ const StockManagement = () => {
                   const canReceive = !misMode && branchId && String(item.to_branch_id) === String(branchId) && item.status === 'Pending';
 
                   if (historySubTab === 'transfers') {
+                    const txnMatch = item.transferred_by?.match(/\[(TRX-[^\]]+)\]/) || item.remarks?.match(/\[(TRX-[^\]]+)\]/);
+                    const txnId = txnMatch ? txnMatch[1] : (item.id ? `TRX-#${item.id}` : '-');
+
                     return (
                       <tr key={item.id}>
+                        <td className="rpt-nowrap">
+                          <button
+                            type="button"
+                            onClick={() => openTxnDetails(item)}
+                            title="Click to view transaction details, products, and comments"
+                            style={{
+                              border: '1px solid #DDD6FE',
+                              background: '#F5F3FF',
+                              color: '#6D28D9',
+                              fontFamily: 'monospace',
+                              fontSize: 11,
+                              fontWeight: 700,
+                              padding: '2px 8px',
+                              borderRadius: 4,
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}
+                          >
+                            <span>{txnId}</span>
+                            <Eye size={11} style={{ opacity: 0.7 }} />
+                          </button>
+                        </td>
                         <td className="rpt-nowrap">
                           <span className="rpt-date">
                             {formatDateTimeDisplay(item.transferred_at)}
                           </span>
                         </td>
                         <td className="rpt-wrap font-medium">{item.product_name || `Product ${item.product_id || ''}`}</td>
+                        <td className="rpt-nowrap" style={{ textAlign: 'center' }}>
+                          <span style={{
+                            fontSize: 10.5,
+                            fontWeight: 700,
+                            padding: '1px 6px',
+                            borderRadius: 4,
+                            background: item.stock_type === 'Non-Billable' ? '#E0E7FF' : '#F3E8FF',
+                            color: item.stock_type === 'Non-Billable' ? '#3730A3' : '#7E22CE',
+                          }}>
+                            {item.stock_type || 'Billable'}
+                          </span>
+                        </td>
                         <td className="rpt-nowrap" style={{ textAlign: 'center' }}><span className="font-semibold">{fmtQty1(item.quantity)}</span></td>
                         <td className="rpt-nowrap">
                           {item.fromLabel || (item.transaction_type === 'Inward' ? 'Stock Added' : item.transaction_type === 'Adjustment' ? 'Manual Correction' : branchNameById(item.from_branch_id))}
@@ -1517,17 +1286,24 @@ const StockManagement = () => {
                         <td className="rpt-nowrap">
                           <span className={`font-medium ${statusColor}`}>{item.status || '-'}</span>
                         </td>
-                        {!misMode && (
-                          <td className="rpt-actions-cell">
-                            {canReceive ? (
-                              <button onClick={() => handleReceive(item)} disabled={loading} className="btn btn-primary" style={{ fontSize: 12, padding: '4px 10px' }}>
+                        <td className="rpt-actions-cell" style={{ whiteSpace: 'nowrap' }}>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                            <button
+                              type="button"
+                              onClick={() => openTxnDetails(item)}
+                              className="btn btn-ghost btn-icon"
+                              title="View Details & Comments"
+                              style={{ padding: 4 }}
+                            >
+                              <Eye size={14} />
+                            </button>
+                            {!misMode && canReceive && (
+                              <button onClick={() => handleReceive(item)} disabled={loading} className="btn btn-primary" style={{ fontSize: 11.5, padding: '3px 8px' }}>
                                 Receive
                               </button>
-                            ) : (
-                              <span className="text-xs text-muted" style={{ opacity: 0.5 }}>-</span>
                             )}
-                          </td>
-                        )}
+                          </div>
+                        </td>
                       </tr>
                     );
                   }
@@ -1568,8 +1344,8 @@ const StockManagement = () => {
 
       {/* Adjust Stock Modal - MIS Only */}
       {misMode && showAdjustModal && (
-        <div className="modal-overlay">
-          <div className="modal" style={{ maxWidth: 520 }}>
+        <div className="modal-overlay" onClick={() => setShowAdjustModal(false)}>
+          <div className="modal" style={{ maxWidth: 820, width: '95%' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Adjust Stock</h3>
               <button onClick={() => setShowAdjustModal(false)} className="btn btn-ghost btn-icon">×</button>
@@ -1684,8 +1460,8 @@ const StockManagement = () => {
 
       {/* Corporate Add Product Modal (create/update corporate_stock row) */}
       {showCorporateModal && (
-        <div className="modal-overlay">
-          <div className="modal" style={{ maxWidth: 520 }}>
+        <div className="modal-overlay" onClick={() => { setShowCorporateModal(false); setEditingCorporateId(null); }}>
+          <div className="modal" style={{ maxWidth: 820, width: '95%' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>{editingCorporateId ? 'Edit Corporate Stock' : 'Add Product to Corporate Stock'}</h3>
               <button onClick={() => { setShowCorporateModal(false); setEditingCorporateId(null); }} className="btn btn-ghost btn-icon">×</button>
@@ -1746,8 +1522,8 @@ const StockManagement = () => {
 
       {/* Corporate Add Stock Modal (inward increment) */}
       {showCorpAddStockModal && (
-        <div className="modal-overlay">
-          <div className="modal" style={{ maxWidth: 520 }}>
+        <div className="modal-overlay" onClick={() => { setShowCorpAddStockModal(false); setCorpAddStockForm({ product_id: '', quantity: '', remarks: '' }); }}>
+          <div className="modal" style={{ maxWidth: 820, width: '95%' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Add Stock to Corporate Warehouse</h3>
               <button onClick={() => { setShowCorpAddStockModal(false); setCorpAddStockForm({ product_id: '', quantity: '', remarks: '' }); }} className="btn btn-ghost btn-icon">×</button>
@@ -1787,8 +1563,8 @@ const StockManagement = () => {
 
       {/* Branch Add Product Modal (inward stock) */}
       {showAddInwardModal && (
-        <div className="modal-overlay">
-          <div className="modal" style={{ maxWidth: 520 }}>
+        <div className="modal-overlay" onClick={() => { setShowAddInwardModal(false); setAddInwardForm({ product_id: '', quantity: '', remarks: '' }); }}>
+          <div className="modal" style={{ maxWidth: 820, width: '95%' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h3>Add Product - {currentTabType}</h3>
               <button onClick={() => { setShowAddInwardModal(false); setAddInwardForm({ product_id: '', quantity: '', remarks: '' }); }} className="btn btn-ghost btn-icon">×</button>
@@ -1826,247 +1602,15 @@ const StockManagement = () => {
         </div>
       )}
 
-      {/* Bulk Transfer Modal */}
-      {showTransferModal && (
-        <div className="modal-overlay">
-          <div className="modal" style={{ maxWidth: '640px', width: '95%' }}>
-            <div className="modal-header">
-              <h3>Transfer Stock</h3>
-              <button onClick={() => setShowTransferModal(false)} className="btn btn-ghost btn-icon">×</button>
-            </div>
-            <div className="modal-body space-y-4">
-              {/* Transfer Type */}
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-muted block">Transfer Type</label>
-                <div className="flex gap-2">
-                  {misMode ? (
-                    <>
-                      <button
-                        onClick={() => handleTransferTypeChange('Corporate→Branch')}
-                        className={`flex-1 px-4 py-2.5 text-sm font-medium rounded-lg transition-all ${transferForm.transfer_type === 'Corporate→Branch' ? 'bg-[var(--color-primary)] text-white shadow-md' : 'bg-[var(--color-tint-2)] text-muted hover:bg-[var(--color-line)]'}`}
-                      >
-                        Corporate → Branch
-                      </button>
-                      <button
-                        onClick={() => handleTransferTypeChange('Branch→Branch')}
-                        className={`flex-1 px-4 py-2.5 text-sm font-medium rounded-lg transition-all ${transferForm.transfer_type === 'Branch→Branch' ? 'bg-[var(--color-primary)] text-white shadow-md' : 'bg-[var(--color-tint-2)] text-muted hover:bg-[var(--color-line)]'}`}
-                      >
-                        Branch → Branch
-                      </button>
-                      <button
-                        onClick={() => handleTransferTypeChange('Branch→Corporate')}
-                        className={`flex-1 px-4 py-2.5 text-sm font-medium rounded-lg transition-all ${transferForm.transfer_type === 'Branch→Corporate' ? 'bg-[var(--color-primary)] text-white shadow-md' : 'bg-[var(--color-tint-2)] text-muted hover:bg-[var(--color-line)]'}`}
-                      >
-                        Branch → Corporate
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      disabled
-                      className="flex-1 px-4 py-2.5 text-sm font-medium rounded-lg bg-[var(--color-tint-2)] text-muted cursor-not-allowed opacity-60"
-                    >
-                      {transferForm.transfer_type}
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Source / Destination */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-muted block">From Location <span style={{ color: '#EF4444' }}>*</span></label>
-                  <SearchableDropdown
-                    value={transferForm.from_branch_id}
-                    onChange={(val) => {
-                      setTransferForm({ ...transferForm, from_branch_id: val });
-                      setTransferRows(initTransferRows(transferForm.product_type, val));
-                    }}
-                    options={getAvailableLocations(transferForm.transfer_type, branchId).map(l => ({ value: l.id, label: l.name }))}
-                    placeholder="Select source"
-                    displayKey="label"
-                    valueKey="value"
-                    disabled={!misMode && !!branchId}
-                  />
-                  {!misMode && !!branchId && (
-                    <div className="text-xs text-muted" style={{ marginTop: 4 }}>Source is locked to your branch</div>
-                  )}
-                </div>
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-muted block">To Location <span style={{ color: '#EF4444' }}>*</span></label>
-                  <SearchableDropdown
-                    value={transferForm.to_branch_id}
-                    onChange={(val) => setTransferForm({ ...transferForm, to_branch_id: val })}
-                    options={getAvailableLocations(transferForm.transfer_type, branchId)
-                      .filter(l => l.id !== transferForm.from_branch_id)
-                      .map(l => ({ value: l.id, label: l.name }))}
-                    placeholder="Select destination"
-                    displayKey="label"
-                    valueKey="value"
-                  />
-                </div>
-              </div>
-
-              {/* Product Type toggle */}
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-muted block">Product Type</label>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => { setTransferForm({ ...transferForm, product_type: 'Billable' }); setTransferRows(initTransferRows('Billable', transferForm.from_branch_id)); }}
-                    className={`flex-1 px-4 py-2.5 text-sm font-medium rounded-lg transition-all ${transferForm.product_type === 'Billable' ? 'bg-[var(--color-primary)] text-white shadow-md' : 'bg-[var(--color-tint-2)] text-muted hover:bg-[var(--color-line)]'}`}
-                  >
-                    Billable
-                  </button>
-                  <button
-                    onClick={() => { setTransferForm({ ...transferForm, product_type: 'Non-Billable' }); setTransferRows(initTransferRows('Non-Billable', transferForm.from_branch_id)); }}
-                    className={`flex-1 px-4 py-2.5 text-sm font-medium rounded-lg transition-all ${transferForm.product_type === 'Non-Billable' ? 'bg-[var(--color-primary)] text-white shadow-md' : 'bg-[var(--color-tint-2)] text-muted hover:bg-[var(--color-line)]'}`}
-                  >
-                    Non-Billable
-                  </button>
-                </div>
-              </div>
-
-              {/* Product list with checkboxes */}
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-muted block">Products</label>
-                <div className="search-box">
-                  <Search size={15} />
-                  <input
-                    placeholder="Search products..."
-                    value={transferSearch}
-                    onChange={(e) => setTransferSearch(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1" style={{ maxHeight: 320, overflowY: 'auto', border: '1px solid var(--color-line)', borderRadius: 8, padding: 4, background: 'var(--color-surface)' }}>
-                {transferRows.filter(r => {
-                  const s = (transferSearch || '').toLowerCase().trim();
-                  if (!s) return true;
-                  const name = (r.product_name || `Product ${r.product_id}`).toLowerCase();
-                  return name.includes(s);
-                }).map((r, idx) => {
-                  const isOut = r.available === 0;
-                  const qtyExceeds = r.selected && Number(r.qty) > r.available;
-                  return (
-                    <div key={r.id || r.product_id} className="flex items-center gap-3 p-2 rounded" style={{ background: r.selected ? 'var(--color-tint)' : 'transparent', minHeight: 48 }}>
-                      <input
-                        type="checkbox"
-                        checked={r.selected}
-                        onChange={() => toggleTransferRow(r.product_id || r.id)}
-                        disabled={loading || isOut}
-                        style={{ width: 18, height: 18, cursor: 'pointer', flexShrink: 0 }}
-                      />
-                      <div className="flex-1" style={{ minWidth: 0 }}>
-                        <div className="font-medium text-sm" style={{ lineHeight: 1.4 }}>{r.product_name || `Product ${r.product_id}`}</div>
-                        <div className="text-xs text-muted">Available: {fmtQty2(r.available)} units</div>
-                      </div>
-                      {r.selected && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                          <input
-                            type="number"
-                            min="0"
-                            max={r.available}
-                            value={r.qty}
-                            onChange={(e) => updateTransferRow(idx, { qty: e.target.value })}
-                            className="form-input"
-                            style={{ width: 90, padding: '6px 10px', fontSize: 13 }}
-                            disabled={loading || isOut}
-                            placeholder="Qty"
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                          {qtyExceeds && (
-                            <span className="text-red-600 text-xs" style={{ whiteSpace: 'nowrap' }}>Available stock is only {r.available} units.</span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-                {transferRows.length === 0 && (
-                  <div className="text-center text-muted" style={{ padding: 24 }}>
-                    No {transferForm.product_type.toLowerCase()} products available
-                  </div>
-                )}
-              </div>
-
-              {/* Summary of selected items */}
-              {transferRows.some(r => r.selected) && (
-                <div className="p-3 rounded-lg" style={{ background: 'var(--color-tint-2)' }}>
-                  <div style={{ fontSize: 11, color: 'var(--color-muted)', fontWeight: 600, textTransform: 'uppercase', marginBottom: 6 }}>
-                    Selected Items
-                  </div>
-                  <table className="rpt-table" style={{ fontSize: 12.5, marginBottom: 8 }}>
-                    <thead>
-                      <tr>
-                        <th style={{ textAlign: 'left', padding: '4px 8px' }}>Product</th>
-                        <th style={{ textAlign: 'center', padding: '4px 8px' }}>Available</th>
-                        <th style={{ textAlign: 'center', padding: '4px 8px' }}>Transfer Qty</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {transferRows.filter(r => r.selected).map((r) => {
-                        const exceeds = Number(r.qty) > r.available;
-                        return (
-                          <tr key={r.id || r.product_id}>
-                            <td className="rpt-wrap" style={{ padding: '4px 8px' }}>{r.product_name || `Product ${r.product_id}`}</td>
-                            <td style={{ textAlign: 'center', padding: '4px 8px' }}>{r.available}</td>
-                            <td style={{ padding: '4px 8px' }}>
-                              <input
-                                type="number"
-                                min="0"
-                                max={r.available}
-                                value={r.qty}
-                                onChange={(e) => updateTransferRow(transferRows.findIndex(rr => (rr.id || rr.product_id) === (r.id || r.product_id)), { qty: e.target.value })}
-                                className="form-input"
-                                style={{ width: 80, padding: '2px 6px', fontSize: 12, textAlign: 'center' }}
-                              />
-                              {exceeds && <div className="text-red-600" style={{ fontSize: 10, marginTop: 2 }}>Available stock is only {r.available} units.</div>}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-muted block">Remarks</label>
-                <textarea
-                  className="form-input"
-                  value={transferForm.remarks}
-                  onChange={(e) => setTransferForm({ ...transferForm, remarks: e.target.value })}
-                  placeholder="Reason for transfer (optional)"
-                  rows="3"
-                />
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, paddingTop: 20, borderTop: '1px solid var(--color-line)', marginTop: 8 }}>
-                <button onClick={() => setShowTransferModal(false)} className="btn btn-secondary" style={{ minWidth: 100 }}>Cancel</button>
-                <button
-                  onClick={handleTransferAll}
-                  disabled={
-                    loading ||
-                    !transferForm.from_branch_id ||
-                    !transferForm.to_branch_id ||
-                    transferForm.from_branch_id === transferForm.to_branch_id ||
-                    transferRows.filter(r => r.selected && Number(r.qty) > 0).length === 0 ||
-                    transferRows.some(r => r.selected && Number(r.qty) > 0 && Number(r.qty) > r.available)
-                  }
-                  className="btn btn-primary"
-                  style={{ backgroundColor: '#059669', minWidth: 140 }}
-                >
-                  {loading ? (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center' }}><span className="animate-pulse">Transferring...</span></span>
-                  ) : (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'center' }}><Send size={16} /> Transfer</span>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Transaction Details Modal */}
+      <TransactionDetailsModal
+        open={showTxnModal}
+        onClose={() => setShowTxnModal(false)}
+        transaction={selectedTxn}
+        canReceive={!misMode && branchId && String(selectedTxn?.to_branch_id) === String(branchId)}
+        onReceive={handleReceive}
+        loading={loading}
+      />
     </div>
   );
 };

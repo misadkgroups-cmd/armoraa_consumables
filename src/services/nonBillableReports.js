@@ -1,5 +1,5 @@
 import { supabase } from '../config/supabase';
-import { withRetry, fetchAllRows, chunk } from '../utils/supabaseRetry';
+import { fetchAllRows, chunk } from '../utils/supabaseRetry';
 
 /**
  * Detailed Report: enriched non-billable batch and usage logs.

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../config/supabase';
+import { withRetry } from '../utils/supabaseRetry';
 import { useBranch } from '../context/BranchContext';
-import { Search, Edit2, Trash2, Archive } from 'lucide-react';
+import { Search, Edit2, Trash2, Archive, CheckCircle, AlertTriangle } from 'lucide-react';
 import SearchableDropdown from '../components/SearchableDropdown';
 import { formatDateDisplay } from '../utils/dateUtils';
 
@@ -15,6 +16,12 @@ const NonBillableConsumables = () => {
   const [usageCounts, setUsageCounts] = useState({});
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
+  const [toast, setToast] = useState(null);
+
+  const showToast = (type, message) => {
+    setToast({ type, message });
+    setTimeout(() => setToast(null), 3500);
+  };
 
   const [form, setForm] = useState({ product_id: '', batch_id: '', opening_date: new Date().toISOString().slice(0,10) });
   const [editItem, setEditItem] = useState(null);
@@ -26,25 +33,33 @@ const NonBillableConsumables = () => {
   const fetchProducts = async () => {
     try {
       // Only fetch Active Non-Billable consumables
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('master_non_billable_consumables')
         .select('id, product_name, cost')
         .eq('status', 'Active')
         .order('product_name');
+      if (error) throw error;
       if (data) setProducts(data || []);
-    } catch (e) { console.error(e); }
+    } catch (e) { 
+      console.error(e); 
+      showToast('error', 'Failed to load non-billable products.');
+    }
   };
   
   const fetchRegistry = async () => {
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('non_billable_consumable_registry')
         .select('*, master_non_billable_consumables(product_name)')
         .eq('branch_id', branchId)
         .order('opening_date', { ascending: false });
+      if (error) throw error;
       const mapped = (data || []).map(r => ({ ...r, product_name: r.master_non_billable_consumables?.product_name || '-' }));
       setRegistry(mapped);
-    } catch (e) { console.error(e); }
+    } catch (e) { 
+      console.error(e); 
+      showToast('error', 'Failed to load batch registry.');
+    }
   };
   
   const fetchUsage = async () => {
@@ -67,7 +82,7 @@ const NonBillableConsumables = () => {
           query = query.eq('branch_id', branchId);
         }
 
-        const { data, error } = await query;
+        const { data, error } = await withRetry(() => query);
         if (error || !data || data.length === 0) break;
         allBatchRows.push(...data);
         if (data.length < step) break;
@@ -98,43 +113,69 @@ const NonBillableConsumables = () => {
   };
 
   const saveRegistry = async () => {
-    if (!form.product_id || !form.batch_id) return;
+    if (!form.product_id || !form.batch_id) {
+      showToast('error', 'Please select a product and enter a Batch ID');
+      return;
+    }
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      showToast('error', 'You are currently offline. Please reconnect to the internet before saving.');
+      return;
+    }
+
     setLoading(true);
     try {
       // Check for duplicate batch
-      const { data: existing } = await supabase
-        .from('non_billable_consumable_registry')
-        .select('id')
-        .eq('product_id', Number(form.product_id))
-        .eq('batch_id', form.batch_id.trim());
+      const { data: existing } = await withRetry(() =>
+        supabase
+          .from('non_billable_consumable_registry')
+          .select('id')
+          .eq('product_id', Number(form.product_id))
+          .eq('batch_id', form.batch_id.trim())
+      );
       if (existing && existing.length > 0) {
         setLoading(false);
-        alert('Batch ID already exists for this product.');
+        showToast('error', 'Batch ID already exists for this product.');
         return;
       }
-      const { error } = await supabase.from('non_billable_consumable_registry').insert({ branch_id: branchId, product_id: Number(form.product_id), batch_id: form.batch_id.trim(), opening_date: form.opening_date, status: 'active' });
+
+      const { error } = await withRetry(() =>
+        supabase.from('non_billable_consumable_registry').insert({
+          branch_id: branchId,
+          product_id: Number(form.product_id),
+          batch_id: form.batch_id.trim(),
+          opening_date: form.opening_date,
+          status: 'active'
+        })
+      );
       if (error) throw error;
       
       // NOTE: non_billable_stock is ALREADY deducted by the DB trigger
       // (trg_deduct_non_billable_stock) when the registry record is created.
       // We only log the stock_transactions history here — we do NOT modify
       // stock levels (non_billable_stock is the source of truth).
-      await supabase
-        .from('stock_transactions')
-        .insert({
-          transaction_type: 'Outward',
-          product_type: 'Non-Billable',
-          consumable_id: Number(form.product_id),
-          branch_id: branchId,
-          quantity: -1,
-          remarks: `Batch ${form.batch_id.trim()} opened/registered`,
-          created_by: localStorage.getItem('username') || 'System'
-        });
+      await withRetry(() =>
+        supabase
+          .from('stock_transactions')
+          .insert({
+            transaction_type: 'Outward',
+            product_type: 'Non-Billable',
+            consumable_id: Number(form.product_id),
+            branch_id: branchId,
+            quantity: -1,
+            remarks: `Batch ${form.batch_id.trim()} opened/registered`,
+            created_by: localStorage.getItem('username') || 'System'
+          })
+      );
       
       setForm({ product_id: '', batch_id: '', opening_date: new Date().toISOString().slice(0,10) });
+      showToast('success', 'Batch registered successfully');
       fetchRegistry();
       fetchUsage();
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error(e);
+      showToast('error', e?.message || 'Failed to save batch. Please try again.');
+    }
     setLoading(false);
   };
 
@@ -143,30 +184,50 @@ const NonBillableConsumables = () => {
     setLoading(true);
     try {
       const payload = { batch_id: editForm.batch_id, opening_date: editForm.opening_date, closing_date: editForm.closing_date || null, status: editForm.status };
-      const { error } = await supabase.from('non_billable_consumable_registry').update(payload).eq('id', editItem.id);
+      const { error } = await withRetry(() =>
+        supabase.from('non_billable_consumable_registry').update(payload).eq('id', editItem.id)
+      );
       if (error) throw error;
-      setEditItem(null); fetchRegistry(); fetchUsage();
-    } catch (e) { console.error(e); }
+      setEditItem(null);
+      showToast('success', 'Batch updated successfully');
+      fetchRegistry();
+      fetchUsage();
+    } catch (e) {
+      console.error(e);
+      showToast('error', e?.message || 'Failed to update batch');
+    }
     setLoading(false);
   };
 
   const markComplete = async (item) => {
     if (!window.confirm('Mark this batch as completed?')) return;
     try {
-      const { error } = await supabase.from('non_billable_consumable_registry').update({ status: 'completed', closing_date: new Date().toISOString().slice(0,10) }).eq('id', item.id);
+      const { error } = await withRetry(() =>
+        supabase.from('non_billable_consumable_registry').update({ status: 'completed', closing_date: new Date().toISOString().slice(0,10) }).eq('id', item.id)
+      );
       if (error) throw error;
+      showToast('success', 'Batch marked as completed');
       fetchRegistry();
       fetchUsage();
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error(e);
+      showToast('error', e?.message || 'Failed to mark batch as completed');
+    }
   };
 
   const reopenItem = async (item) => {
     if (!window.confirm('Reopen this batch as active?')) return;
     try {
-      const { error } = await supabase.from('non_billable_consumable_registry').update({ status: 'active', closing_date: null }).eq('id', item.id);
+      const { error } = await withRetry(() =>
+        supabase.from('non_billable_consumable_registry').update({ status: 'active', closing_date: null }).eq('id', item.id)
+      );
       if (error) throw error;
+      showToast('success', 'Batch reopened as active');
       fetchRegistry();
-    } catch (e) { console.error(e); }
+    } catch (e) {
+      console.error(e);
+      showToast('error', e?.message || 'Failed to reopen batch');
+    }
   };
 
   const deleteItem = async (id) => {
@@ -189,20 +250,23 @@ const NonBillableConsumables = () => {
         .limit(1);
       
       if (usageCheck && usageCheck.length > 0) {
-        alert('Cannot delete this batch. It is already linked to service records. You can mark it as Completed instead.');
+        showToast('error', 'Cannot delete this batch: it is linked to service records. Mark it as Completed instead.');
         return;
       }
     } catch { /* allow delete */ }
     
     if (!window.confirm('Delete this batch record?')) return;
     try {
-      const { error } = await supabase.from('non_billable_consumable_registry').delete().eq('id', id);
-      if (!error) {
-        fetchRegistry();
-        fetchUsage();
-      }
+      const { error } = await withRetry(() =>
+        supabase.from('non_billable_consumable_registry').delete().eq('id', id)
+      );
+      if (error) throw error;
+      showToast('success', 'Batch deleted successfully');
+      fetchRegistry();
+      fetchUsage();
     } catch (e) {
       console.error(e);
+      showToast('error', e?.message || 'Failed to delete batch');
     }
   };
 
@@ -220,6 +284,31 @@ const NonBillableConsumables = () => {
 
   return (
     <div className="page-wrapper animate-fade-in">
+      {toast && (
+        <div
+          role="status"
+          style={{
+            position: 'fixed',
+            top: 24,
+            right: 24,
+            zIndex: 99999,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '12px 18px',
+            borderRadius: 10,
+            background: toast.type === 'error' ? '#EF4444' : '#10B981',
+            color: '#fff',
+            fontSize: 14,
+            fontWeight: 600,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+            animation: 'fadeIn 0.2s ease-in',
+          }}
+        >
+          {toast.type === 'error' ? <AlertTriangle size={18} /> : <CheckCircle size={18} />}
+          <span>{toast.message}</span>
+        </div>
+      )}
       <div className="page-header">
         <div className="page-header-left">
           <h1>Non-Billable Consumables</h1>
@@ -303,8 +392,8 @@ const NonBillableConsumables = () => {
 
       {/* Edit Modal */}
       {editItem && (
-        <div className="modal-overlay">
-          <div className="modal" style={{ maxWidth: 520 }}>
+        <div className="modal-overlay" onClick={() => setEditItem(null)}>
+          <div className="modal" style={{ maxWidth: 820, width: '95%' }} onClick={(e) => e.stopPropagation()}>
             <div className="modal-header"><h3>Edit Batch</h3><button onClick={() => setEditItem(null)} className="btn btn-ghost btn-icon">×</button></div>
             <div className="modal-body space-y-4">
               <div className="space-y-1"><label className="text-xs font-semibold text-muted block">Product</label><SearchableDropdown value={editItem.product_id} onChange={() => { }} options={products.map(p => ({value: String(p.id), label: p.product_name}))} placeholder="Select product" displayKey="label" valueKey="value" /></div>

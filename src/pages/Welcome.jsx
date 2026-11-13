@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from '../config/supabase';
+import { withRetry } from '../utils/supabaseRetry';
 import { 
   checkActiveSession, 
   createSession, 
@@ -392,27 +393,34 @@ const Welcome = ({ onBranchSelect, onMisLogin }) => {
       return;
     }
 
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setError('No internet connection detected on this device. Please check your Wi-Fi or mobile data.');
+      return;
+    }
+
     setLoading(true);
     setError('');
 
     try {
       console.log('=== LOGIN ATTEMPT ===');
-      console.log('Username:', username, 'Password:', password);
+      console.log('Username:', username);
 
-      // Query users table - use .maybeSingle() to avoid errors
-      const { data: users, error: queryError } = await supabase
-        .from('users')
-        .select('*')
-        .eq('username', username.trim())
-        .eq('status', 'Active');
+      // Query users table with automatic retry for transient network / gateway hiccups
+      const { data: users, error: queryError } = await withRetry(() =>
+        supabase
+          .from('users')
+          .select('*')
+          .eq('username', username.trim())
+          .eq('status', 'Active')
+      );
 
       console.log('Query result:', { users, queryError });
 
       if (queryError) {
         console.error('Database query error:', queryError);
         const msg = queryError.message || '';
-        if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch')) {
-          setError('Unable to connect to database (Network Error). Please check internet, system date/time, ad-blocker, or firewall on this computer.');
+        if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch') || msg.includes('timeout') || msg.includes('timed out')) {
+          setError('Unable to connect to database. Please check your internet connection, system date/time synchronization, or ad-blocker.');
         } else {
           setError('Login failed: ' + msg);
         }
@@ -470,10 +478,10 @@ const Welcome = ({ onBranchSelect, onMisLogin }) => {
     } catch (err) {
       console.error('Login exception:', err);
       const msg = err?.message || String(err);
-      if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch')) {
-        setError('Unable to connect to database (Network Error). Please check internet, system date/time, ad-blocker, or firewall on this computer.');
+      if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('fetch') || msg.includes('timeout') || msg.includes('timed out')) {
+        setError('Unable to connect to database. Please check your internet connection, system date/time synchronization, or ad-blocker.');
       } else {
-        setError('Login failed. ' + (msg || 'Check console for details.'));
+        setError('Login failed: ' + (msg || 'Check console for details.'));
       }
     } finally {
       setLoading(false);

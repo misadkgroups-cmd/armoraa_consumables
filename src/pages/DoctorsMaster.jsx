@@ -15,8 +15,8 @@ const StatCard = ({ icon: Icon, label, value, color }) => (
 const Modal = ({ open, onClose, title, children }) => {
   if (!open) return null;
   return (
-    <div className="modal-overlay">
-      <div className="modal" style={{ maxWidth: 520 }}>
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" style={{ maxWidth: 820, width: '95%' }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h3>{title}</h3>
           <button onClick={onClose} className="btn btn-ghost btn-icon">×</button>

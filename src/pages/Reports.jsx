@@ -40,14 +40,18 @@ const KpiCard = ({ label, value, isCurrency = false }) => (
 const Reports = () => {
   const { branchId: ctxBranch } = useBranch();
 
-  // Primary filters
-  const [dateRange, setDateRange] = useState({
-    start: format(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd'),
-    end: format(new Date(), 'yyyy-MM-dd'),
+  // Primary filters (empty by default; saved in sessionStorage during active session)
+  const [dateRange, setDateRange] = useState(() => {
+    try {
+      const s = sessionStorage.getItem('reports_dateRange');
+      return s ? JSON.parse(s) : { start: '', end: '' };
+    } catch {
+      return { start: '', end: '' };
+    }
   });
-  const [filterBranch, setFilterBranch] = useState('');
-  const [filterService, setFilterService] = useState('');
-  const [filterMachinery, setFilterMachinery] = useState('');
+  const [filterBranch, setFilterBranch] = useState(() => sessionStorage.getItem('reports_filterBranch') || '');
+  const [filterService, setFilterService] = useState(() => sessionStorage.getItem('reports_filterService') || '');
+  const [filterMachinery, setFilterMachinery] = useState(() => sessionStorage.getItem('reports_filterMachinery') || '');
 
   // Dropdown master data
   const [branches, setBranches] = useState([]);
@@ -72,27 +76,52 @@ const Reports = () => {
   const [hasReport, setHasReport] = useState(false);
 
   // Non-Billable state
-  const [nbStart, setNbStart] = useState(
-    format(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd')
-  );
-  const [nbEnd, setNbEnd] = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [nbBranch, setNbBranch] = useState('');
+  const [nbStart, setNbStart] = useState(() => sessionStorage.getItem('reports_nbStart') || '');
+  const [nbEnd, setNbEnd] = useState(() => sessionStorage.getItem('reports_nbEnd') || '');
+  const [nbBranch, setNbBranch] = useState(() => sessionStorage.getItem('reports_nbBranch') || '');
   const [nbReportMode, setNbReportMode] = useState('detailed');
   const [nbData, setNbData] = useState([]);
   const [nbLoading, setNbLoading] = useState(false);
   const [nbHasReport, setNbHasReport] = useState(false);
 
   // Transaction state
-  const [trStart, setTrStart] = useState(
-    format(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), 'yyyy-MM-dd')
-  );
-  const [trEnd, setTrEnd] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [trStart, setTrStart] = useState(() => sessionStorage.getItem('reports_trStart') || '');
+  const [trEnd, setTrEnd] = useState(() => sessionStorage.getItem('reports_trEnd') || '');
   const [trBranches, setTrBranches] = useState([]); // multi-select; empty = all branches
   const [trData, setTrData] = useState([]);
   const [trLoading, setTrLoading] = useState(false);
   const [trHasReport, setTrHasReport] = useState(false);
   const [trBranchOpen, setTrBranchOpen] = useState(false);
   const trBranchRef = useRef(null);
+
+  // Persist filters to sessionStorage
+  useEffect(() => {
+    sessionStorage.setItem('reports_dateRange', JSON.stringify(dateRange));
+  }, [dateRange]);
+  useEffect(() => {
+    sessionStorage.setItem('reports_filterBranch', filterBranch);
+  }, [filterBranch]);
+  useEffect(() => {
+    sessionStorage.setItem('reports_filterService', filterService);
+  }, [filterService]);
+  useEffect(() => {
+    sessionStorage.setItem('reports_filterMachinery', filterMachinery);
+  }, [filterMachinery]);
+  useEffect(() => {
+    sessionStorage.setItem('reports_nbStart', nbStart);
+  }, [nbStart]);
+  useEffect(() => {
+    sessionStorage.setItem('reports_nbEnd', nbEnd);
+  }, [nbEnd]);
+  useEffect(() => {
+    sessionStorage.setItem('reports_nbBranch', nbBranch);
+  }, [nbBranch]);
+  useEffect(() => {
+    sessionStorage.setItem('reports_trStart', trStart);
+  }, [trStart]);
+  useEffect(() => {
+    sessionStorage.setItem('reports_trEnd', trEnd);
+  }, [trEnd]);
 
   // Close the branch multi-select only when clicking outside of it
   useEffect(() => {
@@ -108,12 +137,6 @@ const Reports = () => {
 
   // UI state
   const [toast, setToast] = useState(null);
-
-  useEffect(() => {
-    if (ctxBranch && !filterBranch) setFilterBranch(ctxBranch);
-    if (ctxBranch && !nbBranch) setNbBranch(ctxBranch);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ctxBranch]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {

@@ -70,6 +70,8 @@ export default function BillingLog({ onNavigate, urlState }) {
 
   // Edit mode
   const [editingBillId, setEditingBillId] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Filters
   const [filters] = useState({
@@ -350,8 +352,15 @@ export default function BillingLog({ onNavigate, urlState }) {
   };
 
   const handleSaveBill = async () => {
+    if (isSaving) return;
     if (!validateForm()) return;
 
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      showToast('error', 'You are currently offline. Please reconnect to the internet before saving.');
+      return;
+    }
+
+    setIsSaving(true);
     try {
       const isEdit = !!editingBillId;
       
@@ -510,7 +519,10 @@ export default function BillingLog({ onNavigate, urlState }) {
 
         const { error: servicesError } = await supabase.from('bill_services').insert(billServicesPayload);
         if (servicesError) {
-          console.warn('Warning: Could not create bill_services:', servicesError);
+          console.error('Error creating bill_services, rolling back billing_log header:', servicesError);
+          // Roll back newly created billing_log header so orphaned records are not created
+          await supabase.from('billing_log').delete().eq('id', billData.id);
+          throw new Error('Failed to attach services to bill: ' + (servicesError.message || 'Unknown error'));
         }
 
         const username = localStorage.getItem('username') || 'System';
@@ -565,9 +577,13 @@ export default function BillingLog({ onNavigate, urlState }) {
         setFormErrors({ bill_no: 'Bill Number already exists' });
       } else if (error.message && error.message.includes("billing_log")) {
         showToast('error', 'Database table not set up. Please run the migration script.');
+      } else if (error.message && (error.message.includes('timeout') || error.message.includes('fetch') || error.message.includes('Network'))) {
+        showToast('error', 'Network request timed out or connection lost. Please check internet and try again.');
       } else {
         showToast('error', error.message || 'Failed to save bill');
       }
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -737,8 +753,10 @@ export default function BillingLog({ onNavigate, urlState }) {
 
   // Delete bill with explicit cascading deletes
   const handleDeleteBill = async (bill) => {
+    if (isDeleting) return;
     if (!window.confirm(`Delete bill #${bill.bill_no} for ${bill.patient_name}? This action cannot be undone.`)) return;
     
+    setIsDeleting(true);
     try {
       // Step 1: Delete activity and audit logs first (no FK constraints)
       const { error: alError } = await supabase.from('activity_logs').delete().eq('page_name', 'billing_log');
@@ -809,6 +827,8 @@ export default function BillingLog({ onNavigate, urlState }) {
     } catch (error) {
       console.error('Error deleting bill:', error);
       showToast('error', `Failed to delete bill: ${error.message}`);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -951,17 +971,26 @@ export default function BillingLog({ onNavigate, urlState }) {
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             {editingBillId && (
-              <button onClick={cancelEdit} className="btn btn-secondary btn-sm">
+              <button onClick={cancelEdit} disabled={isSaving} className="btn btn-secondary btn-sm">
                 Cancel
               </button>
             )}
-            <button onClick={handleClearForm} className="btn btn-secondary">
+            <button onClick={handleClearForm} disabled={isSaving} className="btn btn-secondary">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
               Clear
             </button>
-            <button onClick={handleSaveBill} className="btn btn-primary">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><polyline points="20 6 9 17 4 12"/></svg>
-              {editingBillId ? 'Update Bill' : 'Save Bill'}
+            <button onClick={handleSaveBill} disabled={isSaving} className="btn btn-primary">
+              {isSaving ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <span className="animate-spin" style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%' }} />
+                  {editingBillId ? 'Updating...' : 'Saving...'}
+                </span>
+              ) : (
+                <>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="w-4 h-4"><polyline points="20 6 9 17 4 12"/></svg>
+                  {editingBillId ? 'Update Bill' : 'Save Bill'}
+                </>
+              )}
             </button>
           </div>
         </div>

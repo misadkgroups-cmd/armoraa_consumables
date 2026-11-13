@@ -683,7 +683,8 @@ export async function createMultiLocationTransferRequest(
   fromBranchId,
   toBranchId,
   remarks = '',
-  createdBy = 'System'
+  createdBy = 'System',
+  transactionId = null
 ) {
   const results = [];
 
@@ -696,6 +697,8 @@ export async function createMultiLocationTransferRequest(
   if (transferType === 'Corporate→Corporate' || (fromBranchId === 'corporate' && toBranchId === 'corporate')) {
     return [{ success: false, message: 'Corporate to Corporate transfers are not allowed' }];
   }
+
+  const txnId = transactionId || `TRX-${new Date().toISOString().slice(2, 10).replace(/-/g, '')}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
 
   const isFromCorporate = fromBranchId === 'corporate';
   const isToCorporate = toBranchId === 'corporate';
@@ -758,7 +761,7 @@ export async function createMultiLocationTransferRequest(
         transaction_type: 'Transfer',
         quantity: qty,
         balance_after: newQty,
-        remarks: remarks || `Transferred to ${isToCorporate ? 'Corporate Warehouse' : 'branch'}`,
+        remarks: `[TRX-ID: ${txnId}] ${remarks ? remarks + ' - ' : ''}Transferred to ${isToCorporate ? 'Corporate Warehouse' : `Branch ${toBranchId}`}`,
         from_location: 'Corporate Warehouse',
         to_location: isToCorporate ? 'Corporate Warehouse' : `Branch ${toBranchId}`,
         created_by: createdBy,
@@ -794,7 +797,7 @@ export async function createMultiLocationTransferRequest(
         consumable_id: Number(productId),
         branch_id: Number(fromBranchId),
         quantity: -qty,
-        remarks: `Transfer to ${isToCorporate ? 'Corporate Warehouse' : `Branch ${toBranchId}`}: ${remarks || ''}`,
+        remarks: `[TRX-ID: ${txnId}] Transfer to ${isToCorporate ? 'Corporate Warehouse' : `Branch ${toBranchId}`}${remarks ? `: ${remarks}` : ''}`,
         created_by: createdBy,
       });
       return { success: true };
@@ -838,7 +841,7 @@ export async function createMultiLocationTransferRequest(
           from_branch_id: isFromCorporate ? null : Number(fromBranchId),
           to_branch_id: isToCorporate ? null : Number(toBranchId),
           status: 'Pending',
-          transferred_by: createdBy,
+          transferred_by: remarks ? `${createdBy} [${txnId}] | Note: ${remarks}` : `${createdBy} [${txnId}]`,
           transferred_at: new Date().toISOString(),
         })
         .select('id')
@@ -850,18 +853,7 @@ export async function createMultiLocationTransferRequest(
       }
 
       // Branch → Corporate: auto-confirm immediately (no manual receipt needed).
-      // The shipped quantity is added to corporate_stock and the transfer is
-      // marked 'Received' instead of sitting in 'Pending'.
       if (isToCorporate) {
-        // SINGLE atomic upsert instead of select-then-insert.
-        // The old two-step version aborted the whole transfer (leaving it
-        // 'Pending' forever) whenever the corporate row was missing or the
-        // UPDATE silently matched 0 rows. onConflict makes the write
-        // idempotent: it inserts when the product is new to the warehouse and
-        // updates the running balance otherwise.
-        //
-        // NOTE: corporate_stock is RLS-protected — the anon-key policies are
-        // fixed by 20260919000001_fix_corporate_stock_rls_and_stuck_transfers.sql.
         const { data: corpRow, error: corpFetchErr } = await withRetry(() =>
           supabase
             .from('corporate_stock')
@@ -938,7 +930,7 @@ export async function createMultiLocationTransferRequest(
             transaction_type: 'Inward',
             quantity: qty,
             balance_after: newCorpQty,
-            remarks: `Received from Branch ${fromBranchId}${remarks ? `: ${remarks}` : ''}`,
+            remarks: `[TRX-ID: ${txnId}] Received from Branch ${fromBranchId}${remarks ? `: ${remarks}` : ''}`,
             from_location: `Branch ${fromBranchId}`,
             to_location: 'Corporate Warehouse',
             created_by: createdBy,
@@ -949,6 +941,7 @@ export async function createMultiLocationTransferRequest(
         results.push({
           success: true,
           transferId: stData.id,
+          transactionId: txnId,
           productId,
           product_name: t.product_name,
           message: 'Branch → Corporate transfer auto-confirmed (Received)',
@@ -969,6 +962,7 @@ export async function createMultiLocationTransferRequest(
       results.push({
         success: true,
         transferId: stData.id,
+        transactionId: txnId,
         productId,
         product_name: t.product_name,
         message: 'Transfer request created (Pending Receipt)',
@@ -994,11 +988,13 @@ export async function createMultiLocationTransferRequest(
 //
 // transfers = [{ product_id, product_name, stock_type, quantity }]
 // Returns an array of per-product result objects.
-export async function createTransferRequest(transfers, toBranchId, toBranchName, createdBy = 'System') {
+export async function createTransferRequest(transfers, toBranchId, toBranchName, createdBy = 'System', transactionId = null) {
   const results = [];
   if (!toBranchId) {
     return [{ success: false, message: 'Destination branch is required' }];
   }
+
+  const txnId = transactionId || `TRX-${new Date().toISOString().slice(2, 10).replace(/-/g, '')}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
 
   for (const t of transfers) {
     const qty = Number(t.quantity);
@@ -1025,7 +1021,6 @@ export async function createTransferRequest(transfers, toBranchId, toBranchName,
       }
 
       // Pre-validate sufficient stock (prevents transfer when insufficient)
-      // (branch-to-corporate transfer path)
       if (corp.available_units < qty) {
         results.push({
           success: false,
@@ -1060,7 +1055,7 @@ export async function createTransferRequest(transfers, toBranchId, toBranchName,
         transaction_type: 'Transfer',
         quantity: qty,
         balance_after: newCorpQty,
-        remarks: `Shipped to ${toBranchName || 'branch'}`,
+        remarks: `[TRX-ID: ${txnId}] Shipped to ${toBranchName || 'branch'}`,
         from_location: 'Corporate Warehouse',
         to_location: toBranchName || '',
         created_by: createdBy,
@@ -1077,7 +1072,7 @@ export async function createTransferRequest(transfers, toBranchId, toBranchName,
           from_branch_id: null, // Corporate Warehouse origin
           to_branch_id: Number(toBranchId),
           status: 'Pending',
-          transferred_by: createdBy,
+          transferred_by: remarks ? `${createdBy} [${txnId}] | Note: ${remarks}` : `${createdBy} [${txnId}]`,
           transferred_at: new Date().toISOString(),
         })
         .select('id')
@@ -1098,6 +1093,7 @@ export async function createTransferRequest(transfers, toBranchId, toBranchName,
       results.push({
         success: true,
         transferId: stData.id,
+        transactionId: txnId,
         productId,
         product_name: t.product_name,
         message: 'Transfer request created (Pending Receipt)',

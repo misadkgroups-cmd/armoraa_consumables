@@ -1,16 +1,45 @@
-import { useState, useEffect } from 'react';
-import Overview from './Overview';
-import Customization from './Customization';
-import NonBillableConsumables from './NonBillableConsumables';
-import BillableConsumables from './BillableConsumables';
-import Reports from './Reports';
-import BillingLog from './BillingLog';
-import AllBills from './AllBills';
-import DoctorsMaster from './DoctorsMaster';
-import StaffMaster from './StaffMaster';
-import StockManagement from './StockManagement';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import NotificationBell from '../components/NotificationBell';
 import { useBranch } from '../context/BranchContext';
+
+const Overview = lazy(() => import('./Overview'));
+const Customization = lazy(() => import('./Customization'));
+const NonBillableConsumables = lazy(() => import('./NonBillableConsumables'));
+const BillableConsumables = lazy(() => import('./BillableConsumables'));
+const Reports = lazy(() => import('./Reports'));
+const BillingLog = lazy(() => import('./BillingLog'));
+const AllBills = lazy(() => import('./AllBills'));
+const DoctorsMaster = lazy(() => import('./DoctorsMaster'));
+const StaffMaster = lazy(() => import('./StaffMaster'));
+const StockManagement = lazy(() => import('./StockManagement'));
+const StockTransfer = lazy(() => import('./StockTransfer'));
+
+const PageFallback = () => (
+  <div style={{
+    minHeight: '400px',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    color: 'var(--color-muted, #94a3b8)',
+    fontSize: 14,
+    fontWeight: 500,
+  }}>
+    <span
+      className="animate-spin"
+      style={{
+        display: 'inline-block',
+        width: 28,
+        height: 28,
+        border: '3px solid var(--color-line, rgba(255,255,255,0.1))',
+        borderTopColor: 'var(--color-primary, #6366f1)',
+        borderRadius: '50%',
+      }}
+    />
+    <span>Loading view...</span>
+  </div>
+);
 
 const navSections = [
   {
@@ -27,6 +56,7 @@ const navSections = [
       { id: 'billable', label: 'Billable Consumables', icon: 'M9 5H7a2 2 0 0 0-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2M9 5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2m-6 9l2 2 4-4' },
       { id: 'non-billable', label: 'Non-Billable Consumables', icon: 'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4' },
       { id: 'stock-management', label: 'Stock Management', icon: 'M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4' },
+      { id: 'stock-transfer', label: 'Transfer Stock', icon: 'M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4', misOnly: true },
     ]
   },
   {
@@ -78,6 +108,7 @@ const Dashboard = ({ currentPage = 'overview', urlState, onNavigate, onLogout })
       case 'reports': return <Reports />;
       case 'customization': return <Customization />;
       case 'stock-management': return <StockManagement />;
+      case 'stock-transfer': return misMode ? <StockTransfer /> : <Overview />;
       case 'doctors-master': return <DoctorsMaster />;
       case 'staff-master': return <StaffMaster />;
       default: return <Overview />;
@@ -176,7 +207,9 @@ const Dashboard = ({ currentPage = 'overview', urlState, onNavigate, onLogout })
           </div>
         </header>
         <div className="content-area" style={{ padding: 0 }}>
-          {renderPage()}
+          <Suspense fallback={<PageFallback />}>
+            {renderPage()}
+          </Suspense>
         </div>
       </div>
     </div>

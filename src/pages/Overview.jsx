@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { supabase } from '../config/supabase';
+import { withRetry, chunk } from '../utils/supabaseRetry';
 import { useBranch } from '../context/BranchContext';
 import Chart from 'react-apexcharts';
 import { motion } from 'framer-motion';
@@ -243,10 +244,19 @@ const Overview = () => {
       try {
         const billIds = billingArray.map(b => b.id);
         if (billIds.length > 0) {
-          let bsQuery = supabase.from('bill_services').select('consumable_completed, bill_id');
-          if (branchId) bsQuery = bsQuery.in('bill_id', billIds);
-          const { data: bs } = await bsQuery;
-          billServicesArray = bs || [];
+          if (branchId) {
+            // Chunk billIds in batches of 100 to prevent 414 URI Too Long on large datasets
+            const idChunks = chunk(billIds, 100);
+            const chunkResults = await Promise.all(
+              idChunks.map(ids =>
+                withRetry(() => supabase.from('bill_services').select('consumable_completed, bill_id').in('bill_id', ids))
+              )
+            );
+            billServicesArray = chunkResults.flatMap(r => r?.data || []);
+          } else {
+            const { data: bs } = await withRetry(() => supabase.from('bill_services').select('consumable_completed, bill_id'));
+            billServicesArray = bs || [];
+          }
         }
       } catch {
         console.warn('bill_services table not found, skipping service stats');

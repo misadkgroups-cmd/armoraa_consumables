@@ -87,18 +87,21 @@ export default function AllBills({ onNavigate, urlState }) {
   // focus so the user can immediately select the next service.
   const [autoFocusRowId, setAutoFocusRowId] = useState(null);
 
-  // Listen for refresh flag from BillableConsumables
+  // Listen for refresh flag from BillableConsumables (event-based, no polling)
   useEffect(() => {
-    const checkRefresh = () => {
-      const flag = localStorage.getItem('forceRefreshBills');
-      if (flag) {
+    const handleRefresh = () => setRefreshToken(Date.now());
+    window.addEventListener('refresh-bills', handleRefresh);
+    const handleStorage = (e) => {
+      if (e.key === 'forceRefreshBills' && e.newValue) {
         localStorage.removeItem('forceRefreshBills');
-        setRefreshToken(Date.now());
+        handleRefresh();
       }
     };
-    
-    const interval = setInterval(checkRefresh, 1000);
-    return () => clearInterval(interval);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('refresh-bills', handleRefresh);
+      window.removeEventListener('storage', handleStorage);
+    };
   }, []);
 
   // Master lookup data only re-fetches when branch changes
@@ -110,12 +113,14 @@ export default function AllBills({ onNavigate, urlState }) {
     }
   }, [branchId]);
 
-  // Bills list fetches when filters (date/status/branch/refresh) change
+  // Bills list fetches when filters (date/status/branch/search/refresh) change
   useEffect(() => {
-    if (branchId) {
+    if (!branchId) return;
+    const timer = setTimeout(() => {
       fetchAllBills();
-    }
-  }, [branchId, selectedDate, statusFilter, refreshToken]);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [branchId, selectedDate, statusFilter, searchBillNo, searchUid, searchPatient, refreshToken]);
 
   useEffect(() => {
     if (serviceRows.length === 0) {
@@ -242,6 +247,16 @@ export default function AllBills({ onNavigate, urlState }) {
         .order('created_at', { ascending: false });
       if (branchId) query = query.eq('branch_id', branchId);
       if (selectedDate) query = query.eq('service_date', selectedDate);
+      if (searchBillNo.trim()) {
+        const clean = searchBillNo.trim().replace(/^bill[\s-]*/i, '');
+        query = query.ilike('bill_no', `%${clean}%`);
+      }
+      if (searchUid.trim()) {
+        query = query.ilike('uid', `%${searchUid.trim()}%`);
+      }
+      if (searchPatient.trim()) {
+        query = query.ilike('patient_name', `%${searchPatient.trim()}%`);
+      }
 
       const { data, error } = await query;
       if (error) throw error;

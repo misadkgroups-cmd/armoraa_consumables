@@ -88,6 +88,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
   const [registry, setRegistry] = useState([]);
   // Combined dropdown options
   const [allConsumables, setAllConsumables] = useState([]);
+  const [isSaving, setIsSaving] = useState(false);
   // Billable stock: consumable_id -> available_stock (only for stock > 0)
   const [billableStockMap, setBillableStockMap] = useState({});
   const [rows, setRows] = useState([]);
@@ -403,7 +404,10 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
         const uniq = data.filter(m => { const k = m.machine_name.toLowerCase().trim(); if (seen.has(k)) return false; seen.add(k); return true; });
         setMachines(uniq);
       }
-    } catch (error) { console.error('Error fetching machinery:', error); }
+    } catch (error) { 
+      console.error('Error fetching machinery:', error); 
+      showToast('error', 'Failed to load machinery. Check network connection.');
+    }
   };
 
   const fetchMachinesForService = async (serviceId) => {
@@ -420,7 +424,12 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       setMachines(unique);
       setMachineryLocked(true);
       if (unique.length > 0) setMachinery(unique[0].id);
-    } catch (error) { console.error('Error fetching machinery for service:', error); setMachineryLocked(false); setNoMachineryMapping(true); }
+    } catch (error) { 
+      console.error('Error fetching machinery for service:', error); 
+      setMachineryLocked(false); 
+      setNoMachineryMapping(true);
+      showToast('error', 'Network error checking service machinery mapping.');
+    }
   };
 
   // Unified fetch:
@@ -476,7 +485,10 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
         ...Array.from(productMap.values()),
       ];
       setAllConsumables(combined);
-    } catch (error) { console.error('Error fetching unified consumables:', error); }
+    } catch (error) { 
+      console.error('Error fetching unified consumables:', error);
+      showToast('error', 'Network error loading consumables list.');
+    }
   };
 
   // Fetch billable stock availability (only entries with available_stock > 0).
@@ -496,7 +508,10 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
         if (stock > 0) map[row.consumable_id] = stock;
       });
       setBillableStockMap(map);
-    } catch (error) { console.error('Error fetching billable stock:', error); }
+    } catch (error) { 
+      console.error('Error fetching billable stock:', error);
+      showToast('error', 'Network error loading stock balances.');
+    }
   };
 
   // Dropdown options: non-billable items always show; billable items show only
@@ -826,7 +841,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
   //   - UPDATE (isUpdate=true)        -> rows kept with different units are
   //                                      'Updated' (old_units captured); rows in
   //                                      the old report no longer present are 'Deleted'
-  const writeConsumableHistory = async (savedReport, isUpdate, oldReport, billInfo = null) => {
+  const writeConsumableHistory = async (savedReport, isUpdate, oldReport, _billInfo = null) => {
     try {
       const username = localStorage.getItem('username') || 'System';
       const numericBillId = Number(billingLogId) || null;
@@ -942,9 +957,15 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
   };
 
   const handleSave = async () => {
+    if (isSaving) return;
     if (!service) { showToast('error', 'Please select a service'); return; }
     if (!machinery) { showToast('error', 'No machinery mapped for selected service'); return; }
     if (rows.length === 0) { showToast('error', 'Please add at least one consumable'); return; }
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      showToast('error', 'You are currently offline. Please reconnect to the internet before saving.');
+      return;
+    }
 
     // Validate: every selected consumable must have a positive numeric unit count
     // (non-billable rows use the 'USED' sentinel and are exempt). A row with a
@@ -979,6 +1000,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       return;
     }
 
+    setIsSaving(true);
     try {
       // Convert billing_log_id to number (URL params are strings)
       const numericBillingLogId = billingLogId ? Number(billingLogId) : null;
@@ -1315,7 +1337,7 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
 
       // Embedded mode: callback instead of navigating away (keeps popup open).
       // The callback triggers a service-only data refresh in the parent modal.
-      // We do NOT set the forceRefreshBills flag or navigate — the popup stays open.
+      window.dispatchEvent(new Event('refresh-bills'));
       if (onSaveComplete) {
         onSaveComplete({
           billId: validBillingLogId,
@@ -1340,7 +1362,12 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
       }, 800);
     } catch (e) {
       console.error('Save exception:', e);
-      showToast('error', 'Failed to save record');
+      const msg = e?.message || 'Failed to save record';
+      showToast('error', msg.includes('timeout') || msg.includes('timed out') || msg.includes('fetch')
+        ? 'Network request timed out. Please check your internet connection and try again.'
+        : `Save failed: ${msg}`);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -1436,10 +1463,19 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
             </p>
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={handleCancel} className="btn btn-secondary btn-sm">← Back to Services</button>
-            <button onClick={handleSave} className="btn btn-primary" disabled={noMachineryMapping}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-              Save
+            <button onClick={handleCancel} disabled={isSaving} className="btn btn-secondary btn-sm">← Back to Services</button>
+            <button onClick={handleSave} className="btn btn-primary" disabled={isSaving || noMachineryMapping}>
+              {isSaving ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <span className="animate-spin" style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%' }} />
+                  Saving...
+                </span>
+              ) : (
+                <>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  Save
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -1450,11 +1486,20 @@ export default function BillableConsumables({ onNavigate, onSaveComplete, onCanc
             <p>Record consumables used per patient bill</p>
           </div>
           <div className="page-header-actions">
-            <button onClick={handleSave} className="btn btn-primary" disabled={noMachineryMapping}>
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
-              Save Record
+            <button onClick={handleSave} className="btn btn-primary" disabled={isSaving || noMachineryMapping}>
+              {isSaving ? (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <span className="animate-spin" style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%' }} />
+                  Saving...
+                </span>
+              ) : (
+                <>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  Save Record
+                </>
+              )}
             </button>
-            <button onClick={handleClear} className="btn btn-secondary">
+            <button onClick={handleClear} disabled={isSaving} className="btn btn-secondary">
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
               Clear
             </button>

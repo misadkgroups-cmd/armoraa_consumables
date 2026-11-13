@@ -20,10 +20,10 @@ export async function getBillableReportFromServiceConsumables(filters = {}) {
     let q = supabase
       .from('billing_log')
       .select('id, bill_no, uid, patient_name, doctor_id, staff_id, service_date, branch_id')
-      .gte('service_date', startDate)
-      .lte('service_date', endDate)
       .is('deleted_at', null)
       .order('id', { ascending: true });
+    if (startDate) q = q.gte('service_date', startDate);
+    if (endDate) q = q.lte('service_date', endDate);
     if (branchId) q = q.eq('branch_id', branchId);
     return q;
   });

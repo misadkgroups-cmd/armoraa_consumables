@@ -17,7 +17,7 @@ const TABS = [
 
 const SectionHeader = ({ title, subtitle, action }) => (<div className="cust-head"><div><h2>{title}</h2><p>{subtitle}</p></div><div className="cust-actions">{action}</div></div>);
 const StatCard = ({ icon: Icon, label, value, color }) => (<div className="stat-box"><div className="ic" style={{ background: color }}><Icon size={16} /></div><div className="v">{value}</div><div className="l">{label}</div></div>);
-const Modal = ({ open, onClose, title, children }) => { if (!open) return null; return (<div className="modal-overlay"><div className="modal" style={{ maxWidth: 520 }}><div className="modal-header"><h3>{title}</h3><button onClick={onClose} className="btn btn-ghost btn-icon">×</button></div><div className="modal-body">{children}</div></div></div>); };
+const Modal = ({ open, onClose, title, children }) => { if (!open) return null; return (<div className="modal-overlay" onClick={onClose}><div className="modal" style={{ maxWidth: 820, width: '95%' }} onClick={(e) => e.stopPropagation()}><div className="modal-header"><h3>{title}</h3><button onClick={onClose} className="btn btn-ghost btn-icon">×</button></div><div className="modal-body">{children}</div></div></div>); };
 
 const Customization = () => {
   const [tab, setTab] = useState('billable');
@@ -86,28 +86,39 @@ const Customization = () => {
   const [billable, setBillable] = useState([]);
   const [bSearch, setBSearch] = useState('');
   const [bModal, setBModal] = useState(null);
-  const [bForm, setBForm] = useState({ consumable_name: '', default_unit: '', cost_unit: '' });
+  const [bForm, setBForm] = useState({ product_name: '', unit: '1', cost_unit: '', minimum_stock: 10 });
 
   const fetchBillable = useCallback(async () => {
     try {
-      const { data } = await supabase.from('master_billable_consumables').select('*').order('product_name');
+      const { data, error } = await supabase.from('master_billable_consumables').select('*').order('product_name');
+      if (error) throw error;
       if (data) setBillable(data || []);
     }
-    catch (e) { console.error(e); }
+    catch (e) { 
+      console.error(e); 
+      showToast('error', 'Failed to load billable consumables. Check connection.');
+    }
   }, []);
 
-  const openBModal = (mode, data = null) => { setBModal({ mode, data }); setBForm(data ? { product_name: data.product_name || '', unit: data.unit || '', cost_unit: data.cost_unit || '', minimum_stock: data.minimum_stock || 10 } : { product_name: '', unit: 'piece', cost_unit: '', minimum_stock: 10 }); };
+  const openBModal = (mode, data = null) => { 
+    setBModal({ mode, data }); 
+    setBForm(data 
+      ? { product_name: data.product_name || '', unit: (data.unit !== undefined && data.unit !== null && String(data.unit).trim() !== '') ? String(data.unit) : '1', cost_unit: data.cost_unit || '', minimum_stock: data.minimum_stock || 10 } 
+      : { product_name: '', unit: '1', cost_unit: '', minimum_stock: 10 }
+    ); 
+  };
   const saveBModal = async () => {
     if (!bForm.product_name) return showToast('error', 'Product Name is required');
     const cost = Number(bForm.cost_unit || 0);
-    if (isNaN(cost) || cost < 0) return showToast('error', 'Cost must be a positive number');
+    if (isNaN(cost) || cost < 0) return showToast('error', 'Amount per Unit must be a positive number');
     const minStock = Number(bForm.minimum_stock || 10);
+    const unitVal = (bForm.unit !== undefined && bForm.unit !== null && String(bForm.unit).trim() !== '') ? String(bForm.unit).trim() : '1';
     setLoading(true);
     try {
       if (bModal.mode === 'add') {
         const { data: existing } = await supabase.from('master_billable_consumables').select('id').ilike('product_name', bForm.product_name.trim());
         if (existing && existing.length) return showToast('warning', 'A consumable with this name already exists');
-        const { error } = await supabase.from('master_billable_consumables').insert({ product_name: bForm.product_name.trim(), unit: bForm.unit || 'piece', cost_unit: cost, minimum_stock: minStock });
+        const { error } = await supabase.from('master_billable_consumables').insert({ product_name: bForm.product_name.trim(), unit: unitVal, cost_unit: cost, minimum_stock: minStock });
         if (error) throw error;
         showToast('success', 'Successfully added consumable');
         await auditApi.logAudit({
@@ -116,10 +127,10 @@ const Customization = () => {
           actionType: 'CREATE',
           tableName: 'master_billable_consumables',
           recordId: 0,
-          newData: bForm
+          newData: { ...bForm, unit: unitVal }
         });
       } else {
-        const { error } = await supabase.from('master_billable_consumables').update({ product_name: bForm.product_name.trim(), unit: bForm.unit || 'piece', cost_unit: cost, minimum_stock: minStock }).eq('id', bModal.data.id);
+        const { error } = await supabase.from('master_billable_consumables').update({ product_name: bForm.product_name.trim(), unit: unitVal, cost_unit: cost, minimum_stock: minStock }).eq('id', bModal.data.id);
         if (error) throw error;
         showToast('success', 'Successfully updated consumable');
         await auditApi.logAudit({
@@ -129,7 +140,7 @@ const Customization = () => {
           tableName: 'master_billable_consumables',
           recordId: bModal.data.id,
           oldData: bModal.data,
-          newData: bForm
+          newData: { ...bForm, unit: unitVal }
         });
       }
       setBModal(null);
@@ -198,8 +209,12 @@ const Customization = () => {
   const fetchNonBillable = useCallback(async () => {
     try {
       const { data, error } = await supabase.from('master_non_billable_consumables').select('*').order('product_name');
-      if (!error && data) setNonBillable(data || []);
-    } catch (e) { console.error(e); }
+      if (error) throw error;
+      if (data) setNonBillable(data || []);
+    } catch (e) { 
+      console.error(e); 
+      showToast('error', 'Failed to load non-billable consumables.');
+    }
   }, []);
 
   const openNbModal = (mode, data = null) => { setNbModal({ mode, data }); setNbForm(data ? { product_name: data.product_name || '', cost: data.cost || '', status: data.status || 'Active' } : { product_name: '', cost: '', status: 'Active' }); };
@@ -286,8 +301,15 @@ const Customization = () => {
   const [svcForm, setSvcForm] = useState({ service_name: '' });
 
   const fetchServices = useCallback(async () => {
-    try { const { data } = await supabase.from('master_services').select('*').order('service_name'); if (data) setServices(data || []); }
-    catch (e) { console.error(e); }
+    try { 
+      const { data, error } = await supabase.from('master_services').select('*').order('service_name'); 
+      if (error) throw error;
+      if (data) setServices(data || []); 
+    }
+    catch (e) { 
+      console.error(e); 
+      showToast('error', 'Failed to load services list.');
+    }
   }, []);
 
   const openSvcModal = (mode, data = null) => { setSvcModal({ mode, data }); setSvcForm(data || { service_name: '' }); };
@@ -322,12 +344,26 @@ const Customization = () => {
   const [mForm, setMForm] = useState({ machine_name: '', service_id: '' });
 
   const fetchMachines = useCallback(async () => {
-    try { const { data, error } = await supabase.from('master_machinery').select('*, master_services(service_name)').order('machine_name'); if (error) return; const mapped = (data || []).map(it => ({ ...it, service_name: it.master_services?.service_name || '-' })); setMachines(mapped); }
-    catch (e) { console.error(e); }
+    try { 
+      const { data, error } = await supabase.from('master_machinery').select('*, master_services(service_name)').order('machine_name'); 
+      if (error) throw error; 
+      const mapped = (data || []).map(it => ({ ...it, service_name: it.master_services?.service_name || '-' })); 
+      setMachines(mapped); 
+    }
+    catch (e) { 
+      console.error(e); 
+      showToast('error', 'Failed to load machines list.');
+    }
   }, []);
   const loadServicesForMach = useCallback(async () => {
-    try { const { data } = await supabase.from('master_services').select('id, service_name').order('service_name'); setMachServices(data || []); }
-    catch (e) { console.error(e); }
+    try { 
+      const { data, error } = await supabase.from('master_services').select('id, service_name').order('service_name'); 
+      if (error) throw error;
+      setMachServices(data || []); 
+    }
+    catch (e) { 
+      console.error(e); 
+    }
   }, []);
 
   const openMModal = (mode, data = null) => { setMModal({ mode, data }); setMForm(data ? { machine_name: data.machine_name || '', service_id: data.service_id || '' } : { machine_name: '', service_id: '' }); };
@@ -361,19 +397,41 @@ const Customization = () => {
       <SectionHeader title="Billable Consumables" subtitle={`${billable.length} items configured`} action={<div className="cust-actions"><div className="search-box"><Search size={15} /><input placeholder="Search consumable…" value={bSearch} onChange={(e) => setBSearch(e.target.value)} /></div><button onClick={() => openBModal('add')} className="btn btn-primary"><Plus size={16} /> Add Consumable</button></div>} />
       <div className="stat-grid"><StatCard icon={Package} label="Total" value={billable.length} color="linear-gradient(135deg,#7C5CFC,#A78BFA)" /></div>
       <div className="table-container">
-        <table className="dt"><thead><tr><th style={{ width: 260 }}>Consumable Name</th><th style={{ width: 100 }}>Default Unit</th><th style={{ width: 120 }}>Cost</th><th style={{ width: 100 }}>Actions</th></tr></thead>
+        <table className="dt"><thead><tr><th style={{ width: 260 }}>Consumable Name</th><th style={{ width: 100, textAlign: 'center' }}>Unit</th><th style={{ width: 140, textAlign: 'right' }}>Amount per Unit</th><th style={{ width: 100, textAlign: 'right' }}>Actions</th></tr></thead>
         <tbody>
           {filteredB.length === 0 && (<tr><td colSpan="4"><div className="prem-empty"><div className="ico"><Package size={24} /></div><h3>No consumables found</h3><p>Add your first billable consumable to get started.</p><button onClick={() => openBModal('add')} className="btn btn-primary"><Plus size={16} /> Add Consumable</button></div></td></tr>)}
-          {filteredB.map(c => (<tr key={c.id}><td className="font-medium">{c.product_name}</td><td>{c.unit || '-'}</td><td style={{ textAlign: 'right' }}>{getCurrencySymbol()}{(Number(c.cost_unit) || 0).toFixed(2)}</td><td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}><div style={{ display: 'inline-flex', gap: 6 }}><button className="ia" title="Edit" onClick={() => openBModal('edit', c)}><Edit2 size={14} /></button><button className="ia danger" title="Delete" onClick={() => deleteB(c.id)}><Trash2 size={14} /></button></div></td></tr>))}
+          {filteredB.map(c => (<tr key={c.id}><td className="font-medium">{c.product_name}</td><td style={{ textAlign: 'center' }}>{c.unit || '1'}</td><td style={{ textAlign: 'right' }}>{getCurrencySymbol()}{(Number(c.cost_unit) || 0).toFixed(2)}</td><td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}><div style={{ display: 'inline-flex', gap: 6 }}><button className="ia" title="Edit" onClick={() => openBModal('edit', c)}><Edit2 size={14} /></button><button className="ia danger" title="Delete" onClick={() => deleteB(c.id)}><Trash2 size={14} /></button></div></td></tr>))}
         </tbody>
       </table>
     </div>
     <Modal open={!!bModal} onClose={() => setBModal(null)} title={bModal?.mode === 'add' ? 'Add Consumable' : 'Edit Consumable'}>
-      <div className="space-y-4"><div className="space-y-1"><label className="text-xs font-semibold text-muted block">Product Name</label><input className="form-input" value={bForm.product_name} onChange={(e) => setBForm({ ...bForm, product_name: e.target.value })} /></div>
-      <div className="space-y-1"><label className="text-xs font-semibold text-muted block">Unit</label><input className="form-input" value={bForm.unit} onChange={(e) => setBForm({ ...bForm, unit: e.target.value })} placeholder="e.g. ml, packet, piece" /></div>
-      <div className="space-y-1"><label className="text-xs font-semibold text-muted block">Cost</label><input className="form-input" type="number" value={bForm.cost_unit} onChange={(e) => setBForm({ ...bForm, cost_unit: e.target.value })} /></div>
-      <div className="space-y-1"><label className="text-xs font-semibold text-muted block">Minimum Stock</label><input className="form-input" type="number" value={bForm.minimum_stock} onChange={(e) => setBForm({ ...bForm, minimum_stock: e.target.value })} /></div>
-      <div className="flex justify-end gap-3 mt-2"><button onClick={() => setBModal(null)} className="btn btn-secondary">Cancel</button><button onClick={saveBModal} disabled={loading} className="btn btn-primary">Save</button></div></div>
+      <div className="space-y-4">
+        <div className="space-y-1">
+          <label className="text-xs font-semibold text-muted block">Product Name</label>
+          <input className="form-input" value={bForm.product_name} onChange={(e) => setBForm({ ...bForm, product_name: e.target.value })} />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-semibold text-muted block">Unit</label>
+          <input 
+            className="form-input" 
+            value={bForm.unit} 
+            onChange={(e) => setBForm({ ...bForm, unit: e.target.value })} 
+            placeholder="1" 
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-semibold text-muted block">Amount per Unit</label>
+          <input className="form-input" type="number" step="any" value={bForm.cost_unit} onChange={(e) => setBForm({ ...bForm, cost_unit: e.target.value })} />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs font-semibold text-muted block">Minimum Stock</label>
+          <input className="form-input" type="number" value={bForm.minimum_stock} onChange={(e) => setBForm({ ...bForm, minimum_stock: e.target.value })} />
+        </div>
+        <div className="flex justify-end gap-3 mt-2">
+          <button onClick={() => setBModal(null)} className="btn btn-secondary">Cancel</button>
+          <button onClick={saveBModal} disabled={loading} className="btn btn-primary">Save</button>
+        </div>
+      </div>
     </Modal>
     </>);
 
@@ -389,9 +447,9 @@ const Customization = () => {
           <thead>
             <tr>
               <th style={{ width: 260 }}>Non-Billable Consumable Name</th>
-              <th style={{ width: 120 }}>Cost</th>
+              <th style={{ width: 140, textAlign: 'right' }}>Amount per Unit</th>
               <th style={{ width: 100 }}>Status</th>
-              <th style={{ width: 140 }}>Actions</th>
+              <th style={{ width: 140, textAlign: 'right' }}>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -412,7 +470,7 @@ const Customization = () => {
       <Modal open={!!nbModal} onClose={() => setNbModal(null)} title={nbModal?.mode === 'add' ? 'Add Non-Billable Consumable' : 'Edit Non-Billable Consumable'}>
         <div className="space-y-4">
           <div className="space-y-1"><label className="text-xs font-semibold text-muted block">Consumable Name</label><input className="form-input" value={nbForm.product_name} onChange={(e) => setNbForm({ ...nbForm, product_name: e.target.value })} /></div>
-          <div className="space-y-1"><label className="text-xs font-semibold text-muted block">Cost</label><input className="form-input" type="number" value={nbForm.cost} onChange={(e) => setNbForm({ ...nbForm, cost: e.target.value })} /></div>
+          <div className="space-y-1"><label className="text-xs font-semibold text-muted block">Amount per Unit</label><input className="form-input" type="number" step="any" value={nbForm.cost} onChange={(e) => setNbForm({ ...nbForm, cost: e.target.value })} /></div>
           <div className="space-y-1"><label className="text-xs font-semibold text-muted block">Status</label><SearchableDropdown value={nbForm.status} onChange={(val) => setNbForm({ ...nbForm, status: val })} options={[{value:'Active',label:'Active'},{value:'Inactive',label:'Inactive'}]} placeholder="Select status" displayKey="label" valueKey="value" /></div>
           <div className="flex justify-end gap-3 mt-2"><button onClick={() => setNbModal(null)} className="btn btn-secondary">Cancel</button><button onClick={saveNb} disabled={loading} className="btn btn-primary">Save</button></div>
         </div>
@@ -423,7 +481,7 @@ const Customization = () => {
       <SectionHeader title="Services" subtitle={`${services.length} configured`} action={<div className="cust-actions"><div className="search-box"><Search size={15} /><input placeholder="Search services…" value={svcSearch} onChange={(e) => setSvcSearch(e.target.value)} /></div><button onClick={() => openSvcModal('add')} className="btn btn-primary"><Plus size={16} /> Add Service</button></div>} />
       <div className="stat-grid"><StatCard icon={Settings} label="Total Services" value={services.length} color="linear-gradient(135deg,#F59E0B,#FBBF24)" /></div>
       <div className="table-container">
-        <table className="dt"><thead><tr><th style={{ width: 260 }}>Service Name</th><th style={{ width: 140 }}>Linked Machines</th><th style={{ width: 100 }}>Status</th><th style={{ width: 100 }}>Actions</th></tr></thead>
+        <table className="dt"><thead><tr><th style={{ width: 260 }}>Service Name</th><th style={{ width: 140 }}>Linked Machines</th><th style={{ width: 100 }}>Status</th><th style={{ width: 100, textAlign: 'right' }}>Actions</th></tr></thead>
         <tbody>
           {filteredSvc.length === 0 && (<tr><td colSpan="4"><div className="prem-empty"><div className="ico"><Settings size={24} /></div><h3>No services found</h3><p>Create your first service to begin configuring clinic operations.</p><button onClick={() => openSvcModal('add')} className="btn btn-primary"><Plus size={16} /> Add Service</button></div></td></tr>)}
           {filteredSvc.map(s => { const count = machines.filter(m => m.service_id === s.id).length; return (<tr key={s.id}><td className="font-medium">{s.service_name}</td><td>{count} Machine{count !== 1 ? 's' : ''}</td><td><span className="sbadge active"><span className="status-dot green" /> Active</span></td><td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}><div style={{ display: 'inline-flex', gap: 6 }}><button className="ia" title="Edit" onClick={() => openSvcModal('edit', s)}><Edit2 size={14} /></button><button className="ia danger" title="Delete" onClick={() => deleteSvc(s.id)}><Trash2 size={14} /></button></div></td></tr>); })}
@@ -440,7 +498,7 @@ const Customization = () => {
       <SectionHeader title="Machinery Mapping" subtitle={`${machines.length} machines`} action={<button onClick={() => openMModal('add')} className="btn btn-primary"><Plus size={16} /> Add Machine</button>} />
       <div className="stat-grid"><StatCard icon={Cog} label="Total Machines" value={machines.length} color="linear-gradient(135deg,#EC4899,#F472B6)" /></div>
       <div className="table-container">
-        <table className="dt"><thead><tr><th style={{ width: 260 }}>Machine Name</th><th style={{ width: 240 }}>Assigned Service</th><th style={{ width: 100 }}>Status</th><th style={{ width: 100 }}>Actions</th></tr></thead>
+        <table className="dt"><thead><tr><th style={{ width: 260 }}>Machine Name</th><th style={{ width: 240 }}>Assigned Service</th><th style={{ width: 100 }}>Status</th><th style={{ width: 100, textAlign: 'right' }}>Actions</th></tr></thead>
         <tbody>
           {filteredM.length === 0 && (<tr><td colSpan="4"><div className="prem-empty"><div className="ico"><Cog size={24} /></div><h3>No machines found</h3><p>Add a machine and assign it to a service.</p><button onClick={() => openMModal('add')} className="btn btn-primary"><Plus size={16} /> Add Machine</button></div></td></tr>)}
           {filteredM.map(m => (<tr key={m.id}><td className="font-medium">{m.machine_name}</td><td>{m.service_name || '-'}</td><td><span className="sbadge active"><span className="status-dot green" /> Active</span></td><td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}><div style={{ display: 'inline-flex', gap: 6 }}><button className="ia" title="Reassign / Edit" onClick={() => openMModal('edit', m)}><Edit2 size={14} /></button><button className="ia danger" title="Delete" onClick={() => deleteM(m.id)}><Trash2 size={14} /></button></div></td></tr>))}

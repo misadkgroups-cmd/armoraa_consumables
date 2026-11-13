@@ -17,6 +17,14 @@ export async function getTransactionReport(filters = {}) {
     ),
   ]);
 
+  const billableList = Array.isArray(billableMaster) ? billableMaster : (billableMaster?.data || []);
+  const nonBillableList = Array.isArray(nonBillableMaster) ? nonBillableMaster : (nonBillableMaster?.data || []);
+
+  const billableMap = new Map(billableList.map(p => [Number(p.id), p]));
+  const nonBillableMap = new Map(nonBillableList.map(p => [Number(p.id), p]));
+  const billableByName = new Map(billableList.map(p => [(p.product_name || '').trim().toLowerCase(), p]));
+  const nonBillableByName = new Map(nonBillableList.map(p => [(p.product_name || '').trim().toLowerCase(), p]));
+
   // 2. Fetch transfers with date range filter (fully paginated)
   const transfers = await fetchAllRows(() => {
     let query = supabase
@@ -42,19 +50,24 @@ export async function getTransactionReport(filters = {}) {
     }
 
     const isNb = (t.stock_type || '').toLowerCase().startsWith('non');
-    const productId = t.product_id;
-    const master = isNb ? (nonBillableMaster && nonBillableMaster.data) || [] : (billableMaster && billableMaster.data) || [];
-    const product = master.find((p) => Number(p.id) === Number(productId));
-    // Non-Billable items are ALWAYS priced at 0.00 (amount = 0.00) regardless
-    // of any cost recorded on the master product / stock. See
-    // src/utils/nonBillableDefaults.js and the 20260909 DB migration.
-    const unitCost = isNb ? 0 : (Number(product && product.cost_unit) || 0);
-    const key = `${isNb ? 'nb' : 'b'}-${productId}`;
+    const productId = Number(t.product_id);
+    const product = isNb ? nonBillableMap.get(productId) : billableMap.get(productId);
+    const fallbackProduct = isNb
+      ? nonBillableByName.get((t.product_name || '').trim().toLowerCase())
+      : billableByName.get((t.product_name || '').trim().toLowerCase());
+    const matched = product || fallbackProduct;
+
+    // Unit Cost:
+    // - For Billable items: cost_unit from master_billable_consumables
+    // - For Non-Billable items: cost from master_non_billable_consumables
+    const rawCost = isNb ? (matched?.cost ?? 0) : (matched?.cost_unit ?? 0);
+    const unitCost = Number(rawCost) || 0;
+    const key = `${isNb ? 'nb' : 'b'}-${productId || (t.product_name || 'unknown')}`;
 
     if (!grouped[key]) {
       grouped[key] = {
         productType: isNb ? 'Non-Billable' : 'Billable',
-        productName: t.product_name || (product && product.product_name) || `Product #${productId}`,
+        productName: t.product_name || matched?.product_name || `Product #${productId}`,
         unitCost,
         quantity: 0,
       };
@@ -63,14 +76,16 @@ export async function getTransactionReport(filters = {}) {
   });
 
   return Object.entries(grouped)
-    .map(([key, g]) => ({
-      id: key,
-      productType: g.productType,
-      productName: g.productName,
-      quantity: g.quantity,
-      unitCost: g.unitCost,
-      totalCost: g.quantity * g.unitCost,
-    }))
+    .map(([key, g]) => {
+      const totalCost = Math.round((g.quantity * g.unitCost) * 100) / 100;
+      return {
+        id: key,
+        productType: g.productType,
+        productName: g.productName,
+        quantity: g.quantity,
+        unitCost: g.unitCost,
+        totalCost,
+      };
+    })
     .sort((a, b) => a.productName.localeCompare(b.productName));
 }
-

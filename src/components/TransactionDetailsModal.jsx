@@ -232,14 +232,14 @@ const TransactionDetailsModal = ({ open, onClose, transaction, onReceive, canRec
             </div>
 
             <div style={{ overflowX: 'auto' }}>
-              <table className="rpt-table" style={{ fontSize: 12.5, width: '100%', margin: 0 }}>
+              <table className="rpt-table" style={{ fontSize: 12.5, width: '100%', minWidth: 620, margin: 0 }}>
                 <thead>
                   <tr>
-                    <th style={{ textAlign: 'left', padding: '8px 12px' }}>#</th>
-                    <th style={{ textAlign: 'left', padding: '8px 12px' }}>Product Name</th>
-                    <th style={{ textAlign: 'center', padding: '8px 12px' }}>Type</th>
-                    <th style={{ textAlign: 'center', padding: '8px 12px' }}>Quantity</th>
-                    <th style={{ textAlign: 'center', padding: '8px 12px' }}>Status</th>
+                    <th style={{ textAlign: 'left', padding: '8px 12px', width: 45 }}>#</th>
+                    <th style={{ textAlign: 'left', padding: '8px 12px', minWidth: 220 }}>Product Name</th>
+                    <th style={{ textAlign: 'center', padding: '8px 12px', width: 110 }}>Type</th>
+                    <th style={{ textAlign: 'center', padding: '8px 12px', width: 95 }}>Quantity</th>
+                    <th style={{ textAlign: 'center', padding: '8px 12px', width: 105 }}>Status</th>
                   </tr>
                 </thead>
                 <tbody>

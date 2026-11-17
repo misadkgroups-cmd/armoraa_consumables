@@ -973,15 +973,15 @@ const StockManagement = () => {
       {/* Corporate Stock Tab */}
       {activeTab === 'corporate' && (
         <div className="table-container">
-          <table className="rpt-table">
+          <table className="rpt-table" style={{ minWidth: 900 }}>
             <thead>
               <tr>
-                <th className="rpt-c-service">Product Name</th>
-                <th className="rpt-c-service">Type</th>
-                <th className="rpt-c-units">Available Units</th>
-                <th className="rpt-c-units">Minimum Units</th>
-                <th className="rpt-c-date">Last Updated</th>
-                <th className="rpt-c-actions sticky" style={{ background: 'var(--color-tint-2)' }}>Actions</th>
+                <th className="rpt-c-service" style={{ minWidth: 220 }}>Product Name</th>
+                <th style={{ width: 110, textAlign: 'center' }}>Type</th>
+                <th className="rpt-c-units" style={{ width: 130 }}>Available Units</th>
+                <th className="rpt-c-units" style={{ width: 120 }}>Minimum Units</th>
+                <th className="rpt-c-date" style={{ width: 165 }}>Last Updated</th>
+                <th className="rpt-c-actions sticky" style={{ width: 100, textAlign: 'center', background: 'var(--color-tint-2)' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -1054,15 +1054,15 @@ const StockManagement = () => {
       {/* Current Stock Tab (Billable / Non-Billable) */}
       {activeTab !== 'history' && activeTab !== 'corporate' && (
         <div className="table-container">
-          <table className="rpt-table">
+          <table className="rpt-table" style={{ minWidth: 900 }}>
             <thead>
               <tr>
-                <th className="rpt-c-service">Product Name</th>
-                <th className="rpt-c-service">Type</th>
-                <th className="rpt-c-units">Available Units</th>
-                <th className="rpt-c-units">Minimum Units</th>
-                <th className="rpt-c-date">Last Updated</th>
-                <th className="rpt-c-actions sticky" style={{ background: 'var(--color-tint-2)' }}>Actions</th>
+                <th className="rpt-c-service" style={{ minWidth: 220 }}>Product Name</th>
+                <th style={{ width: 110, textAlign: 'center' }}>Type</th>
+                <th className="rpt-c-units" style={{ width: 130 }}>Available Units</th>
+                <th className="rpt-c-units" style={{ width: 120 }}>Minimum Units</th>
+                <th className="rpt-c-date" style={{ width: 165 }}>Last Updated</th>
+                <th className="rpt-c-actions sticky" style={{ width: 100, textAlign: 'center', background: 'var(--color-tint-2)' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -1202,24 +1202,26 @@ const StockManagement = () => {
           </div>
 
           <div className="table-container">
-            <table className="rpt-table">
+            <table className="rpt-table" style={{ minWidth: historySubTab === 'transfers' ? 1200 : 920 }}>
               <thead>
                 <tr>
-                  {historySubTab === 'transfers' && <th className="rpt-c-service" style={{ width: 140 }}>Transaction ID</th>}
-                  <th className="rpt-c-date">Date</th>
-                  <th className="rpt-c-service">Product</th>
-                  {historySubTab === 'transfers' && <th className="rpt-c-units" style={{ width: 90 }}>Type</th>}
-                  <th className="rpt-c-units">{historySubTab === 'consumed' ? 'Qty Consumed' : 'Qty'}</th>
-                  <th className="rpt-c-units">{historySubTab === 'consumed' ? 'Branch' : 'From Location'}</th>
-                  <th className="rpt-c-units">{historySubTab === 'consumed' ? 'Reference / Status' : 'To Location'}</th>
-                  {historySubTab === 'transfers' && <th className="rpt-c-service">Status</th>}
-                  {historySubTab === 'transfers' && !misMode && <th className="rpt-c-actions">Action</th>}
+                  {historySubTab === 'transfers' && <th style={{ width: 155, minWidth: 150 }}>Transaction ID</th>}
+                  <th style={{ width: 170, minWidth: 165 }}>Date</th>
+                  <th style={{ minWidth: 220 }}>Product</th>
+                  {historySubTab === 'transfers' && <th style={{ width: 100, minWidth: 95, textAlign: 'center' }}>Type</th>}
+                  <th style={{ width: historySubTab === 'consumed' ? 120 : 85, minWidth: 80, textAlign: 'center' }}>{historySubTab === 'consumed' ? 'Qty Consumed' : 'Qty'}</th>
+                  <th style={{ width: 180, minWidth: 170 }}>{historySubTab === 'consumed' ? 'Branch' : 'From Location'}</th>
+                  <th style={{ width: 180, minWidth: 170 }}>{historySubTab === 'consumed' ? 'Reference / Status' : 'To Location'}</th>
+                  {historySubTab === 'transfers' && <th style={{ width: 110, minWidth: 105, textAlign: 'center' }}>Status</th>}
+                  {historySubTab === 'transfers' && (
+                    <th className="rpt-c-actions sticky" style={{ width: 80, minWidth: 80, textAlign: 'center', background: 'var(--color-tint-2)' }}>Action</th>
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {filteredHistory.length === 0 && (
                   <tr>
-                    <td colSpan={historySubTab === 'transfers' ? (!misMode ? 9 : 8) : 5} className="text-center text-muted" style={{ padding: 40 }}>
+                    <td colSpan={historySubTab === 'transfers' ? 9 : 5} className="text-center text-muted" style={{ padding: 40 }}>
                       {loading ? 'Loading...' : historySubTab === 'transfers' ? 'No stock transfers found' : 'No consumed usage records found'}
                     </td>
                   </tr>
@@ -1277,10 +1279,10 @@ const StockManagement = () => {
                           </span>
                         </td>
                         <td className="rpt-nowrap" style={{ textAlign: 'center' }}><span className="font-semibold">{fmtQty1(item.quantity)}</span></td>
-                        <td className="rpt-nowrap">
+                        <td className="rpt-nowrap" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           {item.fromLabel || (item.transaction_type === 'Inward' ? 'Stock Added' : item.transaction_type === 'Adjustment' ? 'Manual Correction' : branchNameById(item.from_branch_id))}
                         </td>
-                        <td className="rpt-nowrap">
+                        <td className="rpt-nowrap" style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                           {item.toLabel || (item.transaction_type === 'Outward' ? 'Consumed' : branchNameById(item.to_branch_id))}
                         </td>
                         <td className="rpt-nowrap">

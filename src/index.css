@@ -413,7 +413,7 @@ body {
 /* column widths */
 .rpt-c-billid { width: 100px; }
 .rpt-c-uid { width: 100px; }
-.rpt-c-date { width: 130px; }
+.rpt-c-date { width: 165px; min-width: 155px; }
 .rpt-c-branch { width: 140px; }
 .rpt-c-machinery { width: 180px; }
 .rpt-c-service { width: 250px; }
@@ -538,7 +538,7 @@ body {
 /* Column alignment utilities */
 .rpt-c-service { width: 260px; text-align: left; }
 .rpt-c-units { width: 120px; text-align: center; }
-.rpt-c-date { width: 140px; text-align: left; }
+.rpt-c-date { width: 165px; min-width: 155px; text-align: left; }
 .rpt-c-cost { width: 120px; text-align: right; }
 .rpt-c-actions { width: 140px; text-align: center; }
 .rpt-nowrap { white-space: nowrap; }

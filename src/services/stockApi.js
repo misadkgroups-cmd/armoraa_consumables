@@ -688,20 +688,36 @@ export async function createMultiLocationTransferRequest(
 ) {
   const results = [];
 
-  if (!fromBranchId || !toBranchId) {
+  const isFromCorporate =
+    fromBranchId === 'corporate' ||
+    fromBranchId === null ||
+    fromBranchId === undefined ||
+    fromBranchId === '' ||
+    transferType === 'Corporate→Branch' ||
+    transferType === 'Corporate→Corporate';
+
+  const isToCorporate =
+    toBranchId === 'corporate' ||
+    toBranchId === null ||
+    toBranchId === undefined ||
+    toBranchId === '' ||
+    transferType === 'Branch→Corporate' ||
+    transferType === 'Corporate→Corporate';
+
+  const validFrom = isFromCorporate ? 'corporate' : fromBranchId;
+  const validTo = isToCorporate ? 'corporate' : toBranchId;
+
+  if (!validFrom || !validTo) {
     return [{ success: false, message: 'Both source and destination are required' }];
   }
-  if (fromBranchId === toBranchId) {
+  if (String(validFrom) === String(validTo)) {
     return [{ success: false, message: 'Source and destination cannot be the same' }];
   }
-  if (transferType === 'Corporate→Corporate' || (fromBranchId === 'corporate' && toBranchId === 'corporate')) {
+  if (isFromCorporate && isToCorporate) {
     return [{ success: false, message: 'Corporate to Corporate transfers are not allowed' }];
   }
 
   const txnId = transactionId || `TRX-${new Date().toISOString().slice(2, 10).replace(/-/g, '')}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
-
-  const isFromCorporate = fromBranchId === 'corporate';
-  const isToCorporate = toBranchId === 'corporate';
 
   // Determine the source table based on transfer type
   const getSourceStock = async (productId, stockType) => {
@@ -723,7 +739,7 @@ export async function createMultiLocationTransferRequest(
           .from(table)
           .select('available_stock')
           .eq('consumable_id', Number(productId))
-          .eq('branch_id', Number(fromBranchId))
+          .eq('branch_id', Number(validFrom))
           .maybeSingle()
       );
       if (error) return null;
@@ -761,9 +777,9 @@ export async function createMultiLocationTransferRequest(
         transaction_type: 'Transfer',
         quantity: qty,
         balance_after: newQty,
-        remarks: `[TRX-ID: ${txnId}] ${remarks ? remarks + ' - ' : ''}Transferred to ${isToCorporate ? 'Corporate Warehouse' : `Branch ${toBranchId}`}`,
+        remarks: `[TRX-ID: ${txnId}] ${remarks ? remarks + ' - ' : ''}Transferred to ${isToCorporate ? 'Corporate Warehouse' : `Branch ${validTo}`}`,
         from_location: 'Corporate Warehouse',
-        to_location: isToCorporate ? 'Corporate Warehouse' : `Branch ${toBranchId}`,
+        to_location: isToCorporate ? 'Corporate Warehouse' : `Branch ${validTo}`,
         created_by: createdBy,
       });
       return { success: true };
@@ -774,7 +790,7 @@ export async function createMultiLocationTransferRequest(
           .from(table)
           .select('available_stock')
           .eq('consumable_id', Number(productId))
-          .eq('branch_id', Number(fromBranchId))
+          .eq('branch_id', Number(validFrom))
           .maybeSingle()
       );
       if (fetchErr) return { success: false, message: fetchErr.message };
@@ -787,7 +803,7 @@ export async function createMultiLocationTransferRequest(
           .from(table)
           .update({ available_stock: newStock, updated_at: new Date().toISOString() })
           .eq('consumable_id', Number(productId))
-          .eq('branch_id', Number(fromBranchId))
+          .eq('branch_id', Number(validFrom))
       );
       if (updErr) return { success: false, message: updErr.message };
 
@@ -795,9 +811,9 @@ export async function createMultiLocationTransferRequest(
         transaction_type: 'Transfer',
         product_type: stockType,
         consumable_id: Number(productId),
-        branch_id: Number(fromBranchId),
+        branch_id: Number(validFrom),
         quantity: -qty,
-        remarks: `[TRX-ID: ${txnId}] Transfer to ${isToCorporate ? 'Corporate Warehouse' : `Branch ${toBranchId}`}${remarks ? `: ${remarks}` : ''}`,
+        remarks: `[TRX-ID: ${txnId}] Transfer to ${isToCorporate ? 'Corporate Warehouse' : `Branch ${validTo}`}${remarks ? `: ${remarks}` : ''}`,
         created_by: createdBy,
       });
       return { success: true };
@@ -838,8 +854,8 @@ export async function createMultiLocationTransferRequest(
           product_name: t.product_name || '',
           stock_type: t.stock_type,
           quantity: qty,
-          from_branch_id: isFromCorporate ? null : Number(fromBranchId),
-          to_branch_id: isToCorporate ? null : Number(toBranchId),
+          from_branch_id: isFromCorporate ? null : Number(validFrom),
+          to_branch_id: isToCorporate ? null : Number(validTo),
           status: 'Pending',
           transferred_by: remarks ? `${createdBy} [${txnId}] | Note: ${remarks}` : `${createdBy} [${txnId}]`,
           transferred_at: new Date().toISOString(),
@@ -930,8 +946,8 @@ export async function createMultiLocationTransferRequest(
             transaction_type: 'Inward',
             quantity: qty,
             balance_after: newCorpQty,
-            remarks: `[TRX-ID: ${txnId}] Received from Branch ${fromBranchId}${remarks ? `: ${remarks}` : ''}`,
-            from_location: `Branch ${fromBranchId}`,
+            remarks: `[TRX-ID: ${txnId}] Received from Branch ${validFrom}${remarks ? `: ${remarks}` : ''}`,
+            from_location: `Branch ${validFrom}`,
             to_location: 'Corporate Warehouse',
             created_by: createdBy,
           })
@@ -951,10 +967,10 @@ export async function createMultiLocationTransferRequest(
       }
 
       // Create notification for destination
-      if (!isToCorporate) {
+      if (!isToCorporate && validTo) {
         await supabase.from('stock_transfer_notifications').insert({
           transfer_id: stData.id,
-          user_branch_id: Number(toBranchId),
+          user_branch_id: Number(validTo),
           is_read: false,
         });
       }

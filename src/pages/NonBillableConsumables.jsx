@@ -364,7 +364,7 @@ const NonBillableConsumables = () => {
           </div>
         </div>
         <div className="overflow-x-auto">
-          <table className="rpt-table">
+          <table className="rpt-table" style={{ minWidth: 1050 }}>
             <thead><tr><th className="rpt-c-service">Product</th><th className="rpt-c-units">Batch</th><th className="rpt-c-date">Open Date</th><th className="rpt-c-service">Usage</th><th className="rpt-c-cost">Status</th><th className="rpt-c-actions sticky" style={{ background: 'var(--color-tint-2)' }}>Actions</th></tr></thead>
             <tbody>
               {(activeTab === 'incomplete' ? incomplete : completed).map(item => (

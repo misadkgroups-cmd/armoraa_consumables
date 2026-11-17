@@ -398,8 +398,8 @@ const StockTransfer = () => {
       const results = await stockApi.createMultiLocationTransferRequest(
         transfersPayload,
         transferType,
-        isFromCorp ? null : Number(from_branch_id),
-        isToCorp ? null : Number(to_branch_id),
+        from_branch_id,
+        to_branch_id,
         remarks,
         CURRENT_USER,
         currentTxnId
@@ -409,7 +409,7 @@ const StockTransfer = () => {
       if (failed.length > 0) {
         setErrorMsg(`Some transfers failed: ${failed.map(f => f.message).join(', ')}`);
       } else {
-        setSuccessMsg(`Transfer created under Transaction ID: ${currentTxnId}!`);
+        setSuccessMsg('Transfer created successfully!');
         // Reset form & generate fresh ID
         initNewTransfer();
         // Refresh records
@@ -905,16 +905,16 @@ const StockTransfer = () => {
               </div>
 
               <div style={{ overflowX: 'auto' }}>
-                <table className="rpt-table" style={{ fontSize: 13, width: '100%' }}>
+                <table className="rpt-table" style={{ fontSize: 13, width: '100%', minWidth: 800 }}>
                   <thead>
                     <tr>
                       <th style={{ textAlign: 'left', padding: '8px 12px' }}>Product</th>
-                      <th style={{ textAlign: 'center', padding: '8px 12px' }}>Type</th>
-                      <th style={{ textAlign: 'right', padding: '8px 12px' }}>Unit Price</th>
-                      <th style={{ textAlign: 'center', padding: '8px 12px' }}>In Stock</th>
-                      <th style={{ textAlign: 'center', padding: '8px 12px' }}>Transfer Qty</th>
-                      <th style={{ textAlign: 'right', padding: '8px 12px' }}>Subtotal</th>
-                      <th style={{ textAlign: 'center', padding: '8px 12px' }}>Action</th>
+                      <th style={{ textAlign: 'center', padding: '8px 12px', width: 120 }}>Type</th>
+                      <th style={{ textAlign: 'right', padding: '8px 12px', width: 110 }}>Unit Price</th>
+                      <th style={{ textAlign: 'center', padding: '8px 12px', width: 90 }}>In Stock</th>
+                      <th style={{ textAlign: 'center', padding: '8px 12px', width: 110 }}>Transfer Qty</th>
+                      <th style={{ textAlign: 'right', padding: '8px 12px', width: 120 }}>Subtotal</th>
+                      <th style={{ textAlign: 'center', padding: '8px 12px', width: 70 }}>Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -992,13 +992,13 @@ const StockTransfer = () => {
             }}
           >
             <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8 }}>
-              3. Comments & Remarks (Belongs to {currentTxnId})
+              3. Comments & Remarks
             </div>
             <textarea
               className="form-input"
               value={transferForm.remarks}
               onChange={(e) => setTransferForm(prev => ({ ...prev, remarks: e.target.value }))}
-              placeholder={`Enter reason or transfer notes for ${currentTxnId}...`}
+              placeholder="Enter reason or transfer notes for this transaction..."
               rows="3"
               style={{ width: '100%', fontSize: 13 }}
             />
@@ -1135,19 +1135,19 @@ const StockTransfer = () => {
           </div>
 
           {/* Transactions Grouped Table */}
-          <div className="table-container" style={{ background: 'var(--color-surface)', borderRadius: 14, border: '1px solid var(--color-line)', overflow: 'hidden' }}>
-            <table className="rpt-table" style={{ width: '100%', margin: 0 }}>
+          <div className="table-container" style={{ background: 'var(--color-surface)', borderRadius: 14, border: '1px solid var(--color-line)', overflowX: 'auto' }}>
+            <table className="rpt-table" style={{ width: '100%', minWidth: 1200, margin: 0 }}>
               <thead>
                 <tr>
-                  <th className="rpt-c-service" style={{ width: 170 }}>Transaction ID</th>
-                  <th className="rpt-c-date" style={{ width: 150 }}>Date & Time</th>
-                  <th className="rpt-c-units">From Location</th>
-                  <th className="rpt-c-units">To Location</th>
-                  <th className="rpt-c-units" style={{ width: 140 }}>Products / Items</th>
-                  <th className="rpt-c-units" style={{ width: 90 }}>Total Qty</th>
-                  <th className="rpt-c-service" style={{ width: 110 }}>Status</th>
-                  <th className="rpt-c-service" style={{ width: 220 }}>Comments / Remarks</th>
-                  <th className="rpt-c-actions" style={{ width: 80, textAlign: 'center' }}>Details</th>
+                  <th style={{ width: 170, minWidth: 160 }}>Transaction ID</th>
+                  <th style={{ width: 170, minWidth: 165 }}>Date & Time</th>
+                  <th style={{ width: 180, minWidth: 170 }}>From Location</th>
+                  <th style={{ width: 180, minWidth: 170 }}>To Location</th>
+                  <th style={{ width: 130, minWidth: 120, textAlign: 'center' }}>Products / Items</th>
+                  <th style={{ width: 95, minWidth: 90, textAlign: 'center' }}>Total Qty</th>
+                  <th style={{ width: 110, minWidth: 105, textAlign: 'center' }}>Status</th>
+                  <th style={{ minWidth: 200 }}>Comments / Remarks</th>
+                  <th className="rpt-c-actions" style={{ width: 80, minWidth: 80, textAlign: 'center' }}>Details</th>
                 </tr>
               </thead>
               <tbody>
@@ -1389,19 +1389,19 @@ const StockTransfer = () => {
           </div>
 
           {/* Line Item History Table */}
-          <div className="table-container" style={{ background: 'var(--color-surface)', borderRadius: 14, border: '1px solid var(--color-line)', overflow: 'hidden' }}>
-            <table className="rpt-table" style={{ width: '100%', margin: 0 }}>
+          <div className="table-container" style={{ background: 'var(--color-surface)', borderRadius: 14, border: '1px solid var(--color-line)', overflowX: 'auto' }}>
+            <table className="rpt-table" style={{ width: '100%', minWidth: 1200, margin: 0 }}>
               <thead>
                 <tr>
-                  <th className="rpt-c-date" style={{ width: 150 }}>Date & Time</th>
-                  <th className="rpt-c-units">From Location</th>
-                  <th className="rpt-c-units">To Location</th>
-                  <th className="rpt-c-service">Product Name</th>
-                  <th className="rpt-c-units" style={{ width: 100 }}>Type</th>
-                  <th className="rpt-c-units" style={{ width: 90 }}>Qty</th>
-                  <th className="rpt-c-service" style={{ width: 110 }}>Status</th>
-                  <th className="rpt-c-service" style={{ width: 160 }}>Transaction ID</th>
-                  <th className="rpt-c-actions" style={{ width: 100 }}>Actions</th>
+                  <th style={{ width: 170, minWidth: 165 }}>Date & Time</th>
+                  <th style={{ width: 180, minWidth: 170 }}>From Location</th>
+                  <th style={{ width: 180, minWidth: 170 }}>To Location</th>
+                  <th style={{ minWidth: 220 }}>Product Name</th>
+                  <th style={{ width: 105, minWidth: 100, textAlign: 'center' }}>Type</th>
+                  <th style={{ width: 90, minWidth: 85, textAlign: 'center' }}>Qty</th>
+                  <th style={{ width: 110, minWidth: 105, textAlign: 'center' }}>Status</th>
+                  <th style={{ width: 165, minWidth: 160 }}>Transaction ID</th>
+                  <th className="rpt-c-actions" style={{ width: 90, minWidth: 85, textAlign: 'center' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>

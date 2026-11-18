@@ -220,6 +220,15 @@ const StockTransfer = () => {
     }
   }, []);
 
+  // Reset all selected items in New Transfer
+  const resetTransferSelection = useCallback(() => {
+    setTransferRows(prev => (prev || []).map(r => ({
+      ...r,
+      selected: false,
+      qty: '',
+    })));
+  }, []);
+
   // Initialize/Reset New Transfer Form
   const initNewTransfer = useCallback(() => {
     const txnId = generateTransactionId();
@@ -240,6 +249,14 @@ const StockTransfer = () => {
     });
     setTransferFilterType('All');
     setTransferSearch('');
+
+    // Clear selections and quantities completely
+    setTransferRows(prev => (prev || []).map(r => ({
+      ...r,
+      selected: false,
+      qty: '',
+    })));
+
     loadSourceStock(fromId);
   }, [branches, branchId, misMode, loadSourceStock]);
 
@@ -262,6 +279,13 @@ const StockTransfer = () => {
       from_branch_id: newFromId,
       to_branch_id: newToId,
     }));
+
+    // Clear selections when switching source location
+    setTransferRows(prev => (prev || []).map(r => ({
+      ...r,
+      selected: false,
+      qty: '',
+    })));
 
     loadSourceStock(newFromId);
   };
@@ -410,11 +434,37 @@ const StockTransfer = () => {
         setErrorMsg(`Some transfers failed: ${failed.map(f => f.message).join(', ')}`);
       } else {
         setSuccessMsg('Transfer created successfully!');
-        // Reset form & generate fresh ID
-        initNewTransfer();
-        // Refresh records
+
+        // 1. Immediately wipe all selected transfer rows & quantities in state
+        setTransferRows(prev => (prev || []).map(r => ({
+          ...r,
+          selected: false,
+          qty: '',
+        })));
+
+        // 2. Clear remarks and reset to fresh transaction ID
+        const freshTxnId = generateTransactionId();
+        setCurrentTxnId(freshTxnId);
+        setTransferForm(prev => ({
+          ...prev,
+          remarks: '',
+        }));
+        setTransferSearch('');
+        setTransferFilterType('All');
+
+        // 3. Immediately reload live source stock from Supabase
+        await loadSourceStock(from_branch_id);
+
+        // 4. Refresh transfer records list
         await fetchTransfers();
-        // Switch to Transactions model to see the new transaction immediately
+
+        // 5. Notify the rest of the application
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('stock-transfer-updated'));
+          window.dispatchEvent(new Event('stock-updated'));
+        }
+
+        // 6. Switch to Transactions model to view the recorded transaction
         setActiveModel('transactions');
       }
     } catch (e) {
@@ -895,12 +945,23 @@ const StockTransfer = () => {
                 border: '1px solid var(--color-line)',
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--color-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                   Selected Consumables Summary ({selectedTransferItems.length})
                 </div>
-                <div style={{ fontSize: 13, color: 'var(--color-muted)' }}>
-                  Total Transfer Value: <strong style={{ color: '#047857', fontSize: 14 }}>{fmtMoney(totalTransferValue)}</strong>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={{ fontSize: 13, color: 'var(--color-muted)' }}>
+                    Total Transfer Value: <strong style={{ color: '#047857', fontSize: 14 }}>{fmtMoney(totalTransferValue)}</strong>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={resetTransferSelection}
+                    className="btn btn-secondary"
+                    style={{ fontSize: 11.5, padding: '3px 10px', color: '#DC2626', borderColor: '#FECACA' }}
+                    title="Clear all selected items"
+                  >
+                    Clear All
+                  </button>
                 </div>
               </div>
 
@@ -1014,8 +1075,19 @@ const StockTransfer = () => {
               display: 'flex',
               justifyContent: 'flex-end',
               alignItems: 'center',
+              gap: 12,
             }}
           >
+            <button
+              type="button"
+              onClick={initNewTransfer}
+              disabled={loading}
+              className="btn btn-secondary"
+              style={{ padding: '11px 20px', fontSize: 13.5 }}
+              title="Reset the transfer workspace and clear all selected items"
+            >
+              Reset Form
+            </button>
             <button
               onClick={handleTransferAll}
               disabled={
